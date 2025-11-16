@@ -3,6 +3,29 @@ name = "js_cli"
 version.workspace = true
 edition.workspace = true
 
+[[bin]]
+name = "corten-js"
+path = "src/main.rs"
+
+[lib]
+name = "js_cli"
+path = "src/lib.rs"
+
 [dependencies]
+# Core components
+core_types = { path = "../core_types" }
+parser = { path = "../parser" }
+bytecode_system = { path = "../bytecode_system" }
+interpreter = { path = "../interpreter" }
+builtins = { path = "../builtins" }
+async_runtime = { path = "../async_runtime" }
+jit_compiler = { path = "../jit_compiler" }
+memory_manager = { path = "../memory_manager" }
+
+# CLI dependencies
+clap = { workspace = true }
+rustyline = { workspace = true }
+thiserror = { workspace = true }
 
 [dev-dependencies]
+tempfile = "3.8"
