@@ -1,0 +1,491 @@
+asyncapi: 2.6.0
+info:
+  title: {{COMPONENT_NAME}} Event Bus
+  version: {{API_VERSION}}
+  description: |
+    Event bus contract for the {{COMPONENT_NAME}} component.
+
+    {{COMPONENT_DESCRIPTION}}
+
+    This contract defines the asynchronous events published and consumed
+    by this component.
+
+  contact:
+    name: API Support
+    email: {{CONTACT_EMAIL}}
+  license:
+    name: {{LICENSE}}
+    url: {{LICENSE_URL}}
+
+servers:
+  development:
+    url: {{DEV_BROKER_URL}}
+    protocol: {{PROTOCOL}}
+    description: Development event broker
+    variables:
+      port:
+        default: '{{DEV_PORT}}'
+  staging:
+    url: {{STAGING_BROKER_URL}}
+    protocol: {{PROTOCOL}}
+    description: Staging event broker
+  production:
+    url: {{PROD_BROKER_URL}}
+    protocol: {{PROTOCOL}}
+    description: Production event broker
+    security:
+      - saslScram: []
+
+channels:
+  {{RESOURCE_NAME}}.created:
+    description: Channel for {{RESOURCE_NAME}} creation events
+    subscribe:
+      summary: Subscribe to {{RESOURCE_NAME}} creation events
+      operationId: on{{RESOURCE_CLASS}}Created
+      message:
+        $ref: '#/components/messages/{{RESOURCE_CLASS}}Created'
+      tags:
+        - name: {{RESOURCE_NAME}}
+
+  {{RESOURCE_NAME}}.updated:
+    description: Channel for {{RESOURCE_NAME}} update events
+    subscribe:
+      summary: Subscribe to {{RESOURCE_NAME}} update events
+      operationId: on{{RESOURCE_CLASS}}Updated
+      message:
+        $ref: '#/components/messages/{{RESOURCE_CLASS}}Updated'
+      tags:
+        - name: {{RESOURCE_NAME}}
+
+  {{RESOURCE_NAME}}.deleted:
+    description: Channel for {{RESOURCE_NAME}} deletion events
+    subscribe:
+      summary: Subscribe to {{RESOURCE_NAME}} deletion events
+      operationId: on{{RESOURCE_CLASS}}Deleted
+      message:
+        $ref: '#/components/messages/{{RESOURCE_CLASS}}Deleted'
+      tags:
+        - name: {{RESOURCE_NAME}}
+
+  {{RESOURCE_NAME}}.status-changed:
+    description: Channel for {{RESOURCE_NAME}} status change events
+    subscribe:
+      summary: Subscribe to {{RESOURCE_NAME}} status changes
+      operationId: on{{RESOURCE_CLASS}}StatusChanged
+      message:
+        $ref: '#/components/messages/{{RESOURCE_CLASS}}StatusChanged'
+      tags:
+        - name: {{RESOURCE_NAME}}
+
+  {{RESOURCE_NAME}}.commands:
+    description: Channel for commands directed at {{RESOURCE_NAME}}
+    publish:
+      summary: Publish commands to {{RESOURCE_NAME}}
+      operationId: send{{RESOURCE_CLASS}}Command
+      message:
+        oneOf:
+          - $ref: '#/components/messages/{{RESOURCE_CLASS}}CreateCommand'
+          - $ref: '#/components/messages/{{RESOURCE_CLASS}}UpdateCommand'
+          - $ref: '#/components/messages/{{RESOURCE_CLASS}}DeleteCommand'
+      tags:
+        - name: {{RESOURCE_NAME}}
+
+  errors:
+    description: Channel for error events
+    subscribe:
+      summary: Subscribe to error events
+      operationId: onError
+      message:
+        $ref: '#/components/messages/ErrorEvent'
+      tags:
+        - name: errors
+
+components:
+  messages:
+    {{RESOURCE_CLASS}}Created:
+      name: {{RESOURCE_CLASS}}Created
+      title: {{RESOURCE_CLASS}} Created Event
+      summary: Published when a new {{RESOURCE_NAME}} is created
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/{{RESOURCE_CLASS}}CreatedPayload'
+      headers:
+        $ref: '#/components/schemas/EventHeaders'
+      correlationId:
+        description: Correlation ID for tracing
+        location: $message.header#/correlation_id
+      tags:
+        - name: domain-event
+
+    {{RESOURCE_CLASS}}Updated:
+      name: {{RESOURCE_CLASS}}Updated
+      title: {{RESOURCE_CLASS}} Updated Event
+      summary: Published when a {{RESOURCE_NAME}} is updated
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/{{RESOURCE_CLASS}}UpdatedPayload'
+      headers:
+        $ref: '#/components/schemas/EventHeaders'
+      correlationId:
+        location: $message.header#/correlation_id
+      tags:
+        - name: domain-event
+
+    {{RESOURCE_CLASS}}Deleted:
+      name: {{RESOURCE_CLASS}}Deleted
+      title: {{RESOURCE_CLASS}} Deleted Event
+      summary: Published when a {{RESOURCE_NAME}} is deleted
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/{{RESOURCE_CLASS}}DeletedPayload'
+      headers:
+        $ref: '#/components/schemas/EventHeaders'
+      correlationId:
+        location: $message.header#/correlation_id
+      tags:
+        - name: domain-event
+
+    {{RESOURCE_CLASS}}StatusChanged:
+      name: {{RESOURCE_CLASS}}StatusChanged
+      title: {{RESOURCE_CLASS}} Status Changed Event
+      summary: Published when a {{RESOURCE_NAME}} status changes
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/{{RESOURCE_CLASS}}StatusChangedPayload'
+      headers:
+        $ref: '#/components/schemas/EventHeaders'
+      correlationId:
+        location: $message.header#/correlation_id
+      tags:
+        - name: domain-event
+
+    {{RESOURCE_CLASS}}CreateCommand:
+      name: {{RESOURCE_CLASS}}CreateCommand
+      title: Create {{RESOURCE_CLASS}} Command
+      summary: Command to create a new {{RESOURCE_NAME}}
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/{{RESOURCE_CLASS}}CreateCommandPayload'
+      headers:
+        $ref: '#/components/schemas/CommandHeaders'
+      correlationId:
+        location: $message.header#/correlation_id
+      tags:
+        - name: command
+
+    {{RESOURCE_CLASS}}UpdateCommand:
+      name: {{RESOURCE_CLASS}}UpdateCommand
+      title: Update {{RESOURCE_CLASS}} Command
+      summary: Command to update an existing {{RESOURCE_NAME}}
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/{{RESOURCE_CLASS}}UpdateCommandPayload'
+      headers:
+        $ref: '#/components/schemas/CommandHeaders'
+      correlationId:
+        location: $message.header#/correlation_id
+      tags:
+        - name: command
+
+    {{RESOURCE_CLASS}}DeleteCommand:
+      name: {{RESOURCE_CLASS}}DeleteCommand
+      title: Delete {{RESOURCE_CLASS}} Command
+      summary: Command to delete a {{RESOURCE_NAME}}
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/{{RESOURCE_CLASS}}DeleteCommandPayload'
+      headers:
+        $ref: '#/components/schemas/CommandHeaders'
+      correlationId:
+        location: $message.header#/correlation_id
+      tags:
+        - name: command
+
+    ErrorEvent:
+      name: ErrorEvent
+      title: Error Event
+      summary: Published when an error occurs during event processing
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/ErrorPayload'
+      headers:
+        $ref: '#/components/schemas/EventHeaders'
+      tags:
+        - name: error
+
+  schemas:
+    EventHeaders:
+      type: object
+      required:
+        - event_id
+        - event_type
+        - timestamp
+        - source
+        - version
+      properties:
+        event_id:
+          type: string
+          format: uuid
+          description: Unique event identifier
+          example: "123e4567-e89b-12d3-a456-426614174000"
+        event_type:
+          type: string
+          description: Type of event
+          example: "{{RESOURCE_NAME}}.created"
+        timestamp:
+          type: string
+          format: date-time
+          description: When the event occurred
+          example: "2025-01-04T10:30:00Z"
+        source:
+          type: string
+          description: Source component that published the event
+          example: "{{COMPONENT_NAME}}"
+        version:
+          type: string
+          description: Event schema version
+          example: "{{API_VERSION}}"
+        correlation_id:
+          type: string
+          format: uuid
+          description: Correlation ID for tracing related events
+          example: "987fcdeb-51a2-43f1-b456-426614174999"
+        causation_id:
+          type: string
+          format: uuid
+          description: ID of the command/event that caused this event
+        user_id:
+          type: string
+          description: ID of user who triggered the event
+        tenant_id:
+          type: string
+          description: Multi-tenancy identifier
+
+    CommandHeaders:
+      type: object
+      required:
+        - command_id
+        - command_type
+        - timestamp
+        - source
+      properties:
+        command_id:
+          type: string
+          format: uuid
+          description: Unique command identifier
+        command_type:
+          type: string
+          description: Type of command
+        timestamp:
+          type: string
+          format: date-time
+          description: When the command was issued
+        source:
+          type: string
+          description: Source that issued the command
+        correlation_id:
+          type: string
+          format: uuid
+          description: Correlation ID for tracing
+        user_id:
+          type: string
+          description: ID of user who issued the command
+        timeout:
+          type: integer
+          description: Command timeout in milliseconds
+          example: 5000
+
+    {{RESOURCE_CLASS}}CreatedPayload:
+      type: object
+      required:
+        - id
+        - data
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: ID of the created {{RESOURCE_NAME}}
+        data:
+          type: object
+          description: The created {{RESOURCE_NAME}} data
+          properties:
+            {{EVENT_DATA_FIELDS}}
+        metadata:
+          type: object
+          additionalProperties: true
+
+    {{RESOURCE_CLASS}}UpdatedPayload:
+      type: object
+      required:
+        - id
+        - changes
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: ID of the updated {{RESOURCE_NAME}}
+        changes:
+          type: object
+          description: Fields that were changed
+          additionalProperties: true
+        previous_values:
+          type: object
+          description: Previous values of changed fields
+          additionalProperties: true
+        metadata:
+          type: object
+          additionalProperties: true
+
+    {{RESOURCE_CLASS}}DeletedPayload:
+      type: object
+      required:
+        - id
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: ID of the deleted {{RESOURCE_NAME}}
+        soft_delete:
+          type: boolean
+          description: Whether this was a soft delete
+          default: false
+        metadata:
+          type: object
+          additionalProperties: true
+
+    {{RESOURCE_CLASS}}StatusChangedPayload:
+      type: object
+      required:
+        - id
+        - old_status
+        - new_status
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: ID of the {{RESOURCE_NAME}}
+        old_status:
+          type: string
+          description: Previous status
+        new_status:
+          type: string
+          description: New status
+        reason:
+          type: string
+          description: Reason for status change
+        metadata:
+          type: object
+          additionalProperties: true
+
+    {{RESOURCE_CLASS}}CreateCommandPayload:
+      type: object
+      required:
+        - data
+      properties:
+        data:
+          type: object
+          description: Data for creating {{RESOURCE_NAME}}
+          properties:
+            {{COMMAND_CREATE_FIELDS}}
+
+    {{RESOURCE_CLASS}}UpdateCommandPayload:
+      type: object
+      required:
+        - id
+        - data
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: ID of the {{RESOURCE_NAME}} to update
+        data:
+          type: object
+          description: Fields to update
+          additionalProperties: true
+
+    {{RESOURCE_CLASS}}DeleteCommandPayload:
+      type: object
+      required:
+        - id
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: ID of the {{RESOURCE_NAME}} to delete
+        soft_delete:
+          type: boolean
+          description: Whether to perform soft delete
+          default: false
+
+    ErrorPayload:
+      type: object
+      required:
+        - error_code
+        - message
+      properties:
+        error_code:
+          type: string
+          description: Machine-readable error code
+          example: "VALIDATION_ERROR"
+        message:
+          type: string
+          description: Human-readable error message
+        failed_event:
+          type: object
+          description: The event that failed to process
+        stack_trace:
+          type: string
+          description: Stack trace (development only)
+        retry_count:
+          type: integer
+          description: Number of retry attempts
+          example: 3
+        metadata:
+          type: object
+          additionalProperties: true
+
+  securitySchemes:
+    saslScram:
+      type: scramSha256
+      description: SASL/SCRAM authentication
+
+# Variable Reference:
+# {{COMPONENT_NAME}} - Name of the component (e.g., "User Service")
+# {{API_VERSION}} - API version (e.g., "1.0.0")
+# {{COMPONENT_DESCRIPTION}} - Brief description
+# {{CONTACT_EMAIL}} - Support email
+# {{LICENSE}} - License name
+# {{LICENSE_URL}} - License URL
+# {{DEV_BROKER_URL}} - Development broker URL (e.g., "kafka://localhost:9092")
+# {{STAGING_BROKER_URL}} - Staging broker URL
+# {{PROD_BROKER_URL}} - Production broker URL
+# {{PROTOCOL}} - Message protocol (kafka, amqp, mqtt, etc.)
+# {{DEV_PORT}} - Development port
+# {{RESOURCE_NAME}} - Resource name lowercase (e.g., "user")
+# {{RESOURCE_CLASS}} - Resource class name (e.g., "User")
+# {{EVENT_DATA_FIELDS}} - Event-specific data fields
+# {{COMMAND_CREATE_FIELDS}} - Command creation fields
+#
+# Usage Notes:
+# 1. Replace all {{VARIABLE}} placeholders with actual values
+# 2. Customize channels for your specific events
+# 3. Add or remove messages based on your domain events
+# 4. Define proper payload schemas
+# 5. Use consistent event naming conventions
+# 6. Include proper correlation IDs for tracing
+# 7. Version your events in the schema
+# 8. Document retry and error handling policies
+# 9. Consider event ordering guarantees
+# 10. Define retention policies for your events
+#
+# Event-Driven Architecture Best Practices:
+# - Use past tense for event names (Created, Updated, Deleted)
+# - Use imperative for command names (Create, Update, Delete)
+# - Include correlation IDs for distributed tracing
+# - Version your event schemas
+# - Make events immutable
+# - Include sufficient context in events
+# - Use dead letter queues for failed events
+# - Implement idempotent event handlers
+# - Consider event sourcing patterns
+# - Monitor event processing metrics

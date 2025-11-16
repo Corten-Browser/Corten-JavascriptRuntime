@@ -1,0 +1,293 @@
+// {{COMPONENT_NAME}} gRPC Service Contract
+// Version: {{API_VERSION}}
+//
+// {{COMPONENT_DESCRIPTION}}
+//
+// Generated for component: {{COMPONENT_NAME}}
+// Package: {{PACKAGE_NAME}}
+
+syntax = "proto3";
+
+package {{PACKAGE_NAME}};
+
+option go_package = "{{GO_PACKAGE}}";
+option java_package = "{{JAVA_PACKAGE}}";
+option java_outer_classname = "{{JAVA_CLASS}}";
+option java_multiple_files = true;
+
+// Service Definition
+service {{SERVICE_NAME}} {
+  // Health check
+  rpc HealthCheck (HealthCheckRequest) returns (HealthCheckResponse) {}
+
+  // Create a new {{RESOURCE_NAME}}
+  rpc Create{{RESOURCE_CLASS}} (Create{{RESOURCE_CLASS}}Request) returns ({{RESOURCE_CLASS}}Response) {}
+
+  // Get {{RESOURCE_NAME}} by ID
+  rpc Get{{RESOURCE_CLASS}} (Get{{RESOURCE_CLASS}}Request) returns ({{RESOURCE_CLASS}}Response) {}
+
+  // List {{RESOURCE_NAME}} with pagination
+  rpc List{{RESOURCE_CLASS}}s (List{{RESOURCE_CLASS}}sRequest) returns (List{{RESOURCE_CLASS}}sResponse) {}
+
+  // Update {{RESOURCE_NAME}}
+  rpc Update{{RESOURCE_CLASS}} (Update{{RESOURCE_CLASS}}Request) returns ({{RESOURCE_CLASS}}Response) {}
+
+  // Delete {{RESOURCE_NAME}}
+  rpc Delete{{RESOURCE_CLASS}} (Delete{{RESOURCE_CLASS}}Request) returns (DeleteResponse) {}
+
+  // Stream {{RESOURCE_NAME}} updates
+  rpc Watch{{RESOURCE_CLASS}}s (Watch{{RESOURCE_CLASS}}sRequest) returns (stream {{RESOURCE_CLASS}}Event) {}
+
+  // Batch operations
+  rpc BatchCreate{{RESOURCE_CLASS}}s (BatchCreate{{RESOURCE_CLASS}}sRequest) returns (BatchCreate{{RESOURCE_CLASS}}sResponse) {}
+  rpc BatchGet{{RESOURCE_CLASS}}s (BatchGet{{RESOURCE_CLASS}}sRequest) returns (BatchGet{{RESOURCE_CLASS}}sResponse) {}
+}
+
+// ============================================================================
+// Health Check Messages
+// ============================================================================
+
+message HealthCheckRequest {
+  // Optional service name to check specific subsystem
+  string service = 1;
+}
+
+message HealthCheckResponse {
+  enum Status {
+    UNKNOWN = 0;
+    SERVING = 1;
+    NOT_SERVING = 2;
+    SERVICE_UNKNOWN = 3;
+  }
+
+  Status status = 1;
+  string message = 2;
+  map<string, string> details = 3;
+}
+
+// ============================================================================
+// {{RESOURCE_CLASS}} Messages
+// ============================================================================
+
+message {{RESOURCE_CLASS}} {
+  // Unique identifier
+  string id = 1;
+
+  // Timestamps
+  google.protobuf.Timestamp created_at = 2;
+  google.protobuf.Timestamp updated_at = 3;
+
+  // Resource-specific fields
+  // Add your fields here with unique field numbers
+  {{RESOURCE_PROTO_FIELDS}}
+
+  // Metadata
+  map<string, string> metadata = 100;
+}
+
+message Create{{RESOURCE_CLASS}}Request {
+  // Fields for creating a new {{RESOURCE_NAME}}
+  {{RESOURCE_CREATE_PROTO_FIELDS}}
+
+  // Optional request metadata
+  map<string, string> metadata = 100;
+}
+
+message Get{{RESOURCE_CLASS}}Request {
+  // ID of the {{RESOURCE_NAME}} to retrieve
+  string id = 1;
+
+  // Optional field mask to return only specific fields
+  google.protobuf.FieldMask field_mask = 2;
+}
+
+message List{{RESOURCE_CLASS}}sRequest {
+  // Pagination
+  int32 page_size = 1;
+  string page_token = 2;
+
+  // Filtering
+  string filter = 3;
+
+  // Sorting
+  string order_by = 4;
+
+  // Optional field mask
+  google.protobuf.FieldMask field_mask = 5;
+}
+
+message List{{RESOURCE_CLASS}}sResponse {
+  // List of {{RESOURCE_NAME}}s
+  repeated {{RESOURCE_CLASS}} {{RESOURCE_NAME}}s = 1;
+
+  // Pagination token for next page
+  string next_page_token = 2;
+
+  // Total count (if available)
+  int32 total_size = 3;
+}
+
+message Update{{RESOURCE_CLASS}}Request {
+  // ID of the {{RESOURCE_NAME}} to update
+  string id = 1;
+
+  // Updated {{RESOURCE_NAME}} object
+  {{RESOURCE_CLASS}} {{RESOURCE_NAME}} = 2;
+
+  // Field mask specifying which fields to update
+  google.protobuf.FieldMask update_mask = 3;
+}
+
+message Delete{{RESOURCE_CLASS}}Request {
+  // ID of the {{RESOURCE_NAME}} to delete
+  string id = 1;
+
+  // Optional soft delete flag
+  bool soft_delete = 2;
+}
+
+message DeleteResponse {
+  // Success status
+  bool success = 1;
+
+  // Optional message
+  string message = 2;
+}
+
+message {{RESOURCE_CLASS}}Response {
+  // The {{RESOURCE_NAME}} object
+  {{RESOURCE_CLASS}} {{RESOURCE_NAME}} = 1;
+}
+
+// ============================================================================
+// Streaming Messages
+// ============================================================================
+
+message Watch{{RESOURCE_CLASS}}sRequest {
+  // Optional filter for which {{RESOURCE_NAME}}s to watch
+  string filter = 1;
+
+  // Resume from a previous position
+  string resume_token = 2;
+}
+
+message {{RESOURCE_CLASS}}Event {
+  enum EventType {
+    UNKNOWN = 0;
+    CREATED = 1;
+    UPDATED = 2;
+    DELETED = 3;
+  }
+
+  EventType type = 1;
+  {{RESOURCE_CLASS}} {{RESOURCE_NAME}} = 2;
+  google.protobuf.Timestamp timestamp = 3;
+}
+
+// ============================================================================
+// Batch Operation Messages
+// ============================================================================
+
+message BatchCreate{{RESOURCE_CLASS}}sRequest {
+  // List of {{RESOURCE_NAME}}s to create
+  repeated Create{{RESOURCE_CLASS}}Request requests = 1;
+}
+
+message BatchCreate{{RESOURCE_CLASS}}sResponse {
+  // Created {{RESOURCE_NAME}}s
+  repeated {{RESOURCE_CLASS}} {{RESOURCE_NAME}}s = 1;
+
+  // Errors for failed creations (indexed by request position)
+  map<int32, Error> errors = 2;
+}
+
+message BatchGet{{RESOURCE_CLASS}}sRequest {
+  // List of IDs to retrieve
+  repeated string ids = 1;
+
+  // Optional field mask
+  google.protobuf.FieldMask field_mask = 2;
+}
+
+message BatchGet{{RESOURCE_CLASS}}sResponse {
+  // Retrieved {{RESOURCE_NAME}}s
+  repeated {{RESOURCE_CLASS}} {{RESOURCE_NAME}}s = 1;
+
+  // IDs that were not found
+  repeated string not_found = 2;
+}
+
+// ============================================================================
+// Common Messages
+// ============================================================================
+
+message Error {
+  // Error code
+  string code = 1;
+
+  // Human-readable message
+  string message = 2;
+
+  // Additional error details
+  map<string, string> details = 3;
+}
+
+// ============================================================================
+// Import Required Proto Definitions
+// ============================================================================
+// Add these imports at the top of your actual implementation:
+//
+// import "google/protobuf/timestamp.proto";
+// import "google/protobuf/field_mask.proto";
+// import "google/protobuf/empty.proto";
+
+/*
+Variable Reference:
+{{COMPONENT_NAME}} - Name of the component (e.g., "User Service")
+{{API_VERSION}} - API version (e.g., "1.0.0")
+{{COMPONENT_DESCRIPTION}} - Brief description of the service
+{{PACKAGE_NAME}} - Proto package name (e.g., "user.v1")
+{{GO_PACKAGE}} - Go package path (e.g., "github.com/org/project/api/user/v1")
+{{JAVA_PACKAGE}} - Java package name (e.g., "com.example.user.v1")
+{{JAVA_CLASS}} - Java outer class name (e.g., "UserServiceProto")
+{{SERVICE_NAME}} - Service name (e.g., "UserService")
+{{RESOURCE_NAME}} - Resource name lowercase (e.g., "user")
+{{RESOURCE_CLASS}} - Resource class name (e.g., "User")
+{{RESOURCE_PROTO_FIELDS}} - Resource-specific protobuf fields with field numbers
+{{RESOURCE_CREATE_PROTO_FIELDS}} - Fields for creation with field numbers
+
+Example Resource Fields:
+  string name = 4;
+  string email = 5;
+  bool is_active = 6;
+  Role role = 7;
+
+Example Create Fields:
+  string name = 1;
+  string email = 2;
+  string password = 3;
+
+Usage Notes:
+1. Replace all {{VARIABLE}} placeholders with actual values
+2. Add import statements for google.protobuf types
+3. Define any custom enums or nested messages
+4. Use sequential field numbers starting from 1
+5. Reserve field numbers for deprecated fields
+6. Use optional/repeated as needed for your use case
+7. Consider using well-known types from google.protobuf
+8. Document field constraints in comments
+9. Version your service package (e.g., .v1, .v2)
+10. Use consistent naming conventions
+
+gRPC Best Practices:
+- Use clear, descriptive message and field names
+- Document all fields with comments
+- Use enums for fixed sets of values
+- Implement proper error handling with Error message
+- Use FieldMask for partial updates
+- Implement pagination for list operations
+- Use streaming for real-time updates
+- Add health check endpoint
+- Version your API in the package name
+- Use batch operations for efficiency
+*/

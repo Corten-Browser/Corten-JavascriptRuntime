@@ -1,0 +1,73 @@
+{
+  "_metadata": {
+    "_description": "Claude Code Orchestration System Configuration",
+    "_version": "0.13.0",
+    "_note": "Copy this template to your project's orchestration/ directory as orchestration-config.json"
+  },
+  "version": "0.17.0",
+  "orchestration": {
+    "max_parallel_agents": 5,
+    "agent_concurrency_limit": 5,
+    "recommended_max": 10,
+    "warn_above": 7,
+    "absolute_max": 15,
+    "queue_overflow": true,
+    "execution_mode": "task-tool",
+    "isolation_method": "instruction-based",
+    "component_isolation": "directory"
+  },
+  "context_limits": {
+    "optimal_tokens": 70000,
+    "warning_tokens": 90000,
+    "split_trigger_tokens": 110000,
+    "emergency_tokens": 130000,
+    "approximation_ratio": 10,
+    "_comment": "Adjusted for ~10,400 token CLAUDE.md overhead (1,061 lines)"
+  },
+  "autonomous_operations": {
+    "auto_split_enabled": true,
+    "pre_flight_checks": true,
+    "context_safety_margin": 20000,
+    "split_planning_buffer": 40000,
+    "abort_if_insufficient_context": true,
+    "_comment": "Autonomous management without user intervention"
+  },
+  "quality_standards": {
+    "min_test_coverage": 80,
+    "enforce_tdd": true,
+    "enforce_bdd": true,
+    "quality_gates_required": true,
+    "gates": [
+      "test_coverage",
+      "linting",
+      "formatting",
+      "complexity",
+      "security",
+      "documentation",
+      "contract_compliance",
+      "integration_tests",
+      "feature_coverage"
+    ],
+    "_comment_v0_13_0": "feature_coverage gate added in v0.13.0 - validates manifest user_facing_features"
+  },
+  "breaking_changes": {
+    "policy": "encouraged",
+    "lifecycle_state": "pre-release",
+    "allow_major_version_transition": false,
+    "require_user_approval_for_1_0": true
+  },
+  "component_defaults": {
+    "auto_split_enabled": true,
+    "claude_md_required": true,
+    "readme_required": true,
+    "initial_token_budget": 70000
+  },
+  "git_settings": {
+    "repository_mode": "single",
+    "retry_on_lock": true,
+    "max_retry_attempts": 5,
+    "commit_prefix_required": true,
+    "commit_prefix_format": "[{component}]",
+    "_comment": "Single repository with retry wrapper for concurrent commits"
+  }
+}

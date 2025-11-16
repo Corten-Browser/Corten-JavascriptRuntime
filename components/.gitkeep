@@ -1,0 +1,3 @@
+# Component isolation workspaces directory
+# Each component gets its own subdirectory here
+# Format: components/<component-name>/

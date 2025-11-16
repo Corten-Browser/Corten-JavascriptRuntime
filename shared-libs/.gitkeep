@@ -1,0 +1,3 @@
+# Shared libraries directory
+# Reusable utilities accessible to all components
+# Read-only for components (enforces isolation)

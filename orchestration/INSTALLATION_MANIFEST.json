@@ -1,0 +1,12 @@
+{
+  "version": "1.0.0",
+  "installer_version": "1.0.0",
+  "installed_at": "2025-11-16T22:04:54+01:00",
+  "max_parallel_agents": 7,
+  "features_enabled": [
+    "gate_enforcement",
+    "state_tracking",
+    "checkpointing",
+    "resume_capability"
+  ]
+}
