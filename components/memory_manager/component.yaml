@@ -1,0 +1,26 @@
+name: memory_manager
+type: core
+version: "0.1.0"
+description: "Garbage collector, heap management, and hidden class system"
+tech_stack:
+  - Rust
+  - parking_lot
+  - crossbeam
+dependencies:
+  imports:
+    - name: core_types
+      version: "^0.1.0"
+      import_from: "crate::core_types"
+      uses:
+        - Value
+        - JsError
+exports:
+  - Heap
+  - HiddenClass
+  - JSObject
+  - Arena
+  - write_barrier
+token_budget:
+  optimal: 60000
+  warning: 80000
+  critical: 100000

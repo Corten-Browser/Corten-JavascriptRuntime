@@ -1,0 +1,32 @@
+name: async_runtime
+type: feature
+version: "0.1.0"
+description: "Event loop, Promise engine, async/await, and ES module system"
+tech_stack:
+  - Rust
+  - tokio (optional)
+dependencies:
+  imports:
+    - name: interpreter
+      version: "^0.1.0"
+      import_from: "crate::interpreter"
+      uses:
+        - VM
+        - ExecutionContext
+    - name: builtins
+      version: "^0.1.0"
+      import_from: "crate::builtins"
+      uses:
+        - ObjectPrototype
+exports:
+  - EventLoop
+  - Promise
+  - PromiseState
+  - Module
+  - ModuleStatus
+  - TaskQueue
+  - MicrotaskQueue
+token_budget:
+  optimal: 60000
+  warning: 80000
+  critical: 100000

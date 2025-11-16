@@ -1,0 +1,36 @@
+name: builtins
+type: feature
+version: "0.1.0"
+description: "ECMAScript 2024 built-in objects and standard library"
+tech_stack:
+  - Rust
+  - num-bigint
+  - regex
+  - ryu
+dependencies:
+  imports:
+    - name: memory_manager
+      version: "^0.1.0"
+      import_from: "crate::memory_manager"
+      uses:
+        - Heap
+        - JSObject
+    - name: interpreter
+      version: "^0.1.0"
+      import_from: "crate::interpreter"
+      uses:
+        - VM
+        - ExecutionContext
+exports:
+  - ObjectPrototype
+  - ArrayPrototype
+  - StringPrototype
+  - NumberPrototype
+  - MathObject
+  - JSONObject
+  - RegExpConstructor
+  - BigIntConstructor
+token_budget:
+  optimal: 70000
+  warning: 90000
+  critical: 110000

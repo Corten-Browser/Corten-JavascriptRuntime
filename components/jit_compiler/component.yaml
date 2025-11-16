@@ -1,0 +1,31 @@
+name: jit_compiler
+type: integration
+version: "0.1.0"
+description: "Baseline and optimizing JIT compiler with OSR and deoptimization"
+tech_stack:
+  - Rust
+  - cranelift
+dependencies:
+  imports:
+    - name: bytecode_system
+      version: "^0.1.0"
+      import_from: "crate::bytecode_system"
+      uses:
+        - Opcode
+        - BytecodeChunk
+    - name: interpreter
+      version: "^0.1.0"
+      import_from: "crate::interpreter"
+      uses:
+        - ProfileData
+        - InlineCache
+exports:
+  - BaselineJIT
+  - OptimizingJIT
+  - CompiledCode
+  - OSREntry
+  - Deoptimizer
+token_budget:
+  optimal: 80000
+  warning: 100000
+  critical: 120000

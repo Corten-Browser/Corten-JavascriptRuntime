@@ -1,0 +1,32 @@
+name: interpreter
+type: feature
+version: "0.1.0"
+description: "Bytecode interpreter with dispatch loop, inline caching, and profiling"
+tech_stack:
+  - Rust
+  - parking_lot
+dependencies:
+  imports:
+    - name: bytecode_system
+      version: "^0.1.0"
+      import_from: "crate::bytecode_system"
+      uses:
+        - Opcode
+        - BytecodeChunk
+        - Instruction
+    - name: memory_manager
+      version: "^0.1.0"
+      import_from: "crate::memory_manager"
+      uses:
+        - Heap
+        - JSObject
+        - HiddenClass
+exports:
+  - VM
+  - ExecutionContext
+  - InlineCache
+  - ProfileData
+token_budget:
+  optimal: 65000
+  warning: 85000
+  critical: 105000

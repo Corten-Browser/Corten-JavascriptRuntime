@@ -1,0 +1,33 @@
+name: parser
+type: feature
+version: "0.1.0"
+description: "JavaScript lexer, parser, scope analysis, and bytecode generation"
+tech_stack:
+  - Rust
+  - nom (optional)
+dependencies:
+  imports:
+    - name: core_types
+      version: "^0.1.0"
+      import_from: "crate::core_types"
+      uses:
+        - Value
+        - JsError
+        - SourcePosition
+    - name: bytecode_system
+      version: "^0.1.0"
+      import_from: "crate::bytecode_system"
+      uses:
+        - Opcode
+        - BytecodeChunk
+        - Instruction
+exports:
+  - Lexer
+  - Parser
+  - AST
+  - BytecodeGenerator
+  - ScopeAnalyzer
+token_budget:
+  optimal: 70000
+  warning: 90000
+  critical: 110000
