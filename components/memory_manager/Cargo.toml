@@ -4,5 +4,6 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+core_types = { path = "../core_types" }
 
 [dev-dependencies]
