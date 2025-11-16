@@ -10,6 +10,7 @@ members = [
     "components/async_runtime",
     "components/jit_compiler",
     "components/js_cli",
+    "tests/integration/rust",
 ]
 
 [workspace.package]

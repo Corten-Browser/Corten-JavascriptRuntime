@@ -12,6 +12,7 @@ pub struct BytecodeGenerator {
     next_register: u32,
     loop_starts: Vec<usize>,
     loop_exits: Vec<Vec<usize>>,
+    last_was_expression: bool,
 }
 
 impl BytecodeGenerator {
@@ -23,6 +24,7 @@ impl BytecodeGenerator {
             next_register: 0,
             loop_starts: Vec::new(),
             loop_exits: Vec::new(),
+            last_was_expression: false,
         }
     }
 
@@ -37,7 +39,11 @@ impl BytecodeGenerator {
                 Some(Opcode::Return)
             )
         {
-            self.chunk.emit(Opcode::LoadUndefined);
+            // Only load undefined if the last statement wasn't an expression
+            // (expression results should be preserved for return)
+            if !self.last_was_expression {
+                self.chunk.emit(Opcode::LoadUndefined);
+            }
             self.chunk.emit(Opcode::Return);
         }
 
@@ -63,6 +69,9 @@ impl BytecodeGenerator {
     }
 
     fn visit_statement(&mut self, stmt: &Statement) -> Result<(), JsError> {
+        // Track whether this is an expression statement for return value handling
+        self.last_was_expression = matches!(stmt, Statement::ExpressionStatement { .. });
+
         match stmt {
             Statement::VariableDeclaration { declarations, .. } => {
                 for decl in declarations {

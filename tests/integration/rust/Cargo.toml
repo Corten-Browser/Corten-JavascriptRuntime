@@ -1,0 +1,36 @@
+[package]
+name = "integration_tests"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+core_types = { path = "../../../components/core_types" }
+bytecode_system = { path = "../../../components/bytecode_system" }
+parser = { path = "../../../components/parser" }
+interpreter = { path = "../../../components/interpreter" }
+memory_manager = { path = "../../../components/memory_manager" }
+js_cli = { path = "../../../components/js_cli" }
+builtins = { path = "../../../components/builtins" }
+async_runtime = { path = "../../../components/async_runtime" }
+jit_compiler = { path = "../../../components/jit_compiler" }
+
+[[test]]
+name = "parser_bytecode"
+path = "tests/parser_bytecode.rs"
+
+[[test]]
+name = "bytecode_interpreter"
+path = "tests/bytecode_interpreter.rs"
+
+[[test]]
+name = "full_pipeline"
+path = "tests/full_pipeline.rs"
+
+[[test]]
+name = "memory_interpreter"
+path = "tests/memory_interpreter.rs"
+
+[[test]]
+name = "e2e_cli"
+path = "tests/e2e_cli.rs"
