@@ -1,0 +1,1479 @@
+//! Recursive descent parser for JavaScript
+
+use crate::ast::*;
+use crate::error::*;
+use crate::lexer::{Keyword, Lexer, Punctuator, Token};
+use core_types::JsError;
+
+/// Lazy AST representation for deferred parsing
+#[derive(Debug, Clone)]
+pub struct LazyAST {
+    /// Source code
+    pub source: String,
+    /// Pre-parsed function metadata
+    pub functions: Vec<LazyFunction>,
+}
+
+/// Lazy function metadata
+#[derive(Debug, Clone)]
+pub struct LazyFunction {
+    /// Function name
+    pub name: Option<String>,
+    /// Start offset in source
+    pub start: usize,
+    /// End offset in source
+    pub end: usize,
+}
+
+/// JavaScript parser
+pub struct Parser<'a> {
+    lexer: Lexer<'a>,
+    source: &'a str,
+    last_position: Option<core_types::SourcePosition>,
+}
+
+impl<'a> Parser<'a> {
+    /// Create a new parser for the given source code
+    pub fn new(source: &'a str) -> Self {
+        Self {
+            lexer: Lexer::new(source),
+            source,
+            last_position: None,
+        }
+    }
+
+    /// Parse the source into an AST
+    pub fn parse(&mut self) -> Result<ASTNode, JsError> {
+        let mut statements = Vec::new();
+
+        while !self.is_at_end()? {
+            statements.push(self.parse_statement()?);
+        }
+
+        Ok(ASTNode::Program(statements))
+    }
+
+    /// Parse with lazy function bodies (for performance)
+    pub fn parse_lazy(&mut self) -> Result<LazyAST, JsError> {
+        let mut functions = Vec::new();
+
+        // Simple preparse - identify function boundaries
+        while !self.is_at_end()? {
+            let token = self.lexer.peek_token()?;
+            match token {
+                Token::Keyword(Keyword::Function) | Token::Keyword(Keyword::Async) => {
+                    let start = self.current_offset();
+                    self.skip_function()?;
+                    let end = self.current_offset();
+                    functions.push(LazyFunction {
+                        name: None,
+                        start,
+                        end,
+                    });
+                }
+                _ => {
+                    self.lexer.next_token()?;
+                }
+            }
+        }
+
+        Ok(LazyAST {
+            source: self.source.to_string(),
+            functions,
+        })
+    }
+
+    fn skip_function(&mut self) -> Result<(), JsError> {
+        // Skip async if present
+        if matches!(self.lexer.peek_token()?, Token::Keyword(Keyword::Async)) {
+            self.lexer.next_token()?;
+        }
+
+        // Skip function keyword
+        self.expect_keyword(Keyword::Function)?;
+
+        // Skip optional name
+        if let Token::Identifier(_) = self.lexer.peek_token()? {
+            self.lexer.next_token()?;
+        }
+
+        // Skip parameters
+        self.expect_punctuator(Punctuator::LParen)?;
+        self.skip_until_matching(Punctuator::LParen, Punctuator::RParen)?;
+
+        // Skip body
+        self.expect_punctuator(Punctuator::LBrace)?;
+        self.skip_until_matching(Punctuator::LBrace, Punctuator::RBrace)?;
+
+        Ok(())
+    }
+
+    fn skip_until_matching(&mut self, open: Punctuator, close: Punctuator) -> Result<(), JsError> {
+        let mut depth = 1;
+        while depth > 0 && !self.is_at_end()? {
+            let token = self.lexer.next_token()?;
+            if let Token::Punctuator(p) = token {
+                if p == open {
+                    depth += 1;
+                } else if p == close {
+                    depth -= 1;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn current_offset(&self) -> usize {
+        0 // Simplified - would track actual position
+    }
+
+    fn is_at_end(&mut self) -> Result<bool, JsError> {
+        Ok(matches!(self.lexer.peek_token()?, Token::EOF))
+    }
+
+    fn parse_statement(&mut self) -> Result<Statement, JsError> {
+        let token = self.lexer.peek_token()?.clone();
+
+        match token {
+            Token::Keyword(Keyword::Let)
+            | Token::Keyword(Keyword::Const)
+            | Token::Keyword(Keyword::Var) => self.parse_variable_declaration(),
+            Token::Keyword(Keyword::Function) => self.parse_function_declaration(),
+            Token::Keyword(Keyword::Async) => self.parse_async_function_or_expression(),
+            Token::Keyword(Keyword::Class) => self.parse_class_declaration(),
+            Token::Keyword(Keyword::Return) => self.parse_return_statement(),
+            Token::Keyword(Keyword::If) => self.parse_if_statement(),
+            Token::Keyword(Keyword::While) => self.parse_while_statement(),
+            Token::Keyword(Keyword::For) => self.parse_for_statement(),
+            Token::Keyword(Keyword::Break) => self.parse_break_statement(),
+            Token::Keyword(Keyword::Continue) => self.parse_continue_statement(),
+            Token::Keyword(Keyword::Throw) => self.parse_throw_statement(),
+            Token::Keyword(Keyword::Try) => self.parse_try_statement(),
+            Token::Punctuator(Punctuator::LBrace) => self.parse_block_statement(),
+            Token::Punctuator(Punctuator::Semicolon) => {
+                self.lexer.next_token()?;
+                Ok(Statement::EmptyStatement { position: None })
+            }
+            _ => self.parse_expression_statement(),
+        }
+    }
+
+    fn parse_variable_declaration(&mut self) -> Result<Statement, JsError> {
+        let kind = match self.lexer.next_token()? {
+            Token::Keyword(Keyword::Let) => VariableKind::Let,
+            Token::Keyword(Keyword::Const) => VariableKind::Const,
+            Token::Keyword(Keyword::Var) => VariableKind::Var,
+            _ => unreachable!(),
+        };
+
+        let mut declarations = Vec::new();
+
+        loop {
+            let id = self.parse_pattern()?;
+            let init = if self.check_punctuator(Punctuator::Assign)? {
+                self.lexer.next_token()?;
+                Some(self.parse_assignment_expression()?)
+            } else {
+                None
+            };
+
+            declarations.push(VariableDeclarator { id, init });
+
+            if !self.check_punctuator(Punctuator::Comma)? {
+                break;
+            }
+            self.lexer.next_token()?;
+        }
+
+        self.consume_semicolon()?;
+
+        Ok(Statement::VariableDeclaration {
+            kind,
+            declarations,
+            position: None,
+        })
+    }
+
+    fn parse_pattern(&mut self) -> Result<Pattern, JsError> {
+        self.update_position()?;
+        let token = self.lexer.peek_token()?.clone();
+
+        match token {
+            Token::Identifier(name) => {
+                self.lexer.next_token()?;
+                Ok(Pattern::Identifier(name))
+            }
+            Token::Punctuator(Punctuator::LBrace) => self.parse_object_pattern(),
+            Token::Punctuator(Punctuator::LBracket) => self.parse_array_pattern(),
+            _ => Err(syntax_error("Expected pattern", self.last_position.clone())),
+        }
+    }
+
+    fn parse_object_pattern(&mut self) -> Result<Pattern, JsError> {
+        self.expect_punctuator(Punctuator::LBrace)?;
+        let mut properties = Vec::new();
+
+        while !self.check_punctuator(Punctuator::RBrace)? {
+            if self.check_punctuator(Punctuator::Spread)? {
+                self.lexer.next_token()?;
+                let pattern = self.parse_pattern()?;
+                properties.push(ObjectPatternProperty {
+                    key: String::new(),
+                    value: Pattern::RestElement(Box::new(pattern)),
+                    shorthand: false,
+                });
+            } else {
+                let key = self.expect_identifier()?;
+                let (value, shorthand) = if self.check_punctuator(Punctuator::Colon)? {
+                    self.lexer.next_token()?;
+                    (self.parse_pattern()?, false)
+                } else {
+                    (Pattern::Identifier(key.clone()), true)
+                };
+
+                properties.push(ObjectPatternProperty {
+                    key,
+                    value,
+                    shorthand,
+                });
+            }
+
+            if !self.check_punctuator(Punctuator::Comma)? {
+                break;
+            }
+            self.lexer.next_token()?;
+        }
+
+        self.expect_punctuator(Punctuator::RBrace)?;
+        Ok(Pattern::ObjectPattern(properties))
+    }
+
+    fn parse_array_pattern(&mut self) -> Result<Pattern, JsError> {
+        self.expect_punctuator(Punctuator::LBracket)?;
+        let mut elements = Vec::new();
+
+        while !self.check_punctuator(Punctuator::RBracket)? {
+            if self.check_punctuator(Punctuator::Comma)? {
+                elements.push(None);
+            } else if self.check_punctuator(Punctuator::Spread)? {
+                self.lexer.next_token()?;
+                let pattern = self.parse_pattern()?;
+                elements.push(Some(Pattern::RestElement(Box::new(pattern))));
+            } else {
+                elements.push(Some(self.parse_pattern()?));
+            }
+
+            if !self.check_punctuator(Punctuator::Comma)? {
+                break;
+            }
+            self.lexer.next_token()?;
+        }
+
+        self.expect_punctuator(Punctuator::RBracket)?;
+        Ok(Pattern::ArrayPattern(elements))
+    }
+
+    fn parse_function_declaration(&mut self) -> Result<Statement, JsError> {
+        self.expect_keyword(Keyword::Function)?;
+
+        let is_generator = self.check_punctuator(Punctuator::Star)?;
+        if is_generator {
+            self.lexer.next_token()?;
+        }
+
+        let name = self.expect_identifier()?;
+        let params = self.parse_parameters()?;
+        let body = self.parse_function_body()?;
+
+        Ok(Statement::FunctionDeclaration {
+            name,
+            params,
+            body,
+            is_async: false,
+            is_generator,
+            position: None,
+        })
+    }
+
+    fn parse_async_function_or_expression(&mut self) -> Result<Statement, JsError> {
+        self.expect_keyword(Keyword::Async)?;
+
+        if self.check_keyword(Keyword::Function)? {
+            self.lexer.next_token()?;
+            let name = self.expect_identifier()?;
+            let params = self.parse_parameters()?;
+            let body = self.parse_function_body()?;
+
+            Ok(Statement::FunctionDeclaration {
+                name,
+                params,
+                body,
+                is_async: true,
+                is_generator: false,
+                position: None,
+            })
+        } else {
+            Err(syntax_error("Expected function after async", None))
+        }
+    }
+
+    fn parse_class_declaration(&mut self) -> Result<Statement, JsError> {
+        self.expect_keyword(Keyword::Class)?;
+        let name = self.expect_identifier()?;
+
+        let super_class = if self.check_keyword(Keyword::Extends)? {
+            self.lexer.next_token()?;
+            Some(Box::new(self.parse_left_hand_side_expression()?))
+        } else {
+            None
+        };
+
+        let body = self.parse_class_body()?;
+
+        Ok(Statement::ClassDeclaration {
+            name,
+            super_class,
+            body,
+            position: None,
+        })
+    }
+
+    fn parse_class_body(&mut self) -> Result<Vec<ClassElement>, JsError> {
+        self.expect_punctuator(Punctuator::LBrace)?;
+        let mut elements = Vec::new();
+
+        while !self.check_punctuator(Punctuator::RBrace)? {
+            let is_static = if self.check_identifier("static")? {
+                self.lexer.next_token()?;
+                true
+            } else {
+                false
+            };
+
+            let key = self.expect_identifier_or_keyword()?;
+
+            if self.check_punctuator(Punctuator::LParen)? {
+                // Method
+                let params = self.parse_parameters()?;
+                let body = self.parse_function_body()?;
+                let kind = if key == "constructor" {
+                    MethodKind::Constructor
+                } else {
+                    MethodKind::Method
+                };
+
+                elements.push(ClassElement::MethodDefinition {
+                    key,
+                    kind,
+                    value: Expression::FunctionExpression {
+                        name: None,
+                        params,
+                        body,
+                        is_async: false,
+                        is_generator: false,
+                        position: None,
+                    },
+                    is_static,
+                });
+            } else {
+                // Property
+                let value = if self.check_punctuator(Punctuator::Assign)? {
+                    self.lexer.next_token()?;
+                    Some(self.parse_assignment_expression()?)
+                } else {
+                    None
+                };
+                elements.push(ClassElement::PropertyDefinition {
+                    key,
+                    value,
+                    is_static,
+                });
+                self.consume_semicolon()?;
+            }
+        }
+
+        self.expect_punctuator(Punctuator::RBrace)?;
+        Ok(elements)
+    }
+
+    fn parse_parameters(&mut self) -> Result<Vec<Pattern>, JsError> {
+        self.expect_punctuator(Punctuator::LParen)?;
+        let mut params = Vec::new();
+
+        while !self.check_punctuator(Punctuator::RParen)? {
+            if self.check_punctuator(Punctuator::Spread)? {
+                self.lexer.next_token()?;
+                let pattern = self.parse_pattern()?;
+                params.push(Pattern::RestElement(Box::new(pattern)));
+                break;
+            }
+
+            params.push(self.parse_pattern()?);
+
+            if !self.check_punctuator(Punctuator::Comma)? {
+                break;
+            }
+            self.lexer.next_token()?;
+        }
+
+        self.expect_punctuator(Punctuator::RParen)?;
+        Ok(params)
+    }
+
+    fn parse_function_body(&mut self) -> Result<Vec<Statement>, JsError> {
+        self.expect_punctuator(Punctuator::LBrace)?;
+        let mut statements = Vec::new();
+
+        while !self.check_punctuator(Punctuator::RBrace)? {
+            statements.push(self.parse_statement()?);
+        }
+
+        self.expect_punctuator(Punctuator::RBrace)?;
+        Ok(statements)
+    }
+
+    fn parse_return_statement(&mut self) -> Result<Statement, JsError> {
+        self.expect_keyword(Keyword::Return)?;
+
+        let argument = if self.check_punctuator(Punctuator::Semicolon)? || self.is_at_end()? {
+            None
+        } else {
+            Some(self.parse_expression()?)
+        };
+
+        self.consume_semicolon()?;
+
+        Ok(Statement::ReturnStatement {
+            argument,
+            position: None,
+        })
+    }
+
+    fn parse_if_statement(&mut self) -> Result<Statement, JsError> {
+        self.expect_keyword(Keyword::If)?;
+        self.expect_punctuator(Punctuator::LParen)?;
+        let test = self.parse_expression()?;
+        self.expect_punctuator(Punctuator::RParen)?;
+
+        let consequent = Box::new(self.parse_statement()?);
+
+        let alternate = if self.check_keyword(Keyword::Else)? {
+            self.lexer.next_token()?;
+            Some(Box::new(self.parse_statement()?))
+        } else {
+            None
+        };
+
+        Ok(Statement::IfStatement {
+            test,
+            consequent,
+            alternate,
+            position: None,
+        })
+    }
+
+    fn parse_while_statement(&mut self) -> Result<Statement, JsError> {
+        self.expect_keyword(Keyword::While)?;
+        self.expect_punctuator(Punctuator::LParen)?;
+        let test = self.parse_expression()?;
+        self.expect_punctuator(Punctuator::RParen)?;
+        let body = Box::new(self.parse_statement()?);
+
+        Ok(Statement::WhileStatement {
+            test,
+            body,
+            position: None,
+        })
+    }
+
+    fn parse_for_statement(&mut self) -> Result<Statement, JsError> {
+        self.expect_keyword(Keyword::For)?;
+        self.expect_punctuator(Punctuator::LParen)?;
+
+        let init = if self.check_punctuator(Punctuator::Semicolon)? {
+            None
+        } else if self.check_keyword(Keyword::Let)?
+            || self.check_keyword(Keyword::Const)?
+            || self.check_keyword(Keyword::Var)?
+        {
+            let kind = match self.lexer.next_token()? {
+                Token::Keyword(Keyword::Let) => VariableKind::Let,
+                Token::Keyword(Keyword::Const) => VariableKind::Const,
+                Token::Keyword(Keyword::Var) => VariableKind::Var,
+                _ => unreachable!(),
+            };
+            let id = self.parse_pattern()?;
+            let init_expr = if self.check_punctuator(Punctuator::Assign)? {
+                self.lexer.next_token()?;
+                Some(self.parse_assignment_expression()?)
+            } else {
+                None
+            };
+            Some(ForInit::VariableDeclaration {
+                kind,
+                declarations: vec![VariableDeclarator {
+                    id,
+                    init: init_expr,
+                }],
+            })
+        } else {
+            Some(ForInit::Expression(self.parse_expression()?))
+        };
+
+        self.expect_punctuator(Punctuator::Semicolon)?;
+
+        let test = if self.check_punctuator(Punctuator::Semicolon)? {
+            None
+        } else {
+            Some(self.parse_expression()?)
+        };
+
+        self.expect_punctuator(Punctuator::Semicolon)?;
+
+        let update = if self.check_punctuator(Punctuator::RParen)? {
+            None
+        } else {
+            Some(self.parse_expression()?)
+        };
+
+        self.expect_punctuator(Punctuator::RParen)?;
+        let body = Box::new(self.parse_statement()?);
+
+        Ok(Statement::ForStatement {
+            init,
+            test,
+            update,
+            body,
+            position: None,
+        })
+    }
+
+    fn parse_break_statement(&mut self) -> Result<Statement, JsError> {
+        self.expect_keyword(Keyword::Break)?;
+        self.consume_semicolon()?;
+        Ok(Statement::BreakStatement {
+            label: None,
+            position: None,
+        })
+    }
+
+    fn parse_continue_statement(&mut self) -> Result<Statement, JsError> {
+        self.expect_keyword(Keyword::Continue)?;
+        self.consume_semicolon()?;
+        Ok(Statement::ContinueStatement {
+            label: None,
+            position: None,
+        })
+    }
+
+    fn parse_throw_statement(&mut self) -> Result<Statement, JsError> {
+        self.expect_keyword(Keyword::Throw)?;
+        let argument = self.parse_expression()?;
+        self.consume_semicolon()?;
+        Ok(Statement::ThrowStatement {
+            argument,
+            position: None,
+        })
+    }
+
+    fn parse_try_statement(&mut self) -> Result<Statement, JsError> {
+        self.expect_keyword(Keyword::Try)?;
+        let block = self.parse_block_body()?;
+
+        let handler = if self.check_keyword(Keyword::Catch)? {
+            self.lexer.next_token()?;
+            let param = if self.check_punctuator(Punctuator::LParen)? {
+                self.lexer.next_token()?;
+                let p = self.parse_pattern()?;
+                self.expect_punctuator(Punctuator::RParen)?;
+                Some(p)
+            } else {
+                None
+            };
+            let body = self.parse_block_body()?;
+            Some(CatchClause { param, body })
+        } else {
+            None
+        };
+
+        let finalizer = if self.check_keyword(Keyword::Finally)? {
+            self.lexer.next_token()?;
+            Some(self.parse_block_body()?)
+        } else {
+            None
+        };
+
+        Ok(Statement::TryStatement {
+            block,
+            handler,
+            finalizer,
+            position: None,
+        })
+    }
+
+    fn parse_block_statement(&mut self) -> Result<Statement, JsError> {
+        let body = self.parse_block_body()?;
+        Ok(Statement::BlockStatement {
+            body,
+            position: None,
+        })
+    }
+
+    fn parse_block_body(&mut self) -> Result<Vec<Statement>, JsError> {
+        self.expect_punctuator(Punctuator::LBrace)?;
+        let mut statements = Vec::new();
+
+        while !self.check_punctuator(Punctuator::RBrace)? {
+            statements.push(self.parse_statement()?);
+        }
+
+        self.expect_punctuator(Punctuator::RBrace)?;
+        Ok(statements)
+    }
+
+    fn parse_expression_statement(&mut self) -> Result<Statement, JsError> {
+        let expression = self.parse_expression()?;
+        self.consume_semicolon()?;
+
+        Ok(Statement::ExpressionStatement {
+            expression,
+            position: None,
+        })
+    }
+
+    fn parse_expression(&mut self) -> Result<Expression, JsError> {
+        self.parse_assignment_expression()
+    }
+
+    fn parse_assignment_expression(&mut self) -> Result<Expression, JsError> {
+        let expr = self.parse_conditional_expression()?;
+
+        if let Some(op) = self.check_assignment_operator()? {
+            self.lexer.next_token()?;
+            let right = Box::new(self.parse_assignment_expression()?);
+            let left = self.expression_to_assignment_target(expr)?;
+            return Ok(Expression::AssignmentExpression {
+                left,
+                operator: op,
+                right,
+                position: None,
+            });
+        }
+
+        Ok(expr)
+    }
+
+    fn expression_to_assignment_target(
+        &self,
+        expr: Expression,
+    ) -> Result<AssignmentTarget, JsError> {
+        match expr {
+            Expression::Identifier { name, .. } => Ok(AssignmentTarget::Identifier(name)),
+            Expression::MemberExpression { .. } => Ok(AssignmentTarget::Member(Box::new(expr))),
+            _ => Err(syntax_error("Invalid assignment target", None)),
+        }
+    }
+
+    fn check_assignment_operator(&mut self) -> Result<Option<AssignmentOperator>, JsError> {
+        let op = match self.lexer.peek_token()? {
+            Token::Punctuator(Punctuator::Assign) => Some(AssignmentOperator::Assign),
+            Token::Punctuator(Punctuator::PlusEq) => Some(AssignmentOperator::AddAssign),
+            Token::Punctuator(Punctuator::MinusEq) => Some(AssignmentOperator::SubAssign),
+            Token::Punctuator(Punctuator::StarEq) => Some(AssignmentOperator::MulAssign),
+            Token::Punctuator(Punctuator::SlashEq) => Some(AssignmentOperator::DivAssign),
+            Token::Punctuator(Punctuator::PercentEq) => Some(AssignmentOperator::ModAssign),
+            _ => None,
+        };
+        Ok(op)
+    }
+
+    fn parse_conditional_expression(&mut self) -> Result<Expression, JsError> {
+        let test = self.parse_nullish_coalescing_expression()?;
+
+        if self.check_punctuator(Punctuator::Question)? {
+            self.lexer.next_token()?;
+            let consequent = Box::new(self.parse_assignment_expression()?);
+            self.expect_punctuator(Punctuator::Colon)?;
+            let alternate = Box::new(self.parse_assignment_expression()?);
+
+            return Ok(Expression::ConditionalExpression {
+                test: Box::new(test),
+                consequent,
+                alternate,
+                position: None,
+            });
+        }
+
+        Ok(test)
+    }
+
+    fn parse_nullish_coalescing_expression(&mut self) -> Result<Expression, JsError> {
+        let mut left = self.parse_logical_or_expression()?;
+
+        while self.check_punctuator(Punctuator::NullishCoalesce)? {
+            self.lexer.next_token()?;
+            let right = self.parse_logical_or_expression()?;
+            left = Expression::LogicalExpression {
+                left: Box::new(left),
+                operator: LogicalOperator::NullishCoalesce,
+                right: Box::new(right),
+                position: None,
+            };
+        }
+
+        Ok(left)
+    }
+
+    fn parse_logical_or_expression(&mut self) -> Result<Expression, JsError> {
+        let mut left = self.parse_logical_and_expression()?;
+
+        while self.check_punctuator(Punctuator::OrOr)? {
+            self.lexer.next_token()?;
+            let right = self.parse_logical_and_expression()?;
+            left = Expression::LogicalExpression {
+                left: Box::new(left),
+                operator: LogicalOperator::Or,
+                right: Box::new(right),
+                position: None,
+            };
+        }
+
+        Ok(left)
+    }
+
+    fn parse_logical_and_expression(&mut self) -> Result<Expression, JsError> {
+        let mut left = self.parse_bitwise_or_expression()?;
+
+        while self.check_punctuator(Punctuator::AndAnd)? {
+            self.lexer.next_token()?;
+            let right = self.parse_bitwise_or_expression()?;
+            left = Expression::LogicalExpression {
+                left: Box::new(left),
+                operator: LogicalOperator::And,
+                right: Box::new(right),
+                position: None,
+            };
+        }
+
+        Ok(left)
+    }
+
+    fn parse_bitwise_or_expression(&mut self) -> Result<Expression, JsError> {
+        self.parse_equality_expression()
+    }
+
+    fn parse_equality_expression(&mut self) -> Result<Expression, JsError> {
+        let mut left = self.parse_relational_expression()?;
+
+        loop {
+            let op = match self.lexer.peek_token()? {
+                Token::Punctuator(Punctuator::EqEq) => BinaryOperator::Eq,
+                Token::Punctuator(Punctuator::NotEq) => BinaryOperator::NotEq,
+                Token::Punctuator(Punctuator::EqEqEq) => BinaryOperator::StrictEq,
+                Token::Punctuator(Punctuator::NotEqEq) => BinaryOperator::StrictNotEq,
+                _ => break,
+            };
+            self.lexer.next_token()?;
+            let right = self.parse_relational_expression()?;
+            left = Expression::BinaryExpression {
+                left: Box::new(left),
+                operator: op,
+                right: Box::new(right),
+                position: None,
+            };
+        }
+
+        Ok(left)
+    }
+
+    fn parse_relational_expression(&mut self) -> Result<Expression, JsError> {
+        let mut left = self.parse_additive_expression()?;
+
+        loop {
+            let op = match self.lexer.peek_token()? {
+                Token::Punctuator(Punctuator::Lt) => BinaryOperator::Lt,
+                Token::Punctuator(Punctuator::LtEq) => BinaryOperator::LtEq,
+                Token::Punctuator(Punctuator::Gt) => BinaryOperator::Gt,
+                Token::Punctuator(Punctuator::GtEq) => BinaryOperator::GtEq,
+                Token::Keyword(Keyword::Instanceof) => BinaryOperator::Instanceof,
+                Token::Keyword(Keyword::In) => BinaryOperator::In,
+                _ => break,
+            };
+            self.lexer.next_token()?;
+            let right = self.parse_additive_expression()?;
+            left = Expression::BinaryExpression {
+                left: Box::new(left),
+                operator: op,
+                right: Box::new(right),
+                position: None,
+            };
+        }
+
+        Ok(left)
+    }
+
+    fn parse_additive_expression(&mut self) -> Result<Expression, JsError> {
+        let mut left = self.parse_multiplicative_expression()?;
+
+        loop {
+            let op = match self.lexer.peek_token()? {
+                Token::Punctuator(Punctuator::Plus) => BinaryOperator::Add,
+                Token::Punctuator(Punctuator::Minus) => BinaryOperator::Sub,
+                _ => break,
+            };
+            self.lexer.next_token()?;
+            let right = self.parse_multiplicative_expression()?;
+            left = Expression::BinaryExpression {
+                left: Box::new(left),
+                operator: op,
+                right: Box::new(right),
+                position: None,
+            };
+        }
+
+        Ok(left)
+    }
+
+    fn parse_multiplicative_expression(&mut self) -> Result<Expression, JsError> {
+        let mut left = self.parse_unary_expression()?;
+
+        loop {
+            let op = match self.lexer.peek_token()? {
+                Token::Punctuator(Punctuator::Star) => BinaryOperator::Mul,
+                Token::Punctuator(Punctuator::Slash) => BinaryOperator::Div,
+                Token::Punctuator(Punctuator::Percent) => BinaryOperator::Mod,
+                _ => break,
+            };
+            self.lexer.next_token()?;
+            let right = self.parse_unary_expression()?;
+            left = Expression::BinaryExpression {
+                left: Box::new(left),
+                operator: op,
+                right: Box::new(right),
+                position: None,
+            };
+        }
+
+        Ok(left)
+    }
+
+    fn parse_unary_expression(&mut self) -> Result<Expression, JsError> {
+        let op = match self.lexer.peek_token()? {
+            Token::Punctuator(Punctuator::Not) => Some(UnaryOperator::Not),
+            Token::Punctuator(Punctuator::Minus) => Some(UnaryOperator::Minus),
+            Token::Punctuator(Punctuator::Plus) => Some(UnaryOperator::Plus),
+            Token::Punctuator(Punctuator::Tilde) => Some(UnaryOperator::BitwiseNot),
+            Token::Keyword(Keyword::Typeof) => Some(UnaryOperator::Typeof),
+            _ => None,
+        };
+
+        if let Some(operator) = op {
+            self.lexer.next_token()?;
+            let argument = Box::new(self.parse_unary_expression()?);
+            return Ok(Expression::UnaryExpression {
+                operator,
+                argument,
+                prefix: true,
+                position: None,
+            });
+        }
+
+        if self.check_keyword(Keyword::Await)? {
+            self.lexer.next_token()?;
+            let argument = Box::new(self.parse_unary_expression()?);
+            return Ok(Expression::AwaitExpression {
+                argument,
+                position: None,
+            });
+        }
+
+        self.parse_update_expression()
+    }
+
+    fn parse_update_expression(&mut self) -> Result<Expression, JsError> {
+        // Prefix ++/--
+        if self.check_punctuator(Punctuator::PlusPlus)? {
+            self.lexer.next_token()?;
+            let argument = Box::new(self.parse_left_hand_side_expression()?);
+            return Ok(Expression::UpdateExpression {
+                operator: UpdateOperator::Increment,
+                argument,
+                prefix: true,
+                position: None,
+            });
+        }
+
+        if self.check_punctuator(Punctuator::MinusMinus)? {
+            self.lexer.next_token()?;
+            let argument = Box::new(self.parse_left_hand_side_expression()?);
+            return Ok(Expression::UpdateExpression {
+                operator: UpdateOperator::Decrement,
+                argument,
+                prefix: true,
+                position: None,
+            });
+        }
+
+        let expr = self.parse_left_hand_side_expression()?;
+
+        // Postfix ++/--
+        if self.check_punctuator(Punctuator::PlusPlus)? {
+            self.lexer.next_token()?;
+            return Ok(Expression::UpdateExpression {
+                operator: UpdateOperator::Increment,
+                argument: Box::new(expr),
+                prefix: false,
+                position: None,
+            });
+        }
+
+        if self.check_punctuator(Punctuator::MinusMinus)? {
+            self.lexer.next_token()?;
+            return Ok(Expression::UpdateExpression {
+                operator: UpdateOperator::Decrement,
+                argument: Box::new(expr),
+                prefix: false,
+                position: None,
+            });
+        }
+
+        Ok(expr)
+    }
+
+    fn parse_left_hand_side_expression(&mut self) -> Result<Expression, JsError> {
+        let mut expr = if self.check_keyword(Keyword::New)? {
+            self.parse_new_expression()?
+        } else {
+            self.parse_primary_expression()?
+        };
+
+        loop {
+            if self.check_punctuator(Punctuator::Dot)? {
+                self.lexer.next_token()?;
+                let property = self.expect_identifier()?;
+                expr = Expression::MemberExpression {
+                    object: Box::new(expr),
+                    property: Box::new(Expression::Identifier {
+                        name: property,
+                        position: None,
+                    }),
+                    computed: false,
+                    optional: false,
+                    position: None,
+                };
+            } else if self.check_punctuator(Punctuator::OptionalChain)? {
+                self.lexer.next_token()?;
+                let property = self.expect_identifier()?;
+                expr = Expression::MemberExpression {
+                    object: Box::new(expr),
+                    property: Box::new(Expression::Identifier {
+                        name: property,
+                        position: None,
+                    }),
+                    computed: false,
+                    optional: true,
+                    position: None,
+                };
+            } else if self.check_punctuator(Punctuator::LBracket)? {
+                self.lexer.next_token()?;
+                let property = Box::new(self.parse_expression()?);
+                self.expect_punctuator(Punctuator::RBracket)?;
+                expr = Expression::MemberExpression {
+                    object: Box::new(expr),
+                    property,
+                    computed: true,
+                    optional: false,
+                    position: None,
+                };
+            } else if self.check_punctuator(Punctuator::LParen)? {
+                let arguments = self.parse_arguments()?;
+                expr = Expression::CallExpression {
+                    callee: Box::new(expr),
+                    arguments,
+                    optional: false,
+                    position: None,
+                };
+            } else {
+                break;
+            }
+        }
+
+        Ok(expr)
+    }
+
+    fn parse_new_expression(&mut self) -> Result<Expression, JsError> {
+        self.expect_keyword(Keyword::New)?;
+        let callee = Box::new(self.parse_left_hand_side_expression()?);
+        let arguments = if self.check_punctuator(Punctuator::LParen)? {
+            self.parse_arguments()?
+        } else {
+            vec![]
+        };
+
+        Ok(Expression::NewExpression {
+            callee,
+            arguments,
+            position: None,
+        })
+    }
+
+    fn parse_arguments(&mut self) -> Result<Vec<Expression>, JsError> {
+        self.expect_punctuator(Punctuator::LParen)?;
+        let mut args = Vec::new();
+
+        while !self.check_punctuator(Punctuator::RParen)? {
+            if self.check_punctuator(Punctuator::Spread)? {
+                self.lexer.next_token()?;
+                let expr = self.parse_assignment_expression()?;
+                args.push(Expression::SpreadElement {
+                    argument: Box::new(expr),
+                    position: None,
+                });
+            } else {
+                args.push(self.parse_assignment_expression()?);
+            }
+
+            if !self.check_punctuator(Punctuator::Comma)? {
+                break;
+            }
+            self.lexer.next_token()?;
+        }
+
+        self.expect_punctuator(Punctuator::RParen)?;
+        Ok(args)
+    }
+
+    fn parse_primary_expression(&mut self) -> Result<Expression, JsError> {
+        let token = self.lexer.peek_token()?.clone();
+
+        match token {
+            Token::Identifier(name) => {
+                self.lexer.next_token()?;
+                Ok(Expression::Identifier {
+                    name,
+                    position: None,
+                })
+            }
+            Token::Number(n) => {
+                self.lexer.next_token()?;
+                Ok(Expression::Literal {
+                    value: Literal::Number(n),
+                    position: None,
+                })
+            }
+            Token::String(s) => {
+                self.lexer.next_token()?;
+                Ok(Expression::Literal {
+                    value: Literal::String(s),
+                    position: None,
+                })
+            }
+            Token::TemplateLiteral(s) => {
+                self.lexer.next_token()?;
+                Ok(Expression::TemplateLiteral {
+                    quasis: vec![TemplateElement {
+                        raw: s.clone(),
+                        cooked: s,
+                        tail: true,
+                    }],
+                    expressions: vec![],
+                    position: None,
+                })
+            }
+            Token::Keyword(Keyword::True) => {
+                self.lexer.next_token()?;
+                Ok(Expression::Literal {
+                    value: Literal::Boolean(true),
+                    position: None,
+                })
+            }
+            Token::Keyword(Keyword::False) => {
+                self.lexer.next_token()?;
+                Ok(Expression::Literal {
+                    value: Literal::Boolean(false),
+                    position: None,
+                })
+            }
+            Token::Keyword(Keyword::Null) => {
+                self.lexer.next_token()?;
+                Ok(Expression::Literal {
+                    value: Literal::Null,
+                    position: None,
+                })
+            }
+            Token::Keyword(Keyword::Undefined) => {
+                self.lexer.next_token()?;
+                Ok(Expression::Literal {
+                    value: Literal::Undefined,
+                    position: None,
+                })
+            }
+            Token::Keyword(Keyword::This) => {
+                self.lexer.next_token()?;
+                Ok(Expression::ThisExpression { position: None })
+            }
+            Token::Keyword(Keyword::Super) => {
+                self.lexer.next_token()?;
+                Ok(Expression::SuperExpression { position: None })
+            }
+            Token::Keyword(Keyword::Function) => self.parse_function_expression(),
+            Token::Punctuator(Punctuator::LParen) => self.parse_parenthesized_or_arrow(),
+            Token::Punctuator(Punctuator::LBracket) => self.parse_array_literal(),
+            Token::Punctuator(Punctuator::LBrace) => self.parse_object_literal(),
+            _ => Err(syntax_error("Unexpected token", None)),
+        }
+    }
+
+    fn parse_function_expression(&mut self) -> Result<Expression, JsError> {
+        self.expect_keyword(Keyword::Function)?;
+        let name = if let Token::Identifier(_) = self.lexer.peek_token()? {
+            Some(self.expect_identifier()?)
+        } else {
+            None
+        };
+        let params = self.parse_parameters()?;
+        let body = self.parse_function_body()?;
+
+        Ok(Expression::FunctionExpression {
+            name,
+            params,
+            body,
+            is_async: false,
+            is_generator: false,
+            position: None,
+        })
+    }
+
+    fn parse_parenthesized_or_arrow(&mut self) -> Result<Expression, JsError> {
+        self.lexer.next_token()?; // consume (
+
+        // Check for empty params ()
+        if self.check_punctuator(Punctuator::RParen)? {
+            self.lexer.next_token()?;
+            if self.check_punctuator(Punctuator::Arrow)? {
+                self.lexer.next_token()?;
+                let body = self.parse_arrow_body()?;
+                return Ok(Expression::ArrowFunctionExpression {
+                    params: vec![],
+                    body,
+                    is_async: false,
+                    position: None,
+                });
+            }
+            return Err(syntax_error("Unexpected )", None));
+        }
+
+        // Parse first expression/pattern
+        let first = self.parse_assignment_expression()?;
+
+        // Check for arrow with single param
+        if self.check_punctuator(Punctuator::RParen)? {
+            self.lexer.next_token()?;
+            if self.check_punctuator(Punctuator::Arrow)? {
+                self.lexer.next_token()?;
+                let param = self.expression_to_pattern(first)?;
+                let body = self.parse_arrow_body()?;
+                return Ok(Expression::ArrowFunctionExpression {
+                    params: vec![param],
+                    body,
+                    is_async: false,
+                    position: None,
+                });
+            }
+            return Ok(first);
+        }
+
+        // Multiple params or expressions
+        if self.check_punctuator(Punctuator::Comma)? {
+            let mut exprs = vec![first];
+            while self.check_punctuator(Punctuator::Comma)? {
+                self.lexer.next_token()?;
+                exprs.push(self.parse_assignment_expression()?);
+            }
+            self.expect_punctuator(Punctuator::RParen)?;
+
+            if self.check_punctuator(Punctuator::Arrow)? {
+                self.lexer.next_token()?;
+                let params: Result<Vec<Pattern>, _> = exprs
+                    .into_iter()
+                    .map(|e| self.expression_to_pattern(e))
+                    .collect();
+                let body = self.parse_arrow_body()?;
+                return Ok(Expression::ArrowFunctionExpression {
+                    params: params?,
+                    body,
+                    is_async: false,
+                    position: None,
+                });
+            }
+
+            // Sequence expression
+            return Ok(Expression::SequenceExpression {
+                expressions: exprs,
+                position: None,
+            });
+        }
+
+        self.expect_punctuator(Punctuator::RParen)?;
+        Ok(first)
+    }
+
+    fn expression_to_pattern(&self, expr: Expression) -> Result<Pattern, JsError> {
+        match expr {
+            Expression::Identifier { name, .. } => Ok(Pattern::Identifier(name)),
+            _ => Err(syntax_error("Invalid parameter", None)),
+        }
+    }
+
+    fn parse_arrow_body(&mut self) -> Result<ArrowFunctionBody, JsError> {
+        if self.check_punctuator(Punctuator::LBrace)? {
+            let body = self.parse_function_body()?;
+            Ok(ArrowFunctionBody::Block(body))
+        } else {
+            let expr = self.parse_assignment_expression()?;
+            Ok(ArrowFunctionBody::Expression(Box::new(expr)))
+        }
+    }
+
+    fn parse_array_literal(&mut self) -> Result<Expression, JsError> {
+        self.expect_punctuator(Punctuator::LBracket)?;
+        let mut elements = Vec::new();
+
+        while !self.check_punctuator(Punctuator::RBracket)? {
+            if self.check_punctuator(Punctuator::Comma)? {
+                elements.push(None);
+            } else if self.check_punctuator(Punctuator::Spread)? {
+                self.lexer.next_token()?;
+                let expr = self.parse_assignment_expression()?;
+                elements.push(Some(ArrayElement::Spread(expr)));
+            } else {
+                let expr = self.parse_assignment_expression()?;
+                elements.push(Some(ArrayElement::Expression(expr)));
+            }
+
+            if !self.check_punctuator(Punctuator::Comma)? {
+                break;
+            }
+            self.lexer.next_token()?;
+        }
+
+        self.expect_punctuator(Punctuator::RBracket)?;
+
+        Ok(Expression::ArrayExpression {
+            elements,
+            position: None,
+        })
+    }
+
+    fn parse_object_literal(&mut self) -> Result<Expression, JsError> {
+        self.expect_punctuator(Punctuator::LBrace)?;
+        let mut properties = Vec::new();
+
+        while !self.check_punctuator(Punctuator::RBrace)? {
+            if self.check_punctuator(Punctuator::Spread)? {
+                self.lexer.next_token()?;
+                let expr = self.parse_assignment_expression()?;
+                properties.push(ObjectProperty::SpreadElement(expr));
+            } else {
+                let key = self.expect_identifier()?;
+                let (value, shorthand) = if self.check_punctuator(Punctuator::Colon)? {
+                    self.lexer.next_token()?;
+                    (self.parse_assignment_expression()?, false)
+                } else {
+                    (
+                        Expression::Identifier {
+                            name: key.clone(),
+                            position: None,
+                        },
+                        true,
+                    )
+                };
+
+                properties.push(ObjectProperty::Property {
+                    key: PropertyKey::Identifier(key),
+                    value,
+                    shorthand,
+                    computed: false,
+                });
+            }
+
+            if !self.check_punctuator(Punctuator::Comma)? {
+                break;
+            }
+            self.lexer.next_token()?;
+        }
+
+        self.expect_punctuator(Punctuator::RBrace)?;
+
+        Ok(Expression::ObjectExpression {
+            properties,
+            position: None,
+        })
+    }
+
+    // Helper methods
+
+    fn check_punctuator(&mut self, p: Punctuator) -> Result<bool, JsError> {
+        Ok(matches!(self.lexer.peek_token()?, Token::Punctuator(ref x) if *x == p))
+    }
+
+    fn check_keyword(&mut self, k: Keyword) -> Result<bool, JsError> {
+        Ok(matches!(self.lexer.peek_token()?, Token::Keyword(ref x) if *x == k))
+    }
+
+    fn check_identifier(&mut self, name: &str) -> Result<bool, JsError> {
+        Ok(matches!(self.lexer.peek_token()?, Token::Identifier(ref x) if x == name))
+    }
+
+    fn expect_punctuator(&mut self, p: Punctuator) -> Result<(), JsError> {
+        let token = self.lexer.next_token()?;
+        if let Token::Punctuator(ref x) = token {
+            if *x == p {
+                return Ok(());
+            }
+        }
+        Err(unexpected_token(
+            &format!("{:?}", p),
+            &format!("{:?}", token),
+            None,
+        ))
+    }
+
+    fn expect_keyword(&mut self, k: Keyword) -> Result<(), JsError> {
+        let token = self.lexer.next_token()?;
+        if let Token::Keyword(ref x) = token {
+            if *x == k {
+                return Ok(());
+            }
+        }
+        Err(unexpected_token(
+            &format!("{:?}", k),
+            &format!("{:?}", token),
+            None,
+        ))
+    }
+
+    fn expect_identifier(&mut self) -> Result<String, JsError> {
+        self.update_position()?;
+        let token = self.lexer.next_token()?;
+        if let Token::Identifier(name) = token {
+            Ok(name)
+        } else {
+            Err(unexpected_token(
+                "identifier",
+                &format!("{:?}", token),
+                self.last_position.clone(),
+            ))
+        }
+    }
+
+    fn update_position(&mut self) -> Result<(), JsError> {
+        // Get position from lexer's current state
+        // This is a simplified approach - in a full implementation, the lexer would expose position
+        self.last_position = Some(core_types::SourcePosition {
+            line: 1,
+            column: 1,
+            offset: 0,
+        });
+        Ok(())
+    }
+
+    fn expect_identifier_or_keyword(&mut self) -> Result<String, JsError> {
+        let token = self.lexer.next_token()?;
+        match token {
+            Token::Identifier(name) => Ok(name),
+            Token::Keyword(kw) => {
+                // Allow keywords to be used as property/method names
+                Ok(match kw {
+                    Keyword::Constructor => "constructor".to_string(),
+                    Keyword::Let => "let".to_string(),
+                    Keyword::Const => "const".to_string(),
+                    Keyword::Var => "var".to_string(),
+                    Keyword::Function => "function".to_string(),
+                    Keyword::Return => "return".to_string(),
+                    Keyword::If => "if".to_string(),
+                    Keyword::Else => "else".to_string(),
+                    Keyword::While => "while".to_string(),
+                    Keyword::For => "for".to_string(),
+                    Keyword::Break => "break".to_string(),
+                    Keyword::Continue => "continue".to_string(),
+                    Keyword::Class => "class".to_string(),
+                    Keyword::Extends => "extends".to_string(),
+                    Keyword::New => "new".to_string(),
+                    Keyword::This => "this".to_string(),
+                    Keyword::Super => "super".to_string(),
+                    Keyword::Async => "async".to_string(),
+                    Keyword::Await => "await".to_string(),
+                    Keyword::True => "true".to_string(),
+                    Keyword::False => "false".to_string(),
+                    Keyword::Null => "null".to_string(),
+                    Keyword::Undefined => "undefined".to_string(),
+                    Keyword::Typeof => "typeof".to_string(),
+                    Keyword::Instanceof => "instanceof".to_string(),
+                    Keyword::In => "in".to_string(),
+                    Keyword::Try => "try".to_string(),
+                    Keyword::Catch => "catch".to_string(),
+                    Keyword::Finally => "finally".to_string(),
+                    Keyword::Throw => "throw".to_string(),
+                    Keyword::Yield => "yield".to_string(),
+                    Keyword::Import => "import".to_string(),
+                    Keyword::Export => "export".to_string(),
+                    Keyword::Default => "default".to_string(),
+                })
+            }
+            _ => Err(unexpected_token(
+                "identifier or keyword",
+                &format!("{:?}", token),
+                None,
+            )),
+        }
+    }
+
+    fn consume_semicolon(&mut self) -> Result<(), JsError> {
+        if self.check_punctuator(Punctuator::Semicolon)? {
+            self.lexer.next_token()?;
+        }
+        // Automatic semicolon insertion (simplified)
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_empty_program() {
+        let mut parser = Parser::new("");
+        let ast = parser.parse().unwrap();
+        assert!(matches!(ast, ASTNode::Program(stmts) if stmts.is_empty()));
+    }
+
+    #[test]
+    fn test_parse_variable_declaration() {
+        let mut parser = Parser::new("let x = 42;");
+        let ast = parser.parse().unwrap();
+        assert!(matches!(ast, ASTNode::Program(_)));
+    }
+
+    #[test]
+    fn test_parse_function_declaration() {
+        let mut parser = Parser::new("function foo() { return 1; }");
+        let ast = parser.parse().unwrap();
+        assert!(matches!(ast, ASTNode::Program(_)));
+    }
+
+    #[test]
+    fn test_parse_binary_expression() {
+        let mut parser = Parser::new("1 + 2;");
+        let ast = parser.parse().unwrap();
+        assert!(matches!(ast, ASTNode::Program(_)));
+    }
+
+    #[test]
+    fn test_parse_arrow_function() {
+        let mut parser = Parser::new("const f = () => 1;");
+        let ast = parser.parse().unwrap();
+        assert!(matches!(ast, ASTNode::Program(_)));
+    }
+}
