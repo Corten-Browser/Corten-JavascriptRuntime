@@ -1,0 +1,9 @@
+{
+  "project_name": "corten-javascript-runtime",
+  "version": "0.1.0",
+  "lifecycle_state": "pre-release",
+  "api_locked": false,
+  "breaking_changes_policy": "encouraged",
+  "language": "rust",
+  "description": "Production-grade JavaScript runtime in Rust with multi-tier execution"
+}

@@ -1,0 +1,43 @@
+name: js_cli
+type: application
+version: "0.1.0"
+description: "Command-line interface for JavaScript runtime"
+tech_stack:
+  - Rust
+  - clap
+  - rustyline
+dependencies:
+  imports:
+    - name: parser
+      version: "^0.1.0"
+      import_from: "crate::parser"
+      uses:
+        - Parser
+        - BytecodeGenerator
+    - name: interpreter
+      version: "^0.1.0"
+      import_from: "crate::interpreter"
+      uses:
+        - VM
+    - name: builtins
+      version: "^0.1.0"
+      import_from: "crate::builtins"
+      uses:
+        - all built-ins
+    - name: async_runtime
+      version: "^0.1.0"
+      import_from: "crate::async_runtime"
+      uses:
+        - EventLoop
+    - name: jit_compiler
+      version: "^0.1.0"
+      import_from: "crate::jit_compiler"
+      uses:
+        - BaselineJIT
+        - OptimizingJIT
+exports:
+  - main entry point
+token_budget:
+  optimal: 20000
+  warning: 30000
+  critical: 40000

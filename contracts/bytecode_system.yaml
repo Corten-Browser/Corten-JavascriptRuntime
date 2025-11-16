@@ -1,0 +1,88 @@
+name: bytecode_system
+version: "0.1.0"
+description: "Bytecode instruction set and optimization"
+
+dependencies:
+  - core_types
+
+exports:
+  types:
+    - name: Opcode
+      kind: enum
+      variants:
+        # Literals
+        - LoadConstant(usize)
+        - LoadUndefined
+        - LoadNull
+        - LoadTrue
+        - LoadFalse
+        # Variables
+        - LoadGlobal(String)
+        - StoreGlobal(String)
+        - LoadLocal(RegisterId)
+        - StoreLocal(RegisterId)
+        # Arithmetic
+        - Add
+        - Sub
+        - Mul
+        - Div
+        - Mod
+        - Neg
+        # Comparison
+        - Equal
+        - StrictEqual
+        - NotEqual
+        - StrictNotEqual
+        - LessThan
+        - LessThanEqual
+        - GreaterThan
+        - GreaterThanEqual
+        # Control flow
+        - Jump(usize)
+        - JumpIfTrue(usize)
+        - JumpIfFalse(usize)
+        - Return
+        # Objects
+        - CreateObject
+        - LoadProperty(String)
+        - StoreProperty(String)
+        # Functions
+        - CreateClosure(usize)
+        - Call(u8)
+
+    - name: RegisterId
+      kind: struct
+      fields:
+        - "0": u32
+
+    - name: Instruction
+      kind: struct
+      fields:
+        - opcode: Opcode
+        - source_position: "Option<SourcePosition>"
+
+    - name: BytecodeChunk
+      kind: struct
+      fields:
+        - instructions: Vec<Instruction>
+        - constants: Vec<Value>
+        - register_count: u32
+      methods:
+        - name: new
+          returns: Self
+        - name: emit
+          params:
+            - opcode: Opcode
+          returns: ()
+        - name: add_constant
+          params:
+            - value: Value
+          returns: usize
+        - name: optimize
+          returns: ()
+
+requirements:
+  - Register-based bytecode architecture
+  - Binary serialization support
+  - Basic optimization passes (dead code elimination, constant folding)
+  - 80%+ test coverage

@@ -1,0 +1,18 @@
+name: core_types
+type: base
+version: "0.1.0"
+description: "Core JavaScript value types, errors, and source location tracking"
+tech_stack:
+  - Rust
+  - no external dependencies
+dependencies:
+  imports: []
+exports:
+  - Value (tagged pointer enum)
+  - JsError
+  - SourcePosition
+  - ErrorKind
+token_budget:
+  optimal: 40000
+  warning: 60000
+  critical: 80000

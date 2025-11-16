@@ -1,0 +1,64 @@
+name: jit_compiler
+version: "0.1.0"
+description: "Multi-tier JIT compilation"
+
+dependencies:
+  - bytecode_system
+  - interpreter
+
+exports:
+  types:
+    - name: BaselineJIT
+      methods:
+        - name: new
+          returns: Self
+        - name: compile
+          params:
+            - chunk: "&BytecodeChunk"
+          returns: "Result<CompiledCode, JsError>"
+
+    - name: OptimizingJIT
+      methods:
+        - name: new
+          returns: Self
+        - name: compile
+          params:
+            - chunk: "&BytecodeChunk"
+            - profile: "&ProfileData"
+          returns: "Result<CompiledCode, JsError>"
+
+    - name: CompiledCode
+      fields:
+        - code: "*const u8"
+        - size: usize
+        - entry_point: "*const ()"
+        - osr_entries: Vec<OSREntry>
+      methods:
+        - name: execute
+          returns: "Result<Value, JsError>"
+
+    - name: OSREntry
+      fields:
+        - bytecode_offset: usize
+        - native_offset: usize
+        - frame_mapping: FrameMapping
+      methods:
+        - name: enter_at
+          params:
+            - context: "&ExecutionContext"
+          returns: "Result<(), JsError>"
+
+    - name: Deoptimizer
+      methods:
+        - name: deoptimize
+          params:
+            - compiled: "&CompiledCode"
+          returns: ExecutionContext
+
+requirements:
+  - Baseline JIT with template compilation
+  - Optimizing JIT with speculation
+  - OSR entry and exit
+  - Safe deoptimization
+  - Cranelift backend integration
+  - 80%+ test coverage

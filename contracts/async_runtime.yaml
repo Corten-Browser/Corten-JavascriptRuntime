@@ -1,0 +1,84 @@
+name: async_runtime
+version: "0.1.0"
+description: "Event loop, Promises, and ES modules"
+
+dependencies:
+  - interpreter
+  - builtins
+
+exports:
+  types:
+    - name: EventLoop
+      methods:
+        - name: new
+          returns: Self
+        - name: run_until_complete
+          params:
+            - vm: "&mut VM"
+          returns: "Result<(), JsError>"
+        - name: enqueue_task
+          params:
+            - task: Task
+          returns: ()
+        - name: enqueue_microtask
+          params:
+            - microtask: MicroTask
+          returns: ()
+
+    - name: Promise
+      fields:
+        - state: PromiseState
+        - reactions: Vec<PromiseReaction>
+        - result: "Option<Value>"
+      methods:
+        - name: new
+          returns: Self
+        - name: resolve
+          params:
+            - value: Value
+          returns: ()
+        - name: reject
+          params:
+            - error: JsError
+          returns: ()
+        - name: then
+          params:
+            - on_fulfilled: "Option<Function>"
+            - on_rejected: "Option<Function>"
+          returns: Promise
+
+    - name: PromiseState
+      kind: enum
+      variants:
+        - Pending
+        - Fulfilled
+        - Rejected
+
+    - name: Module
+      fields:
+        - source: String
+        - status: ModuleStatus
+        - imports: Vec<ImportEntry>
+        - exports: Vec<ExportEntry>
+      methods:
+        - name: link
+          returns: "Result<(), JsError>"
+        - name: evaluate
+          returns: "Result<Value, JsError>"
+
+    - name: ModuleStatus
+      kind: enum
+      variants:
+        - Unlinked
+        - Linking
+        - Linked
+        - Evaluating
+        - Evaluated
+        - Error(JsError)
+
+requirements:
+  - Event loop with task/microtask separation
+  - Promise/A+ compliant
+  - ES module loading pipeline
+  - Top-level await support
+  - 80%+ test coverage

@@ -1,0 +1,62 @@
+name: core_types
+version: "0.1.0"
+description: "Core JavaScript value types and error handling"
+
+exports:
+  types:
+    - name: Value
+      kind: enum
+      variants:
+        - Undefined
+        - "Null"
+        - Boolean(bool)
+        - Smi(i32)
+        - HeapObject(*mut Object)
+        - Double(f64)
+      methods:
+        - name: is_truthy
+          returns: bool
+        - name: to_string
+          returns: String
+        - name: type_of
+          returns: String
+
+    - name: JsError
+      kind: struct
+      fields:
+        - kind: ErrorKind
+        - message: String
+        - stack: Vec<StackFrame>
+        - source_position: Option<SourcePosition>
+
+    - name: ErrorKind
+      kind: enum
+      variants:
+        - SyntaxError
+        - TypeError
+        - ReferenceError
+        - RangeError
+        - EvalError
+        - URIError
+        - InternalError
+
+    - name: SourcePosition
+      kind: struct
+      fields:
+        - line: u32
+        - column: u32
+        - offset: usize
+
+    - name: StackFrame
+      kind: struct
+      fields:
+        - function_name: Option<String>
+        - source_url: Option<String>
+        - line: u32
+        - column: u32
+
+requirements:
+  - All operations must be safe Rust (no unsafe)
+  - No external dependencies
+  - Comprehensive rustdoc documentation
+  - 80%+ test coverage

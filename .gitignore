@@ -35,3 +35,42 @@ orchestration/.idea/
 # OS files
 .DS_Store
 Thumbs.db
+
+# Rust specific
+/target/
+target/
+**/*.rs.bk
+Cargo.lock
+
+# Rust build artifacts
+*.rlib
+*.rmeta
+*.so
+*.dylib
+*.dll
+*.a
+*.lib
+*.exe
+*.pdb
+
+# Rust debugging
+*.d
+
+# Rust incremental compilation
+/incremental/
+
+# Rust coverage
+*.profraw
+*.profdata
+tarpaulin-report.html
+cobertura.xml
+
+# Rust documentation
+/doc/
+target/doc/
+
+# Rust examples output
+/examples/*/target/
+
+# Rust IDE support
+rust-project.json

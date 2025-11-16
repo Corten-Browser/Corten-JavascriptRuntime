@@ -1,0 +1,8 @@
+[package]
+name = "jit_compiler"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+
+[dev-dependencies]

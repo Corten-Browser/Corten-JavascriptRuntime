@@ -1,0 +1,23 @@
+name: bytecode_system
+type: core
+version: "0.1.0"
+description: "Bytecode instruction set definition and optimization passes"
+tech_stack:
+  - Rust
+dependencies:
+  imports:
+    - name: core_types
+      version: "^0.1.0"
+      import_from: "crate::core_types"
+      uses:
+        - Value
+        - SourcePosition
+exports:
+  - Opcode
+  - BytecodeChunk
+  - Instruction
+  - RegisterId
+token_budget:
+  optimal: 50000
+  warning: 70000
+  critical: 90000

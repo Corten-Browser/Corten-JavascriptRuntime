@@ -1,0 +1,75 @@
+name: memory_manager
+version: "0.1.0"
+description: "Garbage collector and heap management"
+
+dependencies:
+  - core_types
+
+exports:
+  types:
+    - name: Heap
+      kind: struct
+      methods:
+        - name: new
+          returns: Self
+        - name: allocate
+          params:
+            - size: usize
+          returns: "*mut u8"
+        - name: collect_garbage
+          returns: ()
+        - name: young_generation_size
+          returns: usize
+        - name: old_generation_size
+          returns: usize
+
+    - name: HiddenClass
+      kind: struct
+      methods:
+        - name: new
+          returns: Self
+        - name: add_property
+          params:
+            - name: String
+          returns: "Box<HiddenClass>"
+        - name: lookup_property
+          params:
+            - name: "&str"
+          returns: "Option<u32>"
+
+    - name: JSObject
+      kind: struct
+      fields:
+        - class: "*const HiddenClass"
+        - properties: Vec<Value>
+        - elements: Vec<Value>
+      methods:
+        - name: new
+          params:
+            - class: "*const HiddenClass"
+          returns: Self
+        - name: get_property
+          params:
+            - name: "&str"
+          returns: "Option<Value>"
+        - name: set_property
+          params:
+            - name: String
+            - value: Value
+          returns: ()
+
+  functions:
+    - name: write_barrier
+      params:
+        - obj: "*mut Object"
+        - slot: "*mut Value"
+        - new_val: Value
+      returns: ()
+      unsafe: true
+
+requirements:
+  - Generational garbage collection (young + old gen)
+  - Write barriers for remembered set
+  - Safe Rust wrappers for unsafe internals
+  - All unsafe blocks must be documented
+  - 80%+ test coverage
