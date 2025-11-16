@@ -1,0 +1,72 @@
+name: parser
+version: "0.1.0"
+description: "JavaScript lexer, parser, and bytecode generation"
+
+dependencies:
+  - core_types
+  - bytecode_system
+
+exports:
+  types:
+    - name: Lexer
+      kind: struct
+      methods:
+        - name: new
+          params:
+            - source: "&str"
+          returns: Self
+        - name: next_token
+          returns: "Result<Token, JsError>"
+        - name: peek_token
+          returns: "Result<&Token, JsError>"
+
+    - name: Token
+      kind: enum
+      variants:
+        - Identifier(String)
+        - Number(f64)
+        - String(String)
+        - Keyword(Keyword)
+        - Punctuator(Punctuator)
+        - EOF
+
+    - name: Parser
+      kind: struct
+      methods:
+        - name: new
+          params:
+            - source: "&str"
+          returns: Self
+        - name: parse
+          returns: "Result<ASTNode, JsError>"
+        - name: parse_lazy
+          returns: "Result<LazyAST, JsError>"
+
+    - name: ASTNode
+      kind: enum
+      description: "Abstract Syntax Tree node types"
+
+    - name: BytecodeGenerator
+      kind: struct
+      methods:
+        - name: new
+          returns: Self
+        - name: generate
+          params:
+            - ast: "&ASTNode"
+          returns: "Result<BytecodeChunk, JsError>"
+
+    - name: ScopeAnalyzer
+      kind: struct
+      methods:
+        - name: analyze
+          params:
+            - ast: "&mut ASTNode"
+          returns: "Result<ScopeInfo, JsError>"
+
+requirements:
+  - ES2024 syntax support
+  - Lazy parsing for performance
+  - Scope analysis with variable resolution
+  - Helpful error messages with source locations
+  - 80%+ test coverage

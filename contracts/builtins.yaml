@@ -1,0 +1,101 @@
+name: builtins
+version: "0.1.0"
+description: "ECMAScript 2024 standard library"
+
+dependencies:
+  - memory_manager
+  - interpreter
+
+exports:
+  types:
+    - name: ObjectPrototype
+      methods:
+        - hasOwnProperty
+        - isPrototypeOf
+        - toString
+        - valueOf
+
+    - name: ArrayPrototype
+      methods:
+        - push
+        - pop
+        - shift
+        - unshift
+        - slice
+        - splice
+        - map
+        - filter
+        - reduce
+        - forEach
+        - find
+        - findIndex
+        - includes
+        - indexOf
+        - join
+        - sort
+        - reverse
+
+    - name: StringPrototype
+      methods:
+        - substring
+        - slice
+        - split
+        - replace
+        - match
+        - trim
+        - toLowerCase
+        - toUpperCase
+        - charAt
+        - charCodeAt
+        - padStart
+        - padEnd
+        - startsWith
+        - endsWith
+        - includes
+
+    - name: NumberPrototype
+      methods:
+        - toString
+        - toFixed
+        - toPrecision
+        - valueOf
+
+    - name: MathObject
+      methods:
+        - abs
+        - ceil
+        - floor
+        - round
+        - sqrt
+        - pow
+        - sin
+        - cos
+        - tan
+        - random
+        - max
+        - min
+        - log
+        - exp
+
+    - name: JSONObject
+      methods:
+        - parse
+        - stringify
+
+    - name: ConsoleObject
+      methods:
+        - log
+        - error
+        - warn
+        - info
+        - debug
+        - assert
+        - time
+        - timeEnd
+
+requirements:
+  - ES2024 spec compliance
+  - Unicode support for strings
+  - RegExp with full features
+  - BigInt arbitrary precision
+  - 80%+ test coverage

@@ -1,0 +1,78 @@
+name: interpreter
+version: "0.1.0"
+description: "Bytecode virtual machine with inline caching"
+
+dependencies:
+  - bytecode_system
+  - memory_manager
+
+exports:
+  types:
+    - name: VM
+      kind: struct
+      methods:
+        - name: new
+          returns: Self
+        - name: execute
+          params:
+            - chunk: "&BytecodeChunk"
+          returns: "Result<Value, JsError>"
+        - name: get_global
+          params:
+            - name: "&str"
+          returns: "Option<Value>"
+        - name: set_global
+          params:
+            - name: String
+            - value: Value
+          returns: ()
+
+    - name: ExecutionContext
+      kind: struct
+      fields:
+        - registers: Vec<Value>
+        - instruction_pointer: usize
+        - bytecode: BytecodeChunk
+
+    - name: InlineCache
+      kind: enum
+      variants:
+        - Uninitialized
+        - Monomorphic
+        - Polymorphic
+        - Megamorphic
+      methods:
+        - name: lookup
+          params:
+            - shape: ShapeId
+          returns: "Option<u32>"
+        - name: update
+          params:
+            - shape: ShapeId
+            - offset: u32
+          returns: ()
+
+    - name: ProfileData
+      kind: struct
+      fields:
+        - execution_count: u64
+        - type_feedback: Vec<TypeInfo>
+        - branch_outcomes: Vec<BranchOutcome>
+      methods:
+        - name: record_execution
+          returns: ()
+        - name: record_type
+          params:
+            - info: TypeInfo
+          returns: ()
+        - name: should_compile_baseline
+          returns: bool
+        - name: should_compile_optimized
+          returns: bool
+
+requirements:
+  - Dispatch loop for all opcodes
+  - Inline caching with mono/poly/mega states
+  - Profiling data collection for JIT
+  - Tier transition triggers
+  - 80%+ test coverage
