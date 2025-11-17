@@ -7,6 +7,7 @@ edition.workspace = true
 bytecode_system = { path = "../bytecode_system" }
 memory_manager = { path = "../memory_manager" }
 core_types = { path = "../core_types" }
+builtins = { path = "../builtins" }
 parking_lot = "0.12"
 arrayvec = "0.7"
 

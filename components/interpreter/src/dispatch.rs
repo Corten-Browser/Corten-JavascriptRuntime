@@ -2,27 +2,100 @@
 //!
 //! Handles individual opcode execution.
 
-use bytecode_system::{BytecodeChunk, Opcode};
+use bytecode_system::{BytecodeChunk, Opcode, UpvalueDescriptor};
+use builtins::{ConsoleObject, JsValue as BuiltinValue, MathObject};
 use core_types::{ErrorKind, JsError, Value};
+use std::any::Any;
+use std::cell::RefCell;
 use std::collections::HashMap;
+use std::rc::Rc;
 
 use crate::context::ExecutionContext;
+use crate::upvalue::{new_upvalue_handle, Closure, Upvalue, UpvalueHandle};
 
 /// Dispatch handler for executing bytecode
-#[derive(Debug)]
 pub struct Dispatcher {
     /// Global variables storage
     globals: HashMap<String, Value>,
     /// Stack for intermediate values
     stack: Vec<Value>,
+    /// Console object for native console methods
+    console: Rc<RefCell<ConsoleObject>>,
+    /// Open upvalues tracked for the current execution (key: stack index)
+    open_upvalues: HashMap<usize, UpvalueHandle>,
+    /// Current closure's upvalues (set when executing a closure)
+    current_upvalues: Vec<UpvalueHandle>,
+}
+
+impl std::fmt::Debug for Dispatcher {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Dispatcher")
+            .field("globals", &self.globals)
+            .field("stack", &self.stack)
+            .field("console", &"ConsoleObject")
+            .field("open_upvalues_count", &self.open_upvalues.len())
+            .field("current_upvalues_count", &self.current_upvalues.len())
+            .finish()
+    }
 }
 
 impl Dispatcher {
     /// Create a new dispatcher
     pub fn new() -> Self {
+        let console = Rc::new(RefCell::new(ConsoleObject::new()));
+        let mut globals = HashMap::new();
+
+        // Inject console global
+        globals.insert(
+            "console".to_string(),
+            Value::NativeObject(console.clone() as Rc<RefCell<dyn Any>>),
+        );
+
+        // Inject Math global (static object, no state)
+        globals.insert(
+            "Math".to_string(),
+            Value::NativeObject(Rc::new(RefCell::new(MathObject)) as Rc<RefCell<dyn Any>>),
+        );
+
         Self {
-            globals: HashMap::new(),
+            globals,
             stack: Vec::with_capacity(256),
+            console,
+            open_upvalues: HashMap::new(),
+            current_upvalues: Vec::new(),
+        }
+    }
+
+    /// Capture an upvalue for a closure based on the descriptor
+    fn capture_upvalue(
+        &mut self,
+        desc: &UpvalueDescriptor,
+        ctx: &ExecutionContext,
+    ) -> UpvalueHandle {
+        if desc.is_local {
+            // The variable is a local in the current scope
+            // We need to create or reuse an open upvalue for this register
+            let stack_idx = desc.index as usize;
+
+            // Check if we already have an open upvalue for this location
+            if let Some(handle) = self.open_upvalues.get(&stack_idx) {
+                handle.clone()
+            } else {
+                // Create new open upvalue pointing to the register value
+                let value = ctx.get_register(stack_idx);
+                let handle = new_upvalue_handle(Upvalue::new_closed(value));
+                self.open_upvalues.insert(stack_idx, handle.clone());
+                handle
+            }
+        } else {
+            // The variable is an upvalue in the parent scope (grandparent+ to us)
+            // Get it from the current upvalues
+            if let Some(handle) = self.current_upvalues.get(desc.index as usize) {
+                handle.clone()
+            } else {
+                // This shouldn't happen with correct compilation, but create a closed undefined upvalue
+                new_upvalue_handle(Upvalue::new_closed(Value::Undefined))
+            }
         }
     }
 
@@ -43,6 +116,10 @@ impl Dispatcher {
             bytecode_system::Value::String(_) => {
                 // Strings would need to be heap-allocated, for now return undefined
                 Value::Undefined
+            }
+            bytecode_system::Value::Closure(closure_data) => {
+                // Create a HeapObject reference for the closure
+                Value::HeapObject(closure_data.function_index)
             }
         }
     }
@@ -104,6 +181,29 @@ impl Dispatcher {
                 Opcode::StoreLocal(reg_id) => {
                     let value = self.stack.pop().unwrap_or(Value::Undefined);
                     ctx.set_register(reg_id.0 as usize, value);
+                }
+                Opcode::LoadUpvalue(idx) => {
+                    // Load value from captured upvalue
+                    if let Some(upvalue_handle) = self.current_upvalues.get(idx as usize) {
+                        let upvalue = upvalue_handle.borrow();
+                        let value = upvalue.get(&[]);
+                        self.stack.push(value);
+                    } else {
+                        self.stack.push(Value::Undefined);
+                    }
+                }
+                Opcode::StoreUpvalue(idx) => {
+                    // Store value to captured upvalue
+                    let value = self.stack.pop().unwrap_or(Value::Undefined);
+                    if let Some(upvalue_handle) = self.current_upvalues.get(idx as usize) {
+                        let upvalue = upvalue_handle.borrow();
+                        upvalue.set(value, &mut []);
+                    }
+                }
+                Opcode::CloseUpvalue => {
+                    // Close over local variables when scope ends
+                    // This is typically emitted when a scope ends that had captured variables
+                    // For now, this is a no-op since we're using closed upvalues directly
                 }
                 Opcode::Add => {
                     let b = self.stack.pop().unwrap_or(Value::Undefined);
@@ -211,27 +311,283 @@ impl Dispatcher {
                     // Placeholder: create object with ID
                     self.stack.push(Value::HeapObject(0));
                 }
-                Opcode::LoadProperty(_name) => {
-                    // Placeholder: property access
-                    self.stack.pop();
-                    self.stack.push(Value::Undefined);
+                Opcode::LoadProperty(name) => {
+                    let obj = self.stack.pop().unwrap_or(Value::Undefined);
+
+                    match obj {
+                        Value::NativeObject(native_obj) => {
+                            let borrowed = native_obj.borrow();
+                            if borrowed.is::<ConsoleObject>() {
+                                // Return method based on property name
+                                match name.as_str() {
+                                    "log" => self
+                                        .stack
+                                        .push(Value::NativeFunction("console.log".to_string())),
+                                    "error" => self
+                                        .stack
+                                        .push(Value::NativeFunction("console.error".to_string())),
+                                    "warn" => self
+                                        .stack
+                                        .push(Value::NativeFunction("console.warn".to_string())),
+                                    "info" => self
+                                        .stack
+                                        .push(Value::NativeFunction("console.info".to_string())),
+                                    _ => self.stack.push(Value::Undefined),
+                                }
+                            } else if borrowed.is::<MathObject>() {
+                                match name.as_str() {
+                                    "abs" => self
+                                        .stack
+                                        .push(Value::NativeFunction("Math.abs".to_string())),
+                                    "ceil" => self
+                                        .stack
+                                        .push(Value::NativeFunction("Math.ceil".to_string())),
+                                    "floor" => self
+                                        .stack
+                                        .push(Value::NativeFunction("Math.floor".to_string())),
+                                    "round" => self
+                                        .stack
+                                        .push(Value::NativeFunction("Math.round".to_string())),
+                                    "sqrt" => self
+                                        .stack
+                                        .push(Value::NativeFunction("Math.sqrt".to_string())),
+                                    "pow" => self
+                                        .stack
+                                        .push(Value::NativeFunction("Math.pow".to_string())),
+                                    "sin" => self
+                                        .stack
+                                        .push(Value::NativeFunction("Math.sin".to_string())),
+                                    "cos" => self
+                                        .stack
+                                        .push(Value::NativeFunction("Math.cos".to_string())),
+                                    "tan" => self
+                                        .stack
+                                        .push(Value::NativeFunction("Math.tan".to_string())),
+                                    "random" => self
+                                        .stack
+                                        .push(Value::NativeFunction("Math.random".to_string())),
+                                    "max" => self
+                                        .stack
+                                        .push(Value::NativeFunction("Math.max".to_string())),
+                                    "min" => self
+                                        .stack
+                                        .push(Value::NativeFunction("Math.min".to_string())),
+                                    "PI" => self.stack.push(Value::Double(MathObject::PI)),
+                                    "E" => self.stack.push(Value::Double(MathObject::E)),
+                                    _ => self.stack.push(Value::Undefined),
+                                }
+                            } else {
+                                self.stack.push(Value::Undefined);
+                            }
+                        }
+                        _ => self.stack.push(Value::Undefined),
+                    }
                 }
                 Opcode::StoreProperty(_name) => {
                     // Placeholder: property store
                     self.stack.pop(); // value
                     self.stack.pop(); // object
                 }
-                Opcode::CreateClosure(idx) => {
-                    // Create a closure by pushing a HeapObject with the function index
-                    // HeapObject(id) where id is the function index in the registry
-                    self.stack.push(Value::HeapObject(idx));
+                Opcode::CreateClosure(idx, upvalue_descs) => {
+                    // Create a closure by capturing upvalues from the current scope
+                    if upvalue_descs.is_empty() {
+                        // No captured variables, just push the function index
+                        self.stack.push(Value::HeapObject(idx));
+                    } else {
+                        // Capture upvalues based on descriptors
+                        let mut captured_upvalues = Vec::with_capacity(upvalue_descs.len());
+                        for desc in &upvalue_descs {
+                            let upvalue_handle = self.capture_upvalue(desc, ctx);
+                            captured_upvalues.push(upvalue_handle);
+                        }
+
+                        // Store the closure with captured upvalues
+                        // For now, we store the closure data in the global registry
+                        // and return a HeapObject reference with an encoded ID
+                        // The captured upvalues will be retrieved when the closure is called
+
+                        // Create a composite ID that encodes both function index and closure instance
+                        // We'll use a simple scheme: store closure info and use a special marker
+                        // For simplicity, we just store the function index and track upvalues separately
+                        // A more complete implementation would use a closure registry
+                        self.stack.push(Value::HeapObject(idx));
+
+                        // Store captured upvalues for this closure (simplified approach)
+                        // In a full implementation, we'd have a closure registry
+                        // For now, we'll rely on the call site to set up upvalues properly
+                    }
                 }
                 Opcode::Call(argc) => {
-                    // Function call implementation
-                    let result = self.call_function(argc, functions)?;
-                    self.stack.push(result);
+                    // Pop arguments first (in reverse order)
+                    let mut args = Vec::with_capacity(argc as usize);
+                    for _ in 0..argc {
+                        args.push(self.stack.pop().unwrap_or(Value::Undefined));
+                    }
+                    args.reverse(); // Now args[0] is first argument
+
+                    // Pop the callee (function) from stack
+                    let callee = self.stack.pop().unwrap_or(Value::Undefined);
+
+                    match callee {
+                        Value::NativeFunction(name) => {
+                            let result = self.call_native_function(&name, args)?;
+                            self.stack.push(result);
+                        }
+                        Value::HeapObject(_) => {
+                            // User-defined function - push args back and call
+                            for arg in args.into_iter().rev() {
+                                self.stack.push(arg);
+                            }
+                            self.stack.push(callee);
+                            let result = self.call_function(argc, functions)?;
+                            self.stack.push(result);
+                        }
+                        _ => {
+                            return Err(JsError {
+                                kind: ErrorKind::TypeError,
+                                message: format!("{:?} is not a function", callee),
+                                stack: vec![],
+                                source_position: None,
+                            });
+                        }
+                    }
+                }
+                Opcode::LoadUpvalue(_idx) => {
+                    // Placeholder: load captured variable
+                    // Upvalues are used for closures to access parent scope variables
+                    self.stack.push(Value::Undefined);
+                }
+                Opcode::StoreUpvalue(_idx) => {
+                    // Placeholder: store to captured variable
+                    self.stack.pop();
+                }
+                Opcode::CloseUpvalue => {
+                    // Placeholder: close over local variable (move from stack to heap)
+                    // This is used when a closure outlives its creating scope
                 }
             }
+        }
+    }
+
+    /// Call a native function by name
+    fn call_native_function(&self, name: &str, args: Vec<Value>) -> Result<Value, JsError> {
+        match name {
+            // Console methods
+            "console.log" => {
+                let builtin_args: Vec<BuiltinValue> = args.iter().map(Self::to_builtin_value).collect();
+                self.console.borrow().log(&builtin_args);
+                Ok(Value::Undefined)
+            }
+            "console.error" => {
+                let builtin_args: Vec<BuiltinValue> = args.iter().map(Self::to_builtin_value).collect();
+                self.console.borrow().error(&builtin_args);
+                Ok(Value::Undefined)
+            }
+            "console.warn" => {
+                let builtin_args: Vec<BuiltinValue> = args.iter().map(Self::to_builtin_value).collect();
+                self.console.borrow().warn(&builtin_args);
+                Ok(Value::Undefined)
+            }
+            "console.info" => {
+                let builtin_args: Vec<BuiltinValue> = args.iter().map(Self::to_builtin_value).collect();
+                self.console.borrow().info(&builtin_args);
+                Ok(Value::Undefined)
+            }
+            // Math methods
+            "Math.abs" => {
+                if let Some(n) = args.first().map(|v| self.to_number(v)) {
+                    Ok(Value::Double(MathObject::abs(n)))
+                } else {
+                    Ok(Value::Double(f64::NAN))
+                }
+            }
+            "Math.ceil" => {
+                if let Some(n) = args.first().map(|v| self.to_number(v)) {
+                    Ok(Value::Double(MathObject::ceil(n)))
+                } else {
+                    Ok(Value::Double(f64::NAN))
+                }
+            }
+            "Math.floor" => {
+                if let Some(n) = args.first().map(|v| self.to_number(v)) {
+                    Ok(Value::Double(MathObject::floor(n)))
+                } else {
+                    Ok(Value::Double(f64::NAN))
+                }
+            }
+            "Math.round" => {
+                if let Some(n) = args.first().map(|v| self.to_number(v)) {
+                    Ok(Value::Double(MathObject::round(n)))
+                } else {
+                    Ok(Value::Double(f64::NAN))
+                }
+            }
+            "Math.sqrt" => {
+                if let Some(n) = args.first().map(|v| self.to_number(v)) {
+                    Ok(Value::Double(MathObject::sqrt(n)))
+                } else {
+                    Ok(Value::Double(f64::NAN))
+                }
+            }
+            "Math.pow" => {
+                if args.len() >= 2 {
+                    let base = self.to_number(&args[0]);
+                    let exp = self.to_number(&args[1]);
+                    Ok(Value::Double(MathObject::pow(base, exp)))
+                } else {
+                    Ok(Value::Double(f64::NAN))
+                }
+            }
+            "Math.sin" => {
+                if let Some(n) = args.first().map(|v| self.to_number(v)) {
+                    Ok(Value::Double(MathObject::sin(n)))
+                } else {
+                    Ok(Value::Double(f64::NAN))
+                }
+            }
+            "Math.cos" => {
+                if let Some(n) = args.first().map(|v| self.to_number(v)) {
+                    Ok(Value::Double(MathObject::cos(n)))
+                } else {
+                    Ok(Value::Double(f64::NAN))
+                }
+            }
+            "Math.tan" => {
+                if let Some(n) = args.first().map(|v| self.to_number(v)) {
+                    Ok(Value::Double(MathObject::tan(n)))
+                } else {
+                    Ok(Value::Double(f64::NAN))
+                }
+            }
+            "Math.random" => Ok(Value::Double(MathObject::random())),
+            "Math.max" => {
+                let nums: Vec<f64> = args.iter().map(|v| self.to_number(v)).collect();
+                Ok(Value::Double(MathObject::max(&nums)))
+            }
+            "Math.min" => {
+                let nums: Vec<f64> = args.iter().map(|v| self.to_number(v)).collect();
+                Ok(Value::Double(MathObject::min(&nums)))
+            }
+            _ => Err(JsError {
+                kind: ErrorKind::TypeError,
+                message: format!("{} is not a function", name),
+                stack: vec![],
+                source_position: None,
+            }),
+        }
+    }
+
+    /// Convert core_types::Value to builtins::JsValue
+    fn to_builtin_value(value: &Value) -> BuiltinValue {
+        match value {
+            Value::Undefined => BuiltinValue::undefined(),
+            Value::Null => BuiltinValue::null(),
+            Value::Boolean(b) => BuiltinValue::boolean(*b),
+            Value::Smi(n) => BuiltinValue::number(*n as f64),
+            Value::Double(n) => BuiltinValue::number(*n),
+            Value::HeapObject(_) => BuiltinValue::object(),
+            Value::NativeObject(_) => BuiltinValue::object(),
+            Value::NativeFunction(name) => BuiltinValue::string(format!("function {}() {{ [native code] }}", name)),
         }
     }
 
@@ -391,6 +747,8 @@ impl Dispatcher {
             Value::Undefined => f64::NAN,
             Value::Null => 0.0,
             Value::HeapObject(_) => f64::NAN,
+            Value::NativeObject(_) => f64::NAN,
+            Value::NativeFunction(_) => f64::NAN,
         }
     }
 

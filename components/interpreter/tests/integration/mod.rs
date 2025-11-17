@@ -297,3 +297,204 @@ fn test_profile_branch_outcomes() {
 
     assert_eq!(profile.branch_outcomes.len(), 3);
 }
+
+#[test]
+fn test_vm_console_global_exists() {
+    let vm = VM::new();
+    // Console global should be automatically injected
+    let console = vm.get_global("console");
+    assert!(console.is_some(), "Console global should exist");
+    match console.unwrap() {
+        Value::NativeObject(_) => {} // Expected
+        other => panic!("Expected NativeObject, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_vm_math_global_exists() {
+    let vm = VM::new();
+    // Math global should be automatically injected
+    let math = vm.get_global("Math");
+    assert!(math.is_some(), "Math global should exist");
+    match math.unwrap() {
+        Value::NativeObject(_) => {} // Expected
+        other => panic!("Expected NativeObject, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_vm_math_abs() {
+    let mut vm = VM::new();
+    let mut chunk = BytecodeChunk::new();
+
+    // Equivalent to: Math.abs(-5)
+    let c_neg5 = chunk.add_constant(BcValue::Number(-5.0));
+
+    chunk.emit(Opcode::LoadGlobal("Math".to_string())); // Load Math object
+    chunk.emit(Opcode::LoadProperty("abs".to_string())); // Get abs method
+    chunk.emit(Opcode::LoadConstant(c_neg5)); // Push argument
+    chunk.emit(Opcode::Call(1)); // Call with 1 argument
+    chunk.emit(Opcode::Return);
+
+    let result = vm.execute(&chunk);
+    assert_eq!(result.unwrap(), Value::Double(5.0));
+}
+
+#[test]
+fn test_vm_math_sqrt() {
+    let mut vm = VM::new();
+    let mut chunk = BytecodeChunk::new();
+
+    // Equivalent to: Math.sqrt(16)
+    let c16 = chunk.add_constant(BcValue::Number(16.0));
+
+    chunk.emit(Opcode::LoadGlobal("Math".to_string()));
+    chunk.emit(Opcode::LoadProperty("sqrt".to_string()));
+    chunk.emit(Opcode::LoadConstant(c16));
+    chunk.emit(Opcode::Call(1));
+    chunk.emit(Opcode::Return);
+
+    let result = vm.execute(&chunk);
+    assert_eq!(result.unwrap(), Value::Double(4.0));
+}
+
+#[test]
+fn test_vm_math_pow() {
+    let mut vm = VM::new();
+    let mut chunk = BytecodeChunk::new();
+
+    // Equivalent to: Math.pow(2, 3) = 8
+    let c2 = chunk.add_constant(BcValue::Number(2.0));
+    let c3 = chunk.add_constant(BcValue::Number(3.0));
+
+    chunk.emit(Opcode::LoadGlobal("Math".to_string()));
+    chunk.emit(Opcode::LoadProperty("pow".to_string()));
+    chunk.emit(Opcode::LoadConstant(c2));
+    chunk.emit(Opcode::LoadConstant(c3));
+    chunk.emit(Opcode::Call(2));
+    chunk.emit(Opcode::Return);
+
+    let result = vm.execute(&chunk);
+    assert_eq!(result.unwrap(), Value::Double(8.0));
+}
+
+#[test]
+fn test_vm_math_pi() {
+    let mut vm = VM::new();
+    let mut chunk = BytecodeChunk::new();
+
+    // Equivalent to: Math.PI
+    chunk.emit(Opcode::LoadGlobal("Math".to_string()));
+    chunk.emit(Opcode::LoadProperty("PI".to_string()));
+    chunk.emit(Opcode::Return);
+
+    let result = vm.execute(&chunk);
+    match result.unwrap() {
+        Value::Double(n) => {
+            assert!((n - std::f64::consts::PI).abs() < 1e-10);
+        }
+        other => panic!("Expected Double, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_vm_console_log() {
+    let mut vm = VM::new();
+    let mut chunk = BytecodeChunk::new();
+
+    // Equivalent to: console.log("hello")
+    // Note: We can't easily test the actual output, but we can verify it doesn't error
+    let c_hello = chunk.add_constant(BcValue::Number(42.0)); // Using number since strings aren't fully supported
+
+    chunk.emit(Opcode::LoadGlobal("console".to_string())); // Load console object
+    chunk.emit(Opcode::LoadProperty("log".to_string())); // Get log method
+    chunk.emit(Opcode::LoadConstant(c_hello)); // Push argument
+    chunk.emit(Opcode::Call(1)); // Call with 1 argument
+    chunk.emit(Opcode::Return);
+
+    let result = vm.execute(&chunk);
+    // console.log returns undefined
+    assert_eq!(result.unwrap(), Value::Undefined);
+}
+
+#[test]
+fn test_vm_console_error() {
+    let mut vm = VM::new();
+    let mut chunk = BytecodeChunk::new();
+
+    // Equivalent to: console.error(100)
+    let c100 = chunk.add_constant(BcValue::Number(100.0));
+
+    chunk.emit(Opcode::LoadGlobal("console".to_string()));
+    chunk.emit(Opcode::LoadProperty("error".to_string()));
+    chunk.emit(Opcode::LoadConstant(c100));
+    chunk.emit(Opcode::Call(1));
+    chunk.emit(Opcode::Return);
+
+    let result = vm.execute(&chunk);
+    // console.error returns undefined
+    assert_eq!(result.unwrap(), Value::Undefined);
+}
+
+#[test]
+fn test_vm_native_function_type() {
+    let mut vm = VM::new();
+    let mut chunk = BytecodeChunk::new();
+
+    // Load Math.abs but don't call it - should be a NativeFunction
+    chunk.emit(Opcode::LoadGlobal("Math".to_string()));
+    chunk.emit(Opcode::LoadProperty("abs".to_string()));
+    chunk.emit(Opcode::Return);
+
+    let result = vm.execute(&chunk);
+    match result.unwrap() {
+        Value::NativeFunction(name) => {
+            assert_eq!(name, "Math.abs");
+        }
+        other => panic!("Expected NativeFunction, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_vm_math_max() {
+    let mut vm = VM::new();
+    let mut chunk = BytecodeChunk::new();
+
+    // Equivalent to: Math.max(1, 5, 3) = 5
+    let c1 = chunk.add_constant(BcValue::Number(1.0));
+    let c5 = chunk.add_constant(BcValue::Number(5.0));
+    let c3 = chunk.add_constant(BcValue::Number(3.0));
+
+    chunk.emit(Opcode::LoadGlobal("Math".to_string()));
+    chunk.emit(Opcode::LoadProperty("max".to_string()));
+    chunk.emit(Opcode::LoadConstant(c1));
+    chunk.emit(Opcode::LoadConstant(c5));
+    chunk.emit(Opcode::LoadConstant(c3));
+    chunk.emit(Opcode::Call(3));
+    chunk.emit(Opcode::Return);
+
+    let result = vm.execute(&chunk);
+    assert_eq!(result.unwrap(), Value::Double(5.0));
+}
+
+#[test]
+fn test_vm_math_min() {
+    let mut vm = VM::new();
+    let mut chunk = BytecodeChunk::new();
+
+    // Equivalent to: Math.min(1, 5, 3) = 1
+    let c1 = chunk.add_constant(BcValue::Number(1.0));
+    let c5 = chunk.add_constant(BcValue::Number(5.0));
+    let c3 = chunk.add_constant(BcValue::Number(3.0));
+
+    chunk.emit(Opcode::LoadGlobal("Math".to_string()));
+    chunk.emit(Opcode::LoadProperty("min".to_string()));
+    chunk.emit(Opcode::LoadConstant(c1));
+    chunk.emit(Opcode::LoadConstant(c5));
+    chunk.emit(Opcode::LoadConstant(c3));
+    chunk.emit(Opcode::Call(3));
+    chunk.emit(Opcode::Return);
+
+    let result = vm.execute(&chunk);
+    assert_eq!(result.unwrap(), Value::Double(1.0));
+}

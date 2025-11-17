@@ -6,6 +6,22 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct RegisterId(pub u32);
 
+/// Descriptor for a captured variable (upvalue)
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct UpvalueDescriptor {
+    /// true if directly in parent scope, false if in grandparent+
+    pub is_local: bool,
+    /// Register index (if local) or upvalue index (if not)
+    pub index: u32,
+}
+
+impl UpvalueDescriptor {
+    /// Create a new upvalue descriptor
+    pub fn new(is_local: bool, index: u32) -> Self {
+        Self { is_local, index }
+    }
+}
+
 /// Bytecode opcodes for JavaScript execution
 #[derive(Debug, Clone, PartialEq)]
 pub enum Opcode {
@@ -30,6 +46,14 @@ pub enum Opcode {
     LoadLocal(RegisterId),
     /// Store to local variable in register
     StoreLocal(RegisterId),
+
+    // Upvalue operations for closures
+    /// Load captured variable by upvalue index
+    LoadUpvalue(u32),
+    /// Store to captured variable
+    StoreUpvalue(u32),
+    /// Close over local variable (move from stack to heap)
+    CloseUpvalue,
 
     // Arithmetic operations
     /// Add top two stack values
@@ -82,8 +106,8 @@ pub enum Opcode {
     StoreProperty(String),
 
     // Function operations
-    /// Create closure from function at index
-    CreateClosure(usize),
+    /// Create closure from function at index with captured variables
+    CreateClosure(usize, Vec<UpvalueDescriptor>),
     /// Call function with given number of arguments
     Call(u8),
 }

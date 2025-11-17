@@ -44,6 +44,6 @@ pub mod value;
 // Re-export main types at crate root
 pub use chunk::BytecodeChunk;
 pub use instruction::{Instruction, SourcePosition};
-pub use opcode::{Opcode, RegisterId};
+pub use opcode::{Opcode, RegisterId, UpvalueDescriptor};
 pub use optimizer::Optimizer;
-pub use value::Value;
+pub use value::{ClosureData, Value};

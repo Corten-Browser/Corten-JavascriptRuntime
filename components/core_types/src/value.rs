@@ -3,7 +3,10 @@
 //! This module provides the core `Value` enum that represents all possible
 //! JavaScript values using a tagged pointer scheme for efficiency.
 
+use std::any::Any;
+use std::cell::RefCell;
 use std::fmt;
+use std::rc::Rc;
 
 /// Represents any JavaScript value.
 ///
@@ -32,7 +35,7 @@ use std::fmt;
 /// assert!(number.is_truthy());
 /// assert_eq!(number.type_of(), "number");
 /// ```
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone)]
 pub enum Value {
     /// JavaScript undefined value
     Undefined,
@@ -46,6 +49,41 @@ pub enum Value {
     HeapObject(usize),
     /// IEEE 754 double-precision floating point
     Double(f64),
+    /// Native object (console, Math, etc.)
+    NativeObject(Rc<RefCell<dyn Any>>),
+    /// Native function reference by name
+    NativeFunction(String),
+}
+
+impl fmt::Debug for Value {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Value::Undefined => write!(f, "Undefined"),
+            Value::Null => write!(f, "Null"),
+            Value::Boolean(b) => f.debug_tuple("Boolean").field(b).finish(),
+            Value::Smi(n) => f.debug_tuple("Smi").field(n).finish(),
+            Value::HeapObject(id) => f.debug_tuple("HeapObject").field(id).finish(),
+            Value::Double(n) => f.debug_tuple("Double").field(n).finish(),
+            Value::NativeObject(_) => write!(f, "NativeObject(...)"),
+            Value::NativeFunction(name) => f.debug_tuple("NativeFunction").field(name).finish(),
+        }
+    }
+}
+
+impl PartialEq for Value {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Value::Undefined, Value::Undefined) => true,
+            (Value::Null, Value::Null) => true,
+            (Value::Boolean(a), Value::Boolean(b)) => a == b,
+            (Value::Smi(a), Value::Smi(b)) => a == b,
+            (Value::HeapObject(a), Value::HeapObject(b)) => a == b,
+            (Value::Double(a), Value::Double(b)) => a == b,
+            (Value::NativeObject(a), Value::NativeObject(b)) => Rc::ptr_eq(a, b),
+            (Value::NativeFunction(a), Value::NativeFunction(b)) => a == b,
+            _ => false,
+        }
+    }
 }
 
 impl Value {
@@ -84,6 +122,8 @@ impl Value {
             Value::Smi(n) => *n != 0,
             Value::Double(n) => !n.is_nan() && *n != 0.0,
             Value::HeapObject(_) => true, // All objects are truthy
+            Value::NativeObject(_) => true, // Native objects are truthy
+            Value::NativeFunction(_) => true, // Functions are truthy
         }
     }
 
@@ -117,6 +157,8 @@ impl Value {
             Value::Smi(_) => "number".to_string(),
             Value::Double(_) => "number".to_string(),
             Value::HeapObject(_) => "object".to_string(),
+            Value::NativeObject(_) => "object".to_string(),
+            Value::NativeFunction(_) => "function".to_string(),
         }
     }
 }
@@ -199,6 +241,8 @@ impl fmt::Display for Value {
                 }
             }
             Value::HeapObject(_) => write!(f, "[object Object]"),
+            Value::NativeObject(_) => write!(f, "[object Object]"),
+            Value::NativeFunction(name) => write!(f, "function {}() {{ [native code] }}", name),
         }
     }
 }

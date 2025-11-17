@@ -3,7 +3,7 @@
 //! Contains instructions, constants, and metadata for execution.
 
 use crate::instruction::{Instruction, SourcePosition};
-use crate::opcode::{Opcode, RegisterId};
+use crate::opcode::{Opcode, RegisterId, UpvalueDescriptor};
 use crate::optimizer::Optimizer;
 use crate::value::Value;
 
@@ -234,8 +234,21 @@ impl BytecodeChunk {
                 data.extend_from_slice(s_bytes);
                 (29, data)
             }
-            Opcode::CreateClosure(idx) => (30, (*idx as u32).to_le_bytes().to_vec()),
+            Opcode::CreateClosure(idx, upvalues) => {
+                let mut data = (*idx as u32).to_le_bytes().to_vec();
+                // Encode upvalue count
+                data.extend_from_slice(&(upvalues.len() as u32).to_le_bytes());
+                // Encode each upvalue descriptor
+                for upvalue in upvalues {
+                    data.push(if upvalue.is_local { 1 } else { 0 });
+                    data.extend_from_slice(&upvalue.index.to_le_bytes());
+                }
+                (30, data)
+            }
             Opcode::Call(argc) => (31, vec![*argc]),
+            Opcode::LoadUpvalue(idx) => (32, idx.to_le_bytes().to_vec()),
+            Opcode::StoreUpvalue(idx) => (33, idx.to_le_bytes().to_vec()),
+            Opcode::CloseUpvalue => (34, vec![]),
         }
     }
 
@@ -387,13 +400,36 @@ impl BytecodeChunk {
                 let idx =
                     u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap()) as usize;
                 offset += 4;
-                Opcode::CreateClosure(idx)
+                let upvalue_count =
+                    u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap()) as usize;
+                offset += 4;
+                let mut upvalues = Vec::with_capacity(upvalue_count);
+                for _ in 0..upvalue_count {
+                    let is_local = bytes[offset] != 0;
+                    offset += 1;
+                    let index =
+                        u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap());
+                    offset += 4;
+                    upvalues.push(UpvalueDescriptor::new(is_local, index));
+                }
+                Opcode::CreateClosure(idx, upvalues)
             }
             31 => {
                 let argc = bytes[offset];
                 offset += 1;
                 Opcode::Call(argc)
             }
+            32 => {
+                let idx = u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap());
+                offset += 4;
+                Opcode::LoadUpvalue(idx)
+            }
+            33 => {
+                let idx = u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap());
+                offset += 4;
+                Opcode::StoreUpvalue(idx)
+            }
+            34 => Opcode::CloseUpvalue,
             _ => return Err(format!("Unknown opcode tag: {}", tag)),
         };
 

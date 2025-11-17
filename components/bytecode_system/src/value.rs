@@ -3,6 +3,27 @@
 //! Placeholder for core_types::Value dependency.
 //! Will be replaced when core_types is integrated.
 
+use crate::opcode::UpvalueDescriptor;
+
+/// Data for a closure (function with captured environment)
+#[derive(Debug, Clone, PartialEq)]
+pub struct ClosureData {
+    /// Index of the function in the function registry
+    pub function_index: usize,
+    /// Descriptors for captured variables
+    pub upvalue_descriptors: Vec<UpvalueDescriptor>,
+}
+
+impl ClosureData {
+    /// Create new closure data
+    pub fn new(function_index: usize, upvalue_descriptors: Vec<UpvalueDescriptor>) -> Self {
+        Self {
+            function_index,
+            upvalue_descriptors,
+        }
+    }
+}
+
 /// JavaScript runtime value
 ///
 /// This is a placeholder that will be replaced by core_types::Value
@@ -19,6 +40,8 @@ pub enum Value {
     Number(f64),
     /// JavaScript string
     String(String),
+    /// Closure (function with captured environment)
+    Closure(Box<ClosureData>),
 }
 
 impl Value {
@@ -54,6 +77,17 @@ impl Value {
                 let s_bytes = s.as_bytes();
                 bytes.extend_from_slice(&(s_bytes.len() as u32).to_le_bytes());
                 bytes.extend_from_slice(s_bytes);
+            }
+            Value::Closure(closure_data) => {
+                bytes.push(5);
+                bytes.extend_from_slice(&(closure_data.function_index as u32).to_le_bytes());
+                bytes.extend_from_slice(
+                    &(closure_data.upvalue_descriptors.len() as u32).to_le_bytes(),
+                );
+                for desc in &closure_data.upvalue_descriptors {
+                    bytes.push(if desc.is_local { 1 } else { 0 });
+                    bytes.extend_from_slice(&desc.index.to_le_bytes());
+                }
             }
         }
         bytes
@@ -93,6 +127,34 @@ impl Value {
                 let s = String::from_utf8(bytes[5..5 + len].to_vec())
                     .map_err(|e| format!("Invalid UTF-8: {}", e))?;
                 Ok((Value::String(s), 5 + len))
+            }
+            5 => {
+                if bytes.len() < 9 {
+                    return Err("Not enough bytes for closure".to_string());
+                }
+                let function_index =
+                    u32::from_le_bytes(bytes[1..5].try_into().unwrap()) as usize;
+                let desc_count = u32::from_le_bytes(bytes[5..9].try_into().unwrap()) as usize;
+
+                let mut offset = 9;
+                let mut upvalue_descriptors = Vec::with_capacity(desc_count);
+                for _ in 0..desc_count {
+                    if bytes.len() < offset + 5 {
+                        return Err("Not enough bytes for upvalue descriptor".to_string());
+                    }
+                    let is_local = bytes[offset] != 0;
+                    let index = u32::from_le_bytes(bytes[offset + 1..offset + 5].try_into().unwrap());
+                    upvalue_descriptors.push(UpvalueDescriptor::new(is_local, index));
+                    offset += 5;
+                }
+
+                Ok((
+                    Value::Closure(Box::new(ClosureData::new(
+                        function_index,
+                        upvalue_descriptors,
+                    ))),
+                    offset,
+                ))
             }
             _ => Err(format!("Unknown value tag: {}", tag)),
         }
