@@ -731,16 +731,18 @@ impl Dispatcher {
                     }
                 }
                 Opcode::CallNew(argc) => {
-                    // Pop the constructor first (it's on top of stack after arguments)
-                    // Stack order: [..., arg1, arg2, ..., constructor]
-                    let constructor = self.stack.pop().unwrap_or(Value::Undefined);
+                    // Parser generates: push constructor, push arg1, push arg2, ..., CallNew
+                    // Stack order: [..., constructor, arg1, arg2, ...] with last arg on top
 
-                    // Pop arguments (in reverse order from stack)
+                    // Pop arguments first (they're on top of stack)
                     let mut args = Vec::with_capacity(argc as usize);
                     for _ in 0..argc {
                         args.push(self.stack.pop().unwrap_or(Value::Undefined));
                     }
                     args.reverse(); // Now args[0] is first argument
+
+                    // Now pop the constructor (it's below the arguments)
+                    let constructor = self.stack.pop().unwrap_or(Value::Undefined);
 
                     match constructor {
                         Value::NativeFunction(name) => {
