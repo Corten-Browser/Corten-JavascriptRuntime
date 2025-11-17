@@ -39,6 +39,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 std::process::exit(1);
             }
         }
+    } else if let Some(code) = cli.eval {
+        match runtime.execute_string(&code) {
+            Ok(result) => {
+                // Print result if not undefined
+                if !matches!(result, core_types::Value::Undefined) {
+                    println!("{:?}", result);
+                }
+            }
+            Err(CliError::ParseError(e)) => {
+                eprintln!("Syntax Error: {}", e);
+                std::process::exit(1);
+            }
+            Err(CliError::JsError(e)) => {
+                eprintln!("JavaScript Error: {:?}", e);
+                std::process::exit(1);
+            }
+            Err(e) => {
+                eprintln!("Error: {}", e);
+                std::process::exit(1);
+            }
+        }
     } else if cli.repl {
         runtime.repl()?;
     } else {
@@ -47,6 +68,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!();
         println!("Usage:");
         println!("  corten-js --file <FILE>     Execute a JavaScript file");
+        println!("  corten-js --eval <CODE>     Evaluate inline JavaScript code");
         println!("  corten-js --repl            Start interactive REPL");
         println!();
         println!("Run 'corten-js --help' for more options.");

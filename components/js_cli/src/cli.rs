@@ -12,6 +12,10 @@ pub struct Cli {
     #[arg(short = 'f', long = "file")]
     pub file: Option<String>,
 
+    /// Evaluate inline JavaScript code
+    #[arg(short = 'e', long = "eval")]
+    pub eval: Option<String>,
+
     /// Run interactive REPL
     #[arg(short = 'r', long = "repl")]
     pub repl: bool,
@@ -34,6 +38,7 @@ impl Cli {
     pub fn new() -> Self {
         Self {
             file: None,
+            eval: None,
             repl: false,
             jit: true,
             print_bytecode: false,
@@ -45,6 +50,19 @@ impl Cli {
     pub fn with_file(file: String) -> Self {
         Self {
             file: Some(file),
+            eval: None,
+            repl: false,
+            jit: true,
+            print_bytecode: false,
+            print_ast: false,
+        }
+    }
+
+    /// Create CLI with inline code to evaluate
+    pub fn with_eval(code: String) -> Self {
+        Self {
+            file: None,
+            eval: Some(code),
             repl: false,
             jit: true,
             print_bytecode: false,
@@ -56,6 +74,7 @@ impl Cli {
     pub fn with_repl() -> Self {
         Self {
             file: None,
+            eval: None,
             repl: true,
             jit: true,
             print_bytecode: false,
