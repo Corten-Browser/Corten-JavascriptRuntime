@@ -4,5 +4,16 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+bytecode_system = { path = "../bytecode_system" }
+interpreter = { path = "../interpreter" }
+core_types = { path = "../core_types" }
+
+# Cranelift JIT compiler
+cranelift-codegen = "0.113"
+cranelift-frontend = "0.113"
+cranelift-jit = "0.113"
+cranelift-module = "0.113"
+cranelift-native = "0.113"
+target-lexicon = "0.12"
 
 [dev-dependencies]

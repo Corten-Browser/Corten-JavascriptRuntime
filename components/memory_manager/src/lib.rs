@@ -1,10 +1,21 @@
-//! Component library
-//! 
-//! This is a placeholder. Implementation will follow TDD.
+//! Memory Manager - Garbage collector and heap management
+//!
+//! This component provides:
+//! - Generational garbage collection (young + old generation)
+//! - Heap allocation and management
+//! - Hidden classes for property access optimization
+//! - Write barriers for remembered set maintenance
+//! - Safe Rust wrappers for unsafe internals
 
-#![allow(dead_code)]
-#![allow(unused)]
+pub mod gc;
+pub mod heap;
+pub mod hidden_class;
+pub mod object;
+pub mod write_barrier;
 
-pub fn placeholder() {
-    unimplemented!("Implement following TDD")
-}
+// Re-export main types
+pub use gc::*;
+pub use heap::{GcStats, Heap};
+pub use hidden_class::HiddenClass;
+pub use object::JSObject;
+pub use write_barrier::{write_barrier, write_barrier_gc, CardTable, Object, RememberedSet};
