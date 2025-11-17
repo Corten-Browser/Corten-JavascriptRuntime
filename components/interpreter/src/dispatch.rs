@@ -2,8 +2,8 @@
 //!
 //! Handles individual opcode execution.
 
-use bytecode_system::Opcode;
-use core_types::{JsError, Value};
+use bytecode_system::{BytecodeChunk, Opcode};
+use core_types::{ErrorKind, JsError, Value};
 use std::collections::HashMap;
 
 use crate::context::ExecutionContext;
@@ -48,7 +48,16 @@ impl Dispatcher {
     }
 
     /// Execute bytecode in the given context
-    pub fn execute(&mut self, ctx: &mut ExecutionContext) -> Result<Value, JsError> {
+    ///
+    /// # Arguments
+    ///
+    /// * `ctx` - The execution context with bytecode and registers
+    /// * `functions` - Registry of function bytecode chunks
+    pub fn execute(
+        &mut self,
+        ctx: &mut ExecutionContext,
+        functions: &[BytecodeChunk],
+    ) -> Result<Value, JsError> {
         loop {
             let inst = match ctx.fetch() {
                 Some(i) => i.clone(),
@@ -212,16 +221,86 @@ impl Dispatcher {
                     self.stack.pop(); // value
                     self.stack.pop(); // object
                 }
-                Opcode::CreateClosure(_idx) => {
-                    // Placeholder: create closure
-                    self.stack.push(Value::HeapObject(0));
+                Opcode::CreateClosure(idx) => {
+                    // Create a closure by pushing a HeapObject with the function index
+                    // HeapObject(id) where id is the function index in the registry
+                    self.stack.push(Value::HeapObject(idx));
                 }
-                Opcode::Call(_argc) => {
-                    // Placeholder: function call
-                    self.stack.push(Value::Undefined);
+                Opcode::Call(argc) => {
+                    // Function call implementation
+                    let result = self.call_function(argc, functions)?;
+                    self.stack.push(result);
                 }
             }
         }
+    }
+
+    /// Execute a function call
+    ///
+    /// Stack layout before call (bottom to top):
+    /// [..., arg1, arg2, ..., argN, callee]
+    ///
+    /// After call:
+    /// [..., return_value]
+    fn call_function(&mut self, argc: u8, functions: &[BytecodeChunk]) -> Result<Value, JsError> {
+        // Pop the callee (function) from stack
+        let callee = self.stack.pop().unwrap_or(Value::Undefined);
+
+        // Determine the function index from the callee
+        let fn_idx = match callee {
+            Value::HeapObject(idx) => idx,
+            _ => {
+                // Not a function - TypeError
+                // Pop arguments to clean up stack
+                for _ in 0..argc {
+                    self.stack.pop();
+                }
+                return Err(JsError {
+                    kind: ErrorKind::TypeError,
+                    message: format!("{:?} is not a function", callee),
+                    stack: vec![],
+                    source_position: None,
+                });
+            }
+        };
+
+        // Get the function bytecode
+        let fn_bytecode = match functions.get(fn_idx) {
+            Some(chunk) => chunk.clone(),
+            None => {
+                // Invalid function index
+                for _ in 0..argc {
+                    self.stack.pop();
+                }
+                return Err(JsError {
+                    kind: ErrorKind::ReferenceError,
+                    message: format!("Invalid function index: {}", fn_idx),
+                    stack: vec![],
+                    source_position: None,
+                });
+            }
+        };
+
+        // Pop arguments from stack (in reverse order, so arg1 is first)
+        let mut args = Vec::with_capacity(argc as usize);
+        for _ in 0..argc {
+            args.push(self.stack.pop().unwrap_or(Value::Undefined));
+        }
+        args.reverse(); // Now args[0] is first argument
+
+        // Create new execution context for the function
+        let mut fn_ctx = ExecutionContext::new(fn_bytecode);
+
+        // Set arguments as registers (parameter passing)
+        // Register 0 = first argument, Register 1 = second argument, etc.
+        for (i, arg) in args.into_iter().enumerate() {
+            fn_ctx.set_register(i, arg);
+        }
+        // Missing arguments are already initialized to Undefined
+
+        // Recursively execute the function
+        // This enables nested calls and recursion
+        self.execute(&mut fn_ctx, functions)
     }
 
     /// Get global variable
@@ -427,8 +506,9 @@ mod tests {
         let mut dispatcher = Dispatcher::new();
         let chunk = BytecodeChunk::new();
         let mut ctx = ExecutionContext::new(chunk);
+        let functions = vec![];
 
-        let result = dispatcher.execute(&mut ctx);
+        let result = dispatcher.execute(&mut ctx, &functions);
         assert_eq!(result.unwrap(), Value::Undefined);
     }
 }

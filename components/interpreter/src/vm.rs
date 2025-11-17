@@ -15,12 +15,15 @@ use crate::dispatch::Dispatcher;
 /// - Global object and variables
 /// - Call stack for function invocations
 /// - Memory heap (via memory_manager)
+/// - Function registry for closures
 #[derive(Debug)]
 pub struct VM {
     /// Dispatcher for bytecode execution
     dispatcher: Dispatcher,
     /// Call stack for function invocations
     call_stack: Vec<CallFrame>,
+    /// Registry of function bytecode chunks
+    functions: Vec<BytecodeChunk>,
 }
 
 impl VM {
@@ -31,7 +34,23 @@ impl VM {
         Self {
             dispatcher: Dispatcher::new(),
             call_stack: Vec::with_capacity(64),
+            functions: Vec::new(),
         }
+    }
+
+    /// Register a function bytecode chunk and return its index
+    ///
+    /// # Arguments
+    ///
+    /// * `chunk` - The bytecode chunk for the function body
+    ///
+    /// # Returns
+    ///
+    /// The index (function ID) that can be used with CreateClosure
+    pub fn register_function(&mut self, chunk: BytecodeChunk) -> usize {
+        let idx = self.functions.len();
+        self.functions.push(chunk);
+        idx
     }
 
     /// Execute a bytecode chunk and return the result
@@ -64,7 +83,7 @@ impl VM {
     /// ```
     pub fn execute(&mut self, chunk: &BytecodeChunk) -> Result<Value, JsError> {
         let mut ctx = ExecutionContext::new(chunk.clone());
-        self.dispatcher.execute(&mut ctx)
+        self.dispatcher.execute(&mut ctx, &self.functions)
     }
 
     /// Get a global variable by name
