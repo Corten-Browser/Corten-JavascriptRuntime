@@ -97,7 +97,59 @@ impl NumberPrototype {
             });
         }
 
-        Ok(format!("{:.prec$}", num, prec = (precision as usize).saturating_sub(1)))
+        // toPrecision formats with significant figures, not decimal places
+        if num == 0.0 {
+            if precision == 1 {
+                return Ok("0".to_string());
+            }
+            return Ok(format!("0.{}", "0".repeat(precision as usize - 1)));
+        }
+
+        let negative = num < 0.0;
+        let abs_num = num.abs();
+
+        // Calculate the order of magnitude
+        let log10 = abs_num.log10().floor() as i32;
+        let digits_before_decimal = log10 + 1;
+
+        if digits_before_decimal <= 0 || digits_before_decimal > precision as i32 {
+            // Use exponential notation or handle very small numbers
+            // For now, use Rust's built-in precision formatting for significant figures
+            let formatted = format!("{:.prec$e}", abs_num, prec = (precision as usize).saturating_sub(1));
+            // Parse and reformat to match JS behavior
+            if let Some((mantissa, exp)) = formatted.split_once('e') {
+                let exp_val: i32 = exp.parse().unwrap_or(0);
+                // Reconstruct based on exponent
+                if exp_val >= 0 && exp_val < precision as i32 {
+                    // Can represent without exponential notation
+                    let scale = 10f64.powi(exp_val);
+                    let scaled = mantissa.replace('.', "").parse::<f64>().unwrap_or(0.0)
+                        / 10f64.powi((precision as i32 - 1) as i32) * scale;
+                    let decimal_places = (precision as i32 - exp_val - 1).max(0) as usize;
+                    let result = format!("{:.prec$}", scaled, prec = decimal_places);
+                    if negative {
+                        return Ok(format!("-{}", result));
+                    }
+                    return Ok(result);
+                }
+            }
+            // Fallback
+            let result = format!("{:.prec$}", abs_num, prec = (precision as usize).saturating_sub(1));
+            if negative {
+                return Ok(format!("-{}", result));
+            }
+            return Ok(result);
+        }
+
+        // Normal case: number has some digits before decimal point
+        let decimal_places = (precision as i32 - digits_before_decimal).max(0) as usize;
+        let result = format!("{:.prec$}", abs_num, prec = decimal_places);
+
+        if negative {
+            Ok(format!("-{}", result))
+        } else {
+            Ok(result)
+        }
     }
 
     /// Number.prototype.valueOf()

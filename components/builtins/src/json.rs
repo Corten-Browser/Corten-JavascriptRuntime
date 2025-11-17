@@ -17,9 +17,84 @@ impl JSONObject {
 
     /// JSON.stringify(value)
     pub fn stringify(value: &JsValue) -> JsResult<String> {
+        // Handle undefined specially - it returns the string "undefined", not a JSON string
+        if matches!(value, JsValue::Undefined) {
+            return Ok("undefined".to_string());
+        }
+
         let json_value = Self::js_value_to_json(value)?;
-        Ok(serde_json::to_string(&json_value)
-            .unwrap_or_else(|_| "null".to_string()))
+        let result = serde_json::to_string(&json_value)
+            .unwrap_or_else(|_| "null".to_string());
+
+        // Post-process to remove unnecessary decimal points for whole numbers
+        Ok(Self::format_json_numbers(&result))
+    }
+
+    /// Format JSON string to remove unnecessary .0 from whole numbers
+    fn format_json_numbers(json: &str) -> String {
+        let mut result = String::with_capacity(json.len());
+        let chars: Vec<char> = json.chars().collect();
+        let mut i = 0;
+
+        while i < chars.len() {
+            let c = chars[i];
+
+            // Check if we're at a number that might need formatting
+            if c.is_ascii_digit() || (c == '-' && i + 1 < chars.len() && chars[i + 1].is_ascii_digit()) {
+                let start = i;
+
+                // Skip minus sign
+                if c == '-' {
+                    result.push(c);
+                    i += 1;
+                }
+
+                // Collect digits before decimal
+                while i < chars.len() && chars[i].is_ascii_digit() {
+                    result.push(chars[i]);
+                    i += 1;
+                }
+
+                // Check for decimal point
+                if i < chars.len() && chars[i] == '.' {
+                    let decimal_start = i;
+                    i += 1;
+
+                    // Collect digits after decimal
+                    let mut decimal_digits = String::new();
+                    while i < chars.len() && chars[i].is_ascii_digit() {
+                        decimal_digits.push(chars[i]);
+                        i += 1;
+                    }
+
+                    // Check for exponent
+                    if i < chars.len() && (chars[i] == 'e' || chars[i] == 'E') {
+                        // Has exponent, keep decimal part
+                        result.push('.');
+                        result.push_str(&decimal_digits);
+                        result.push(chars[i]);
+                        i += 1;
+                        // Copy rest of exponent
+                        while i < chars.len() && (chars[i].is_ascii_digit() || chars[i] == '+' || chars[i] == '-') {
+                            result.push(chars[i]);
+                            i += 1;
+                        }
+                    } else if decimal_digits.chars().all(|d| d == '0') {
+                        // All zeros after decimal, skip the decimal part
+                        // (don't add anything)
+                    } else {
+                        // Has non-zero decimal digits, keep them
+                        result.push('.');
+                        result.push_str(&decimal_digits);
+                    }
+                }
+            } else {
+                result.push(c);
+                i += 1;
+            }
+        }
+
+        result
     }
 
     /// Convert serde_json::Value to JsValue
@@ -57,7 +132,7 @@ impl JSONObject {
     /// Convert JsValue to serde_json::Value
     fn js_value_to_json(value: &JsValue) -> JsResult<serde_json::Value> {
         match value {
-            JsValue::Undefined => Ok(serde_json::Value::String("undefined".to_string())),
+            JsValue::Undefined => Ok(serde_json::Value::Null), // undefined handled specially in stringify()
             JsValue::Null => Ok(serde_json::Value::Null),
             JsValue::Boolean(b) => Ok(serde_json::Value::Bool(*b)),
             JsValue::Number(n) => {
@@ -179,7 +254,7 @@ mod tests {
     fn test_stringify_number() {
         let val = JsValue::number(42.0);
         let result = JSONObject::stringify(&val).unwrap();
-        assert_eq!(result, "42.0");
+        assert_eq!(result, "42");
     }
 
     #[test]
@@ -215,6 +290,6 @@ mod tests {
     fn test_stringify_undefined() {
         let val = JsValue::undefined();
         let result = JSONObject::stringify(&val).unwrap();
-        assert_eq!(result, r#""undefined""#);
+        assert_eq!(result, "undefined");
     }
 }
