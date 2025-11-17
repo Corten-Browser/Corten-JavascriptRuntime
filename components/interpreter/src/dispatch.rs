@@ -45,6 +45,10 @@ pub struct Dispatcher {
     current_exception: Option<Value>,
     /// GC heap for JavaScript object allocation (shared with VM)
     heap: Option<Rc<VMHeap>>,
+    /// Registry of closures: maps closure ID to (function_index, captured_upvalues)
+    closure_registry: HashMap<usize, (usize, Vec<UpvalueHandle>)>,
+    /// Next available closure ID
+    next_closure_id: usize,
 }
 
 impl std::fmt::Debug for Dispatcher {
@@ -58,6 +62,7 @@ impl std::fmt::Debug for Dispatcher {
             .field("try_stack_depth", &self.try_stack.len())
             .field("has_exception", &self.current_exception.is_some())
             .field("has_heap", &self.heap.is_some())
+            .field("closure_registry_size", &self.closure_registry.len())
             .finish()
     }
 }
@@ -96,6 +101,8 @@ impl Dispatcher {
             try_stack: Vec::new(),
             current_exception: None,
             heap: None,
+            closure_registry: HashMap::new(),
+            next_closure_id: 0,
         }
     }
 
@@ -531,20 +538,16 @@ impl Dispatcher {
                             captured_upvalues.push(upvalue_handle);
                         }
 
-                        // Store the closure with captured upvalues
-                        // For now, we store the closure data in the global registry
-                        // and return a HeapObject reference with an encoded ID
-                        // The captured upvalues will be retrieved when the closure is called
+                        // Register the closure with its captured upvalues
+                        let closure_id = self.next_closure_id;
+                        self.next_closure_id += 1;
+                        self.closure_registry
+                            .insert(closure_id, (idx, captured_upvalues));
 
-                        // Create a composite ID that encodes both function index and closure instance
-                        // We'll use a simple scheme: store closure info and use a special marker
-                        // For simplicity, we just store the function index and track upvalues separately
-                        // A more complete implementation would use a closure registry
-                        self.stack.push(Value::HeapObject(idx));
-
-                        // Store captured upvalues for this closure (simplified approach)
-                        // In a full implementation, we'd have a closure registry
-                        // For now, we'll rely on the call site to set up upvalues properly
+                        // Push a closure ID (with high bit set to distinguish from plain function index)
+                        // We encode closure IDs starting from 1_000_000 to avoid collision with function indices
+                        let encoded_id = 1_000_000 + closure_id;
+                        self.stack.push(Value::HeapObject(encoded_id));
                     }
                 }
                 Opcode::Call(argc) => {
@@ -619,6 +622,11 @@ impl Dispatcher {
 
                 Opcode::Pop => {
                     self.stack.pop();
+                }
+                Opcode::Dup => {
+                    if let Some(value) = self.stack.last().cloned() {
+                        self.stack.push(value);
+                    }
                 }
 
                 // Async opcodes
@@ -848,8 +856,32 @@ impl Dispatcher {
         let callee = self.stack.pop().unwrap_or(Value::Undefined);
 
         // Determine the function index from the callee
-        let fn_idx = match callee {
-            Value::HeapObject(idx) => idx,
+        let (fn_idx, closure_upvalues) = match callee {
+            Value::HeapObject(idx) => {
+                // Check if this is a closure (encoded ID >= 1_000_000) or plain function
+                if idx >= 1_000_000 {
+                    // This is a closure - decode and get upvalues from registry
+                    let closure_id = idx - 1_000_000;
+                    match self.closure_registry.get(&closure_id) {
+                        Some((func_idx, upvalues)) => (*func_idx, Some(upvalues.clone())),
+                        None => {
+                            // Invalid closure ID
+                            for _ in 0..argc {
+                                self.stack.pop();
+                            }
+                            return Err(JsError {
+                                kind: ErrorKind::ReferenceError,
+                                message: format!("Invalid closure ID: {}", closure_id),
+                                stack: vec![],
+                                source_position: None,
+                            });
+                        }
+                    }
+                } else {
+                    // Plain function index
+                    (idx, None)
+                }
+            }
             _ => {
                 // Not a function - TypeError
                 // Pop arguments to clean up stack
@@ -899,9 +931,20 @@ impl Dispatcher {
         }
         // Missing arguments are already initialized to Undefined
 
+        // Save current upvalues and set closure's upvalues if this is a closure call
+        let saved_upvalues = std::mem::take(&mut self.current_upvalues);
+        if let Some(upvalues) = closure_upvalues {
+            self.current_upvalues = upvalues;
+        }
+
         // Recursively execute the function
         // This enables nested calls and recursion
-        self.execute(&mut fn_ctx, functions)
+        let result = self.execute(&mut fn_ctx, functions);
+
+        // Restore previous upvalues
+        self.current_upvalues = saved_upvalues;
+
+        result
     }
 
     /// Get global variable

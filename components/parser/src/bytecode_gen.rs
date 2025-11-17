@@ -174,7 +174,13 @@ impl BytecodeGenerator {
         }
 
         self.chunk.register_count = self.next_register;
-        Ok(self.chunk.clone())
+
+        // Transfer nested functions to the chunk
+        // This allows the VM to access them when executing closures
+        let mut result_chunk = self.chunk.clone();
+        result_chunk.nested_functions = self.nested_functions.clone();
+
+        Ok(result_chunk)
     }
 
     fn visit_node(&mut self, node: &ASTNode) -> Result<(), JsError> {
@@ -698,10 +704,9 @@ impl BytecodeGenerator {
                 right,
                 ..
             } => {
-                self.visit_expression(right)?;
-
                 match left {
                     AssignmentTarget::Identifier(name) => {
+                        self.visit_expression(right)?;
                         match self.resolve_variable(name) {
                             VarResolution::Local(reg) => {
                                 self.chunk.emit(Opcode::StoreLocal(reg));
@@ -722,7 +727,10 @@ impl BytecodeGenerator {
                             ..
                         } = member_expr.as_ref()
                         {
+                            // StoreProperty expects stack: [obj, value]
+                            // So we need to visit object first, then the value
                             self.visit_expression(object)?;
+                            self.visit_expression(right)?;
                             if !computed {
                                 if let Expression::Identifier { name, .. } = property.as_ref() {
                                     self.chunk.emit(Opcode::StoreProperty(name.clone()));
@@ -732,6 +740,7 @@ impl BytecodeGenerator {
                     }
                     AssignmentTarget::Pattern(_) => {
                         // Destructuring - simplified
+                        self.visit_expression(right)?;
                     }
                 }
             }
@@ -818,11 +827,14 @@ impl BytecodeGenerator {
                 for prop in properties {
                     if let ObjectProperty::Property { key, value, .. } = prop {
                         if let PropertyKey::Identifier(name) = key {
+                            // Duplicate the object so StoreProperty doesn't consume it
+                            self.chunk.emit(Opcode::Dup);
                             self.visit_expression(value)?;
                             self.chunk.emit(Opcode::StoreProperty(name.clone()));
                         }
                     }
                 }
+                // Object remains on stack after all properties are set
             }
 
             Expression::ArrowFunctionExpression { params, body, .. } => {

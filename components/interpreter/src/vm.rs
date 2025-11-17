@@ -62,11 +62,16 @@ impl VM {
     ///
     /// Initializes an empty VM with no global variables.
     pub fn new() -> Self {
+        let heap = VMHeap::new();
+        let heap_rc = std::rc::Rc::new(heap);
+        let mut dispatcher = Dispatcher::new();
+        dispatcher.set_heap(heap_rc.clone());
+
         Self {
-            dispatcher: Dispatcher::new(),
+            dispatcher,
             call_stack: Vec::with_capacity(64),
             functions: Vec::new(),
-            heap: VMHeap::new(),
+            heap: VMHeap::new(), // TODO: Should use heap_rc, but VMHeap is not Clone
             execution_counts: HashMap::new(),
             profile_data: HashMap::new(),
             jit_threshold: 100,   // Baseline JIT after 100 calls
@@ -118,7 +123,31 @@ impl VM {
     /// assert_eq!(result, Value::Smi(42));
     /// ```
     pub fn execute(&mut self, chunk: &BytecodeChunk) -> Result<Value, JsError> {
-        let mut ctx = ExecutionContext::new(chunk.clone());
+        // Register any nested functions from this chunk
+        // This allows CreateClosure to find the function bytecode
+        let base_idx = self.functions.len();
+        for nested_fn in chunk.nested_functions() {
+            self.functions.push(nested_fn.clone());
+        }
+
+        // Adjust closure indices in the chunk if needed
+        let mut adjusted_chunk = chunk.clone();
+        if base_idx > 0 && !chunk.nested_functions().is_empty() {
+            // Adjust CreateClosure indices to account for existing functions
+            for inst in &mut adjusted_chunk.instructions {
+                match &mut inst.opcode {
+                    bytecode_system::Opcode::CreateClosure(idx, _) => {
+                        *idx = *idx + base_idx;
+                    }
+                    bytecode_system::Opcode::CreateAsyncFunction(idx, _) => {
+                        *idx = *idx + base_idx;
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        let mut ctx = ExecutionContext::new(adjusted_chunk);
         self.dispatcher.execute(&mut ctx, &self.functions)
     }
 

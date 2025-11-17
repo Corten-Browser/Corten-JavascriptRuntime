@@ -16,6 +16,8 @@ pub struct BytecodeChunk {
     pub constants: Vec<Value>,
     /// Number of registers needed for execution
     pub register_count: u32,
+    /// Nested function bytecode chunks (for closures)
+    pub nested_functions: Vec<BytecodeChunk>,
 }
 
 impl BytecodeChunk {
@@ -25,7 +27,20 @@ impl BytecodeChunk {
             instructions: Vec::new(),
             constants: Vec::new(),
             register_count: 0,
+            nested_functions: Vec::new(),
         }
+    }
+
+    /// Get a reference to nested functions
+    pub fn nested_functions(&self) -> &[BytecodeChunk] {
+        &self.nested_functions
+    }
+
+    /// Add a nested function and return its index
+    pub fn add_nested_function(&mut self, chunk: BytecodeChunk) -> usize {
+        let idx = self.nested_functions.len();
+        self.nested_functions.push(chunk);
+        idx
     }
 
     /// Emit an instruction without source position
@@ -153,6 +168,7 @@ impl BytecodeChunk {
             instructions,
             constants,
             register_count,
+            nested_functions: Vec::new(), // TODO: Serialize nested functions
         })
     }
 
@@ -255,6 +271,7 @@ impl BytecodeChunk {
             Opcode::PushFinally(offset) => (38, (*offset as u32).to_le_bytes().to_vec()),
             Opcode::PopFinally => (39, vec![]),
             Opcode::Pop => (40, vec![]),
+            Opcode::Dup => (43, vec![]),
             Opcode::Await => (41, vec![]),
             Opcode::CreateAsyncFunction(idx, upvalues) => {
                 let mut data = (*idx as u32).to_le_bytes().to_vec();
@@ -483,6 +500,7 @@ impl BytecodeChunk {
                 }
                 Opcode::CreateAsyncFunction(idx, upvalues)
             }
+            43 => Opcode::Dup,
             _ => return Err(format!("Unknown opcode tag: {}", tag)),
         };
 

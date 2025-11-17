@@ -97,6 +97,8 @@ pub enum IROpcode {
     PopFinally,
     /// Pop value from stack
     Pop,
+    /// Duplicate top value on stack
+    Dup,
 
     // Async operations
     /// Await a promise
@@ -195,6 +197,7 @@ impl IRFunction {
                 Opcode::PushFinally(offset) => IROpcode::PushFinally(*offset),
                 Opcode::PopFinally => IROpcode::PopFinally,
                 Opcode::Pop => IROpcode::Pop,
+                Opcode::Dup => IROpcode::Dup,
                 // Async operations
                 Opcode::Await => IROpcode::Await,
                 Opcode::CreateAsyncFunction(idx, _) => IROpcode::CreateAsyncFunction(*idx),

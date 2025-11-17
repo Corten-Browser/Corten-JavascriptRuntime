@@ -124,6 +124,8 @@ pub enum Opcode {
     PopFinally,
     /// Pop value from stack (for discarding exception when not needed)
     Pop,
+    /// Duplicate top value on stack
+    Dup,
 
     // Async operations
     /// Await a promise - suspend until promise resolves
