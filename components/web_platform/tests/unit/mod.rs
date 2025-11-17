@@ -1069,3 +1069,373 @@ mod csp_tests {
         assert!(csp2.has_directive("script-src"));
     }
 }
+
+#[cfg(test)]
+mod devtools_tests {
+    use super::*;
+
+    #[test]
+    fn test_server_creation() {
+        let server = DevToolsServer::new();
+        assert!(!server.is_paused());
+        assert!(server.breakpoints().is_empty());
+        assert!(server.call_stack().is_empty());
+    }
+
+    #[test]
+    fn test_default_creation() {
+        let server = DevToolsServer::default();
+        assert!(!server.is_paused());
+    }
+
+    #[test]
+    fn test_type_alias() {
+        let server: DebugProtocol = DebugProtocol::new();
+        assert!(!server.is_paused());
+    }
+
+    #[test]
+    fn test_debugger_enable() {
+        let mut server = DevToolsServer::new();
+        let msg = ProtocolMessage {
+            id: Some(1),
+            method: Some("Debugger.enable".to_string()),
+            params: None,
+            result: None,
+            error: None,
+        };
+        let response = server.handle_message(&msg);
+        assert_eq!(response.id, Some(1));
+        assert!(response.result.is_some());
+        assert!(response.error.is_none());
+    }
+
+    #[test]
+    fn test_set_breakpoint() {
+        let mut server = DevToolsServer::new();
+        let msg = ProtocolMessage {
+            id: Some(2),
+            method: Some("Debugger.setBreakpoint".to_string()),
+            params: Some(json!({
+                "location": {
+                    "scriptId": "script_1",
+                    "lineNumber": 10,
+                    "columnNumber": 5
+                }
+            })),
+            result: None,
+            error: None,
+        };
+        let response = server.handle_message(&msg);
+        assert_eq!(response.id, Some(2));
+        assert!(response.result.is_some());
+        assert_eq!(server.breakpoints().len(), 1);
+        let bp = server.breakpoints().get("bp_1").unwrap();
+        assert_eq!(bp.script_id, "script_1");
+        assert_eq!(bp.line_number, 10);
+        assert_eq!(bp.column_number, Some(5));
+        assert!(bp.enabled);
+    }
+
+    #[test]
+    fn test_set_breakpoint_with_condition() {
+        let mut server = DevToolsServer::new();
+        let msg = ProtocolMessage {
+            id: Some(3),
+            method: Some("Debugger.setBreakpoint".to_string()),
+            params: Some(json!({
+                "location": { "scriptId": "script_1", "lineNumber": 15 },
+                "condition": "x > 10"
+            })),
+            result: None,
+            error: None,
+        };
+        server.handle_message(&msg);
+        let bp = server.breakpoints().get("bp_1").unwrap();
+        assert_eq!(bp.condition, Some("x > 10".to_string()));
+    }
+
+    #[test]
+    fn test_set_multiple_breakpoints() {
+        let mut server = DevToolsServer::new();
+        for i in 1..=3 {
+            let msg = ProtocolMessage {
+                id: Some(i),
+                method: Some("Debugger.setBreakpoint".to_string()),
+                params: Some(json!({
+                    "location": { "scriptId": format!("script_{}", i), "lineNumber": i * 10 }
+                })),
+                result: None,
+                error: None,
+            };
+            server.handle_message(&msg);
+        }
+        assert_eq!(server.breakpoints().len(), 3);
+    }
+
+    #[test]
+    fn test_remove_breakpoint() {
+        let mut server = DevToolsServer::new();
+        let set_msg = ProtocolMessage {
+            id: Some(1),
+            method: Some("Debugger.setBreakpoint".to_string()),
+            params: Some(json!({ "location": { "scriptId": "script_1", "lineNumber": 10 } })),
+            result: None,
+            error: None,
+        };
+        server.handle_message(&set_msg);
+        assert_eq!(server.breakpoints().len(), 1);
+
+        let remove_msg = ProtocolMessage {
+            id: Some(2),
+            method: Some("Debugger.removeBreakpoint".to_string()),
+            params: Some(json!({ "breakpointId": "bp_1" })),
+            result: None,
+            error: None,
+        };
+        server.handle_message(&remove_msg);
+        assert!(server.breakpoints().is_empty());
+    }
+
+    #[test]
+    fn test_pause_and_resume() {
+        let mut server = DevToolsServer::new();
+        assert!(!server.is_paused());
+
+        let pause_msg = ProtocolMessage {
+            id: Some(1),
+            method: Some("Debugger.pause".to_string()),
+            params: None,
+            result: None,
+            error: None,
+        };
+        server.handle_message(&pause_msg);
+        assert!(server.is_paused());
+
+        let resume_msg = ProtocolMessage {
+            id: Some(2),
+            method: Some("Debugger.resume".to_string()),
+            params: None,
+            result: None,
+            error: None,
+        };
+        server.handle_message(&resume_msg);
+        assert!(!server.is_paused());
+    }
+
+    #[test]
+    fn test_step_commands() {
+        let mut server = DevToolsServer::new();
+        let commands = vec!["Debugger.stepOver", "Debugger.stepInto", "Debugger.stepOut"];
+        for (i, cmd) in commands.iter().enumerate() {
+            let msg = ProtocolMessage {
+                id: Some(i as u64),
+                method: Some(cmd.to_string()),
+                params: None,
+                result: None,
+                error: None,
+            };
+            let response = server.handle_message(&msg);
+            assert!(response.result.is_some());
+            assert!(response.error.is_none());
+        }
+    }
+
+    #[test]
+    fn test_runtime_evaluate_number() {
+        let mut server = DevToolsServer::new();
+        let msg = ProtocolMessage {
+            id: Some(1),
+            method: Some("Runtime.evaluate".to_string()),
+            params: Some(json!({ "expression": "42.5" })),
+            result: None,
+            error: None,
+        };
+        let response = server.handle_message(&msg);
+        let result = response.result.unwrap();
+        assert_eq!(result["result"]["type"], "number");
+        assert_eq!(result["result"]["value"], 42.5);
+    }
+
+    #[test]
+    fn test_runtime_evaluate_string() {
+        let mut server = DevToolsServer::new();
+        let msg = ProtocolMessage {
+            id: Some(1),
+            method: Some("Runtime.evaluate".to_string()),
+            params: Some(json!({ "expression": "hello world" })),
+            result: None,
+            error: None,
+        };
+        let response = server.handle_message(&msg);
+        let result = response.result.unwrap();
+        assert_eq!(result["result"]["type"], "string");
+        assert_eq!(result["result"]["value"], "hello world");
+    }
+
+    #[test]
+    fn test_runtime_get_properties() {
+        let mut server = DevToolsServer::new();
+        let msg = ProtocolMessage {
+            id: Some(1),
+            method: Some("Runtime.getProperties".to_string()),
+            params: Some(json!({ "objectId": "obj_1" })),
+            result: None,
+            error: None,
+        };
+        let response = server.handle_message(&msg);
+        let result = response.result.unwrap();
+        assert!(result["result"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_unknown_method() {
+        let mut server = DevToolsServer::new();
+        let msg = ProtocolMessage {
+            id: Some(1),
+            method: Some("Unknown.method".to_string()),
+            params: None,
+            result: None,
+            error: None,
+        };
+        let response = server.handle_message(&msg);
+        assert!(response.error.is_some());
+        let error = response.error.unwrap();
+        assert_eq!(error.code, -32601);
+        assert_eq!(error.message, "Method not found");
+    }
+
+    #[test]
+    fn test_add_script() {
+        let mut server = DevToolsServer::new();
+        let id = server.add_script("console.log('hello');".to_string());
+        assert_eq!(id, "script_1");
+        assert!(server.get_script(&id).is_some());
+    }
+
+    #[test]
+    fn test_should_pause_at_breakpoint() {
+        let mut server = DevToolsServer::new();
+        let msg = ProtocolMessage {
+            id: Some(1),
+            method: Some("Debugger.setBreakpoint".to_string()),
+            params: Some(json!({ "location": { "scriptId": "script_1", "lineNumber": 10 } })),
+            result: None,
+            error: None,
+        };
+        server.handle_message(&msg);
+        assert!(server.should_pause_at("script_1", 10));
+        assert!(!server.should_pause_at("script_1", 11));
+        assert!(!server.should_pause_at("script_2", 10));
+    }
+
+    #[test]
+    fn test_call_stack_operations() {
+        let mut server = DevToolsServer::new();
+        let frame = CallFrame {
+            call_frame_id: "frame_1".to_string(),
+            function_name: "main".to_string(),
+            location: Location {
+                script_id: "script_1".to_string(),
+                line_number: 1,
+                column_number: 0,
+            },
+            scope_chain: vec![],
+        };
+        server.push_call_frame(frame);
+        assert_eq!(server.call_stack().len(), 1);
+
+        let popped = server.pop_call_frame().unwrap();
+        assert_eq!(popped.function_name, "main");
+        assert!(server.call_stack().is_empty());
+        assert!(server.pop_call_frame().is_none());
+    }
+
+    #[test]
+    fn test_next_object_id() {
+        let mut server = DevToolsServer::new();
+        assert_eq!(server.next_object_id(), "obj_1");
+        assert_eq!(server.next_object_id(), "obj_2");
+        assert_eq!(server.next_object_id(), "obj_3");
+    }
+
+    #[test]
+    fn test_remote_object_serialization() {
+        let obj = RemoteObject {
+            object_type: "object".to_string(),
+            value: Some(json!({"key": "value"})),
+            description: Some("Object".to_string()),
+            object_id: Some("obj_1".to_string()),
+        };
+        let json_val = serde_json::to_value(&obj).unwrap();
+        assert_eq!(json_val["type"], "object");
+        assert_eq!(json_val["value"]["key"], "value");
+    }
+
+    #[test]
+    fn test_call_frame_with_scope_chain() {
+        let frame = CallFrame {
+            call_frame_id: "frame_1".to_string(),
+            function_name: "test".to_string(),
+            location: Location {
+                script_id: "script_1".to_string(),
+                line_number: 10,
+                column_number: 5,
+            },
+            scope_chain: vec![
+                Scope {
+                    scope_type: "local".to_string(),
+                    object: RemoteObject {
+                        object_type: "object".to_string(),
+                        value: None,
+                        description: Some("Local".to_string()),
+                        object_id: Some("scope_1".to_string()),
+                    },
+                },
+            ],
+        };
+        let json_val = serde_json::to_value(&frame).unwrap();
+        assert_eq!(json_val["call_frame_id"], "frame_1");
+        assert_eq!(json_val["scope_chain"][0]["type"], "local");
+    }
+
+    #[test]
+    fn test_location_serialization() {
+        let loc = Location {
+            script_id: "script_1".to_string(),
+            line_number: 42,
+            column_number: 10,
+        };
+        let json_val = serde_json::to_value(&loc).unwrap();
+        assert_eq!(json_val["script_id"], "script_1");
+        assert_eq!(json_val["line_number"], 42);
+        assert_eq!(json_val["column_number"], 10);
+    }
+
+    #[test]
+    fn test_resume_clears_call_stack() {
+        let mut server = DevToolsServer::new();
+        let frame = CallFrame {
+            call_frame_id: "frame_1".to_string(),
+            function_name: "test".to_string(),
+            location: Location {
+                script_id: "script_1".to_string(),
+                line_number: 10,
+                column_number: 0,
+            },
+            scope_chain: vec![],
+        };
+        server.push_call_frame(frame);
+        assert_eq!(server.call_stack().len(), 1);
+
+        let msg = ProtocolMessage {
+            id: Some(1),
+            method: Some("Debugger.resume".to_string()),
+            params: None,
+            result: None,
+            error: None,
+        };
+        server.handle_message(&msg);
+        assert!(server.call_stack().is_empty());
+    }
+}
