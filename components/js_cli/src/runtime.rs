@@ -122,6 +122,13 @@ impl Runtime {
             .generate(&ast)
             .map_err(|e| CliError::ParseError(format!("Bytecode generation error: {:?}", e)))?;
 
+        // Register nested functions with the VM before executing
+        // This ensures that CreateClosure opcodes can find their function bytecode
+        let nested_functions = generator.take_nested_functions();
+        for func_bytecode in nested_functions {
+            self.vm.register_function(func_bytecode);
+        }
+
         // Optionally print bytecode
         if self.print_bytecode {
             println!("Bytecode: {:#?}", bytecode);
@@ -335,4 +342,121 @@ mod tests {
         let stats = runtime.stats();
         assert_eq!(stats.jit_threshold, 25);
     }
+
+    #[test]
+    fn test_function_declaration_and_call() {
+        let mut runtime = Runtime::new(false);
+        let result = runtime.execute_string(
+            r#"
+            function add(a, b) {
+                return a + b;
+            }
+            add(3, 4)
+            "#,
+        );
+        assert!(result.is_ok(), "Function call failed: {:?}", result.err());
+        assert_eq!(result.unwrap(), Value::Smi(7));
+    }
+
+    #[test]
+    fn test_nested_function_declaration() {
+        let mut runtime = Runtime::new(false);
+        let result = runtime.execute_string(
+            r#"
+            function outer() {
+                function inner() {
+                    return 42;
+                }
+                return inner();
+            }
+            outer()
+            "#,
+        );
+        assert!(
+            result.is_ok(),
+            "Nested function call failed: {:?}",
+            result.err()
+        );
+        assert_eq!(result.unwrap(), Value::Smi(42));
+    }
+
+    #[test]
+    fn test_function_expression() {
+        let mut runtime = Runtime::new(false);
+        let result = runtime.execute_string(
+            r#"
+            let multiply = function(x, y) {
+                return x * y;
+            };
+            multiply(5, 6)
+            "#,
+        );
+        assert!(
+            result.is_ok(),
+            "Function expression failed: {:?}",
+            result.err()
+        );
+        assert_eq!(result.unwrap(), Value::Smi(30));
+    }
+
+    #[test]
+    fn test_arrow_function() {
+        let mut runtime = Runtime::new(false);
+        let result = runtime.execute_string(
+            r#"
+            let square = (x) => x * x;
+            square(7)
+            "#,
+        );
+        assert!(result.is_ok(), "Arrow function failed: {:?}", result.err());
+        assert_eq!(result.unwrap(), Value::Smi(49));
+    }
+
+    #[test]
+    fn test_multiple_functions() {
+        let mut runtime = Runtime::new(false);
+        let result = runtime.execute_string(
+            r#"
+            function first() {
+                return 10;
+            }
+            function second() {
+                return 20;
+            }
+            function third() {
+                return first() + second();
+            }
+            third()
+            "#,
+        );
+        assert!(
+            result.is_ok(),
+            "Multiple functions failed: {:?}",
+            result.err()
+        );
+        assert_eq!(result.unwrap(), Value::Smi(30));
+    }
+
+    #[test]
+    fn test_recursive_function() {
+        let mut runtime = Runtime::new(false);
+        let result = runtime.execute_string(
+            r#"
+            function factorial(n) {
+                if (n <= 1) {
+                    return 1;
+                }
+                return n * factorial(n - 1);
+            }
+            factorial(5)
+            "#,
+        );
+        assert!(
+            result.is_ok(),
+            "Recursive function failed: {:?}",
+            result.err()
+        );
+        assert_eq!(result.unwrap(), Value::Smi(120));
+    }
 }
+

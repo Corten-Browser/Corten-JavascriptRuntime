@@ -32,6 +32,10 @@ pub struct BytecodeGenerator {
     enclosing: Option<Box<BytecodeGenerator>>,
     /// Captured variables from outer scopes
     upvalues: Vec<UpvalueDescriptor>,
+
+    // For nested function registration
+    /// Nested function bytecode chunks collected during compilation
+    nested_functions: Vec<BytecodeChunk>,
 }
 
 impl BytecodeGenerator {
@@ -46,6 +50,7 @@ impl BytecodeGenerator {
             last_was_expression: false,
             enclosing: None,
             upvalues: Vec::new(),
+            nested_functions: Vec::new(),
         }
     }
 
@@ -60,6 +65,7 @@ impl BytecodeGenerator {
             last_was_expression: false,
             enclosing: Some(enclosing),
             upvalues: Vec::new(),
+            nested_functions: Vec::new(),
         }
     }
 
@@ -113,6 +119,39 @@ impl BytecodeGenerator {
     /// Get the captured upvalues for this function
     pub fn get_upvalues(&self) -> Vec<UpvalueDescriptor> {
         self.upvalues.clone()
+    }
+
+    /// Get the nested functions collected during compilation
+    ///
+    /// Returns all function bytecode chunks that were compiled as nested functions.
+    /// These should be registered with the VM before executing the main bytecode.
+    pub fn take_nested_functions(&mut self) -> Vec<BytecodeChunk> {
+        std::mem::take(&mut self.nested_functions)
+    }
+
+    /// Get a reference to nested functions without consuming them
+    pub fn nested_functions(&self) -> &[BytecodeChunk] {
+        &self.nested_functions
+    }
+
+    /// Adjust closure indices in bytecode to account for function registry offset
+    ///
+    /// When a function contains nested functions, the nested functions get indices
+    /// 0, 1, 2... during compilation. But when we merge them into the parent's
+    /// nested_functions list, they'll be at different indices. This method adjusts
+    /// the CreateClosure and CreateAsyncFunction opcodes to use the correct indices.
+    fn adjust_closure_indices(chunk: &mut BytecodeChunk, base_idx: usize) {
+        for inst in &mut chunk.instructions {
+            match &mut inst.opcode {
+                Opcode::CreateClosure(idx, _) => {
+                    *idx = *idx + base_idx;
+                }
+                Opcode::CreateAsyncFunction(idx, _) => {
+                    *idx = *idx + base_idx;
+                }
+                _ => {}
+            }
+        }
     }
 
     /// Generate bytecode from AST
@@ -215,17 +254,42 @@ impl BytecodeGenerator {
                 // Get the upvalues captured by this function
                 let upvalues = func_gen.get_upvalues();
 
+                // Get the compiled function bytecode
+                let mut func_bytecode = func_gen.chunk.clone();
+
+                // Collect any nested functions from the inner function
+                let inner_nested = func_gen.take_nested_functions();
+
                 // Restore the outer generator from the enclosing scope
                 *self = *func_gen.enclosing.take().unwrap();
 
-                // Store function index (simplified - real impl would store function metadata)
-                let func_idx = self.chunk.constants.len();
+                // Add the compiled function to our nested functions list
+                let func_idx = self.nested_functions.len();
 
-                // Create closure with upvalue descriptors
+                // Adjust indices in the function's bytecode for nested functions
+                // The inner functions will be placed after this function in the list
+                let inner_base_idx = func_idx + 1;
+                Self::adjust_closure_indices(&mut func_bytecode, inner_base_idx);
+
+                self.nested_functions.push(func_bytecode);
+
+                // Also include any nested functions from the inner function
+                self.nested_functions.extend(inner_nested);
+
+                // Create closure with upvalue descriptors (func_idx is now a proper function registry index)
                 self.chunk.emit(Opcode::CreateClosure(func_idx, upvalues));
-                let reg = self.allocate_register();
-                self.chunk.emit(Opcode::StoreLocal(reg));
-                self.locals.insert(name.clone(), reg);
+
+                // Store the function: if at top level (no enclosing), store as global
+                // Otherwise store as local
+                if self.enclosing.is_none() {
+                    // Top-level function declaration - store as global so other functions can access it
+                    self.chunk.emit(Opcode::StoreGlobal(name.clone()));
+                } else {
+                    // Nested function - store in local register
+                    let reg = self.allocate_register();
+                    self.chunk.emit(Opcode::StoreLocal(reg));
+                    self.locals.insert(name.clone(), reg);
+                }
             }
 
             Statement::ClassDeclaration { .. } => {
@@ -698,15 +762,15 @@ impl BytecodeGenerator {
             Expression::CallExpression {
                 callee, arguments, ..
             } => {
-                // Push arguments
+                // Push callee first (it goes underneath the arguments on stack)
+                self.visit_expression(callee)?;
+
+                // Push arguments (they go on top of callee)
                 for arg in arguments {
                     self.visit_expression(arg)?;
                 }
 
-                // Push callee
-                self.visit_expression(callee)?;
-
-                // Call
+                // Call - dispatcher expects stack: [callee, arg1, arg2, ...]
                 self.chunk.emit(Opcode::Call(arguments.len() as u8));
             }
 
@@ -724,10 +788,11 @@ impl BytecodeGenerator {
                 callee, arguments, ..
             } => {
                 // Simplified new - just call
+                // Push callee first (it goes underneath the arguments on stack)
+                self.visit_expression(callee)?;
                 for arg in arguments {
                     self.visit_expression(arg)?;
                 }
-                self.visit_expression(callee)?;
                 self.chunk.emit(Opcode::Call(arguments.len() as u8));
             }
 
@@ -798,11 +863,26 @@ impl BytecodeGenerator {
                 // Get the upvalues captured by this function
                 let upvalues = func_gen.get_upvalues();
 
+                // Get the compiled function bytecode
+                let mut func_bytecode = func_gen.chunk.clone();
+
+                // Collect any nested functions from the inner function
+                let inner_nested = func_gen.take_nested_functions();
+
                 // Restore the outer generator
                 *self = *func_gen.enclosing.take().unwrap();
 
-                // Store function (simplified - use placeholder index)
-                let func_idx = self.chunk.constants.len();
+                // Add the compiled function to our nested functions list
+                let func_idx = self.nested_functions.len();
+
+                // Adjust indices in the function's bytecode for nested functions
+                let inner_base_idx = func_idx + 1;
+                Self::adjust_closure_indices(&mut func_bytecode, inner_base_idx);
+
+                self.nested_functions.push(func_bytecode);
+
+                // Also include any nested functions from the inner function
+                self.nested_functions.extend(inner_nested);
 
                 self.chunk.emit(Opcode::CreateClosure(func_idx, upvalues));
             }
@@ -845,11 +925,26 @@ impl BytecodeGenerator {
                 // Get the upvalues captured by this function
                 let upvalues = func_gen.get_upvalues();
 
+                // Get the compiled function bytecode
+                let mut func_bytecode = func_gen.chunk.clone();
+
+                // Collect any nested functions from the inner function
+                let inner_nested = func_gen.take_nested_functions();
+
                 // Restore the outer generator
                 *self = *func_gen.enclosing.take().unwrap();
 
-                // Store function (simplified - use placeholder index)
-                let func_idx = self.chunk.constants.len();
+                // Add the compiled function to our nested functions list
+                let func_idx = self.nested_functions.len();
+
+                // Adjust indices in the function's bytecode for nested functions
+                let inner_base_idx = func_idx + 1;
+                Self::adjust_closure_indices(&mut func_bytecode, inner_base_idx);
+
+                self.nested_functions.push(func_bytecode);
+
+                // Also include any nested functions from the inner function
+                self.nested_functions.extend(inner_nested);
 
                 self.chunk.emit(Opcode::CreateClosure(func_idx, upvalues));
             }
@@ -1010,4 +1105,189 @@ mod tests {
             .any(|i| matches!(i.opcode, Opcode::Add));
         assert!(has_add);
     }
+
+    #[test]
+    fn test_function_declaration_collects_nested() {
+        let mut gen = BytecodeGenerator::new();
+        let ast = ASTNode::Program(vec![Statement::FunctionDeclaration {
+            name: "add".to_string(),
+            params: vec![
+                Pattern::Identifier("a".to_string()),
+                Pattern::Identifier("b".to_string()),
+            ],
+            body: vec![Statement::ReturnStatement {
+                argument: Some(Expression::BinaryExpression {
+                    left: Box::new(Expression::Identifier {
+                        name: "a".to_string(),
+                        position: None,
+                    }),
+                    operator: BinaryOperator::Add,
+                    right: Box::new(Expression::Identifier {
+                        name: "b".to_string(),
+                        position: None,
+                    }),
+                    position: None,
+                }),
+                position: None,
+            }],
+            is_async: false,
+            is_generator: false,
+            position: None,
+        }]);
+
+        let _chunk = gen.generate(&ast).unwrap();
+
+        // Verify that nested functions were collected
+        let nested = gen.nested_functions();
+        assert_eq!(nested.len(), 1, "Expected 1 nested function");
+
+        // The nested function should have bytecode
+        assert!(!nested[0].instructions.is_empty());
+    }
+
+    #[test]
+    fn test_multiple_function_declarations() {
+        let mut gen = BytecodeGenerator::new();
+        let ast = ASTNode::Program(vec![
+            Statement::FunctionDeclaration {
+                name: "first".to_string(),
+                params: vec![],
+                body: vec![Statement::ReturnStatement {
+                    argument: Some(Expression::Literal {
+                        value: Literal::Number(1.0),
+                        position: None,
+                    }),
+                    position: None,
+                }],
+                is_async: false,
+                is_generator: false,
+                position: None,
+            },
+            Statement::FunctionDeclaration {
+                name: "second".to_string(),
+                params: vec![],
+                body: vec![Statement::ReturnStatement {
+                    argument: Some(Expression::Literal {
+                        value: Literal::Number(2.0),
+                        position: None,
+                    }),
+                    position: None,
+                }],
+                is_async: false,
+                is_generator: false,
+                position: None,
+            },
+        ]);
+
+        let _chunk = gen.generate(&ast).unwrap();
+        let nested = gen.nested_functions();
+        assert_eq!(nested.len(), 2, "Expected 2 nested functions");
+    }
+
+    #[test]
+    fn test_arrow_function_collects_nested() {
+        let mut gen = BytecodeGenerator::new();
+        let ast = ASTNode::Program(vec![Statement::VariableDeclaration {
+            kind: VariableKind::Let,
+            declarations: vec![VariableDeclarator {
+                id: Pattern::Identifier("square".to_string()),
+                init: Some(Expression::ArrowFunctionExpression {
+                    params: vec![Pattern::Identifier("x".to_string())],
+                    body: ArrowFunctionBody::Expression(Box::new(Expression::BinaryExpression {
+                        left: Box::new(Expression::Identifier {
+                            name: "x".to_string(),
+                            position: None,
+                        }),
+                        operator: BinaryOperator::Mul,
+                        right: Box::new(Expression::Identifier {
+                            name: "x".to_string(),
+                            position: None,
+                        }),
+                        position: None,
+                    })),
+                    is_async: false,
+                    position: None,
+                }),
+            }],
+            position: None,
+        }]);
+
+        let _chunk = gen.generate(&ast).unwrap();
+        let nested = gen.nested_functions();
+        assert_eq!(nested.len(), 1, "Expected 1 nested function from arrow");
+    }
+
+    #[test]
+    fn test_function_expression_collects_nested() {
+        let mut gen = BytecodeGenerator::new();
+        let ast = ASTNode::Program(vec![Statement::VariableDeclaration {
+            kind: VariableKind::Let,
+            declarations: vec![VariableDeclarator {
+                id: Pattern::Identifier("multiply".to_string()),
+                init: Some(Expression::FunctionExpression {
+                    name: None,
+                    params: vec![
+                        Pattern::Identifier("x".to_string()),
+                        Pattern::Identifier("y".to_string()),
+                    ],
+                    body: vec![Statement::ReturnStatement {
+                        argument: Some(Expression::BinaryExpression {
+                            left: Box::new(Expression::Identifier {
+                                name: "x".to_string(),
+                                position: None,
+                            }),
+                            operator: BinaryOperator::Mul,
+                            right: Box::new(Expression::Identifier {
+                                name: "y".to_string(),
+                                position: None,
+                            }),
+                            position: None,
+                        }),
+                        position: None,
+                    }],
+                    is_async: false,
+                    is_generator: false,
+                    position: None,
+                }),
+            }],
+            position: None,
+        }]);
+
+        let _chunk = gen.generate(&ast).unwrap();
+        let nested = gen.nested_functions();
+        assert_eq!(
+            nested.len(),
+            1,
+            "Expected 1 nested function from function expression"
+        );
+    }
+
+    #[test]
+    fn test_take_nested_functions() {
+        let mut gen = BytecodeGenerator::new();
+        let ast = ASTNode::Program(vec![Statement::FunctionDeclaration {
+            name: "test".to_string(),
+            params: vec![],
+            body: vec![Statement::ReturnStatement {
+                argument: Some(Expression::Literal {
+                    value: Literal::Number(42.0),
+                    position: None,
+                }),
+                position: None,
+            }],
+            is_async: false,
+            is_generator: false,
+            position: None,
+        }]);
+
+        let _chunk = gen.generate(&ast).unwrap();
+
+        // take_nested_functions should consume the nested functions
+        let nested = gen.take_nested_functions();
+        assert_eq!(nested.len(), 1);
+
+        // After taking, nested_functions should be empty
+        assert_eq!(gen.nested_functions().len(), 0);
+    }
 }
+

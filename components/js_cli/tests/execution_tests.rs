@@ -387,9 +387,7 @@ fn test_execute_function_declaration() {
     assert_eq!(result, Value::Smi(42));
 }
 
-// Note: Function calls are not fully implemented yet
-// The Call opcode currently just pushes Undefined
-// This test documents the current behavior
+// Note: Function calls are now fully implemented with proper function registration
 #[test]
 fn test_function_call_current_behavior() {
     let mut runtime = Runtime::new(false);
@@ -398,9 +396,8 @@ fn test_function_call_current_behavior() {
     let source = "function add(a, b) { return a + b; } add(2, 3)";
     let result = runtime.execute_string(source).unwrap();
 
-    // Currently returns Undefined because Call opcode is a placeholder
-    // Once function calls are fully implemented, this should return Smi(5)
-    assert_eq!(result, Value::Undefined);
+    // Function calls now return the correct result
+    assert_eq!(result, Value::Smi(5));
 }
 
 // Test break statement
@@ -594,7 +591,7 @@ fn test_complex_control_flow() {
 
 // KNOWN LIMITATIONS - These document features that need implementation
 
-// Function calls return undefined (placeholder implementation)
+// Function calls now work with proper function registration
 #[test]
 fn test_limitation_function_calls() {
     let mut runtime = Runtime::new(false);
@@ -602,25 +599,23 @@ fn test_limitation_function_calls() {
     // Function declaration works
     let _result = runtime.execute_string("function f() { return 42; }").unwrap();
 
-    // But calling returns Undefined (not 42)
+    // Function calls now return the correct value
     let result = runtime.execute_string("function f() { return 42; } f()").unwrap();
-    assert_eq!(result, Value::Undefined);
-    // TODO: Once Call opcode is implemented, this should return Smi(42)
+    assert_eq!(result, Value::Smi(42));
 }
 
-// Arrow functions create closures but calls don't work
+// Arrow functions now work with proper function registration
 #[test]
 fn test_limitation_arrow_functions() {
     let mut runtime = Runtime::new(false);
 
-    // Arrow function creates closure object (HeapObject placeholder)
+    // Arrow function creates closure object (HeapObject with function index)
     let result = runtime.execute_string("let f = () => 42; f").unwrap();
     assert!(matches!(result, Value::HeapObject(_)));
 
-    // But calling returns Undefined
+    // Arrow function calls now return the correct value
     let result = runtime.execute_string("let f = () => 42; f()").unwrap();
-    assert_eq!(result, Value::Undefined);
-    // TODO: Should return Smi(42)
+    assert_eq!(result, Value::Smi(42));
 }
 
 // String handling is limited
