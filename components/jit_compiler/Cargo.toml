@@ -5,7 +5,6 @@ edition.workspace = true
 
 [dependencies]
 bytecode_system = { path = "../bytecode_system" }
-interpreter = { path = "../interpreter" }
 core_types = { path = "../core_types" }
 
 # Cranelift JIT compiler

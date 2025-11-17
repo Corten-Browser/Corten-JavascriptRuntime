@@ -4,14 +4,12 @@
 
 use bytecode_system::BytecodeChunk;
 use core_types::{JsError, Value};
-use jit_compiler::{BaselineJIT, CompiledCode, OptimizingJIT};
 use std::collections::HashMap;
 
 use crate::call_frame::CallFrame;
 use crate::context::ExecutionContext;
 use crate::dispatch::Dispatcher;
 use crate::gc_integration::VMHeap;
-use crate::jit_context::JITContext;
 use crate::profile::ProfileData;
 
 /// Virtual Machine for executing JavaScript bytecode
@@ -21,7 +19,11 @@ use crate::profile::ProfileData;
 /// - Call stack for function invocations
 /// - Memory heap (via memory_manager)
 /// - Function registry for closures
-/// - JIT compilation and hot code detection
+/// - Execution counting for hot code detection
+/// - Profile data collection for JIT optimization decisions
+///
+/// Note: JIT compilation is coordinated at the Runtime level (js_cli)
+/// to avoid cyclic dependencies. The VM provides profiling hooks.
 pub struct VM {
     /// Dispatcher for bytecode execution
     dispatcher: Dispatcher,
@@ -33,17 +35,11 @@ pub struct VM {
     heap: VMHeap,
     /// Execution counts per function index (for hot code detection)
     execution_counts: HashMap<usize, u64>,
-    /// Compiled code cache (function index -> compiled code)
-    compiled_code: HashMap<usize, CompiledCode>,
     /// Profile data per function (for optimizing JIT)
     profile_data: HashMap<usize, ProfileData>,
-    /// Baseline JIT compiler (template-based, fast compilation)
-    baseline_jit: Option<BaselineJIT>,
-    /// Optimizing JIT compiler (speculation-based, slow compilation)
-    optimizing_jit: Option<OptimizingJIT>,
-    /// Number of calls before baseline JIT compilation
+    /// Number of calls before baseline JIT compilation should be considered
     jit_threshold: u64,
-    /// Number of calls before optimizing JIT compilation
+    /// Number of calls before optimizing JIT compilation should be considered
     opt_threshold: u64,
 }
 
@@ -55,7 +51,6 @@ impl std::fmt::Debug for VM {
             .field("functions_count", &self.functions.len())
             .field("heap", &self.heap)
             .field("execution_counts", &self.execution_counts)
-            .field("compiled_code_count", &self.compiled_code.len())
             .field("jit_threshold", &self.jit_threshold)
             .field("opt_threshold", &self.opt_threshold)
             .finish()
@@ -66,7 +61,6 @@ impl VM {
     /// Create a new VM instance
     ///
     /// Initializes an empty VM with no global variables.
-    /// JIT compilers are initialized but disabled by default (high thresholds).
     pub fn new() -> Self {
         Self {
             dispatcher: Dispatcher::new(),
@@ -74,12 +68,9 @@ impl VM {
             functions: Vec::new(),
             heap: VMHeap::new(),
             execution_counts: HashMap::new(),
-            compiled_code: HashMap::new(),
             profile_data: HashMap::new(),
-            baseline_jit: BaselineJIT::new().into(),
-            optimizing_jit: OptimizingJIT::new().into(),
-            jit_threshold: 100,      // Baseline JIT after 100 calls
-            opt_threshold: 10000,    // Optimizing JIT after 10,000 calls
+            jit_threshold: 100,   // Baseline JIT after 100 calls
+            opt_threshold: 10000, // Optimizing JIT after 10,000 calls
         }
     }
 
@@ -131,12 +122,11 @@ impl VM {
         self.dispatcher.execute(&mut ctx, &self.functions)
     }
 
-    /// Execute a registered function by index with JIT awareness
+    /// Execute a registered function by index
     ///
     /// This method:
     /// 1. Records the call for hot code detection
-    /// 2. Checks if compiled code exists
-    /// 3. Executes compiled code if available, otherwise interprets
+    /// 2. Executes the function in the interpreter
     ///
     /// # Arguments
     /// * `func_idx` - The index of the function to execute
@@ -147,21 +137,6 @@ impl VM {
     pub fn execute_function(&mut self, func_idx: usize) -> Result<Value, JsError> {
         // Record the call for hot code detection
         self.record_call(func_idx);
-
-        // Check if we have valid compiled code
-        if let Some(compiled) = self.compiled_code.get(&func_idx) {
-            if compiled.is_valid() {
-                // Execute compiled code
-                match compiled.execute() {
-                    Ok(result) => return Ok(result),
-                    Err(_) => {
-                        // Deoptimize: fall back to interpreter
-                        eprintln!("[JIT] Deoptimizing function {} - falling back to interpreter", func_idx);
-                        self.invalidate_compiled(func_idx);
-                    }
-                }
-            }
-        }
 
         // Execute in interpreter
         if let Some(chunk) = self.functions.get(func_idx) {
@@ -174,43 +149,6 @@ impl VM {
                 stack: vec![],
                 source_position: None,
             })
-        }
-    }
-
-    /// Create a JIT context for tracking function calls during execution
-    ///
-    /// This is useful for integrating JIT awareness into external execution loops.
-    ///
-    /// # Example
-    /// ```ignore
-    /// let mut jit_ctx = vm.create_jit_context();
-    /// // ... execute some code that records calls via jit_ctx ...
-    /// vm.process_pending_jit(&mut jit_ctx);
-    /// ```
-    pub fn create_jit_context(&mut self) -> JITContext<'_> {
-        JITContext::new(
-            &mut self.execution_counts,
-            &self.compiled_code,
-            &mut self.profile_data,
-            self.jit_threshold,
-            self.opt_threshold,
-        )
-    }
-
-    /// Process pending JIT compilation requests from a JIT context
-    ///
-    /// This method compiles functions that have reached their JIT thresholds.
-    pub fn process_pending_jit(&mut self, jit_ctx: &mut JITContext<'_>) {
-        let (pending_baseline, pending_opt) = jit_ctx.drain_pending();
-
-        // Process baseline JIT requests
-        for func_idx in pending_baseline {
-            self.trigger_baseline_jit(func_idx);
-        }
-
-        // Process optimizing JIT requests
-        for func_idx in pending_opt {
-            self.trigger_optimizing_jit(func_idx);
         }
     }
 
@@ -255,86 +193,64 @@ impl VM {
 
     /// Record a function call for hot code detection
     ///
-    /// Increments the execution count for the given function and triggers
-    /// JIT compilation when thresholds are reached.
+    /// Increments the execution count for the given function.
+    /// External code (e.g., Runtime) can query this to decide when to trigger JIT.
     ///
     /// # Arguments
     /// * `func_idx` - The index of the function being called
     pub fn record_call(&mut self, func_idx: usize) {
         let count = self.execution_counts.entry(func_idx).or_insert(0);
         *count += 1;
-
-        // Check if we should trigger JIT compilation
-        if *count == self.jit_threshold {
-            self.trigger_baseline_jit(func_idx);
-        } else if *count == self.opt_threshold {
-            self.trigger_optimizing_jit(func_idx);
-        }
     }
 
-    /// Trigger baseline JIT compilation for a function
+    /// Check if a function should be baseline JIT compiled
     ///
-    /// Compiles the function using the baseline (template) JIT compiler.
-    /// This provides a modest speedup with fast compilation.
-    fn trigger_baseline_jit(&mut self, func_idx: usize) {
-        if let Some(ref mut jit) = self.baseline_jit {
-            if let Some(chunk) = self.functions.get(func_idx) {
-                match jit.compile(chunk) {
-                    Ok(compiled) => {
-                        eprintln!("[JIT] Baseline compiled function {}", func_idx);
-                        self.compiled_code.insert(func_idx, compiled);
-                    }
-                    Err(e) => {
-                        eprintln!("[JIT] Baseline compilation failed for function {}: {}", func_idx, e);
-                    }
+    /// Returns true if the function has reached the baseline JIT threshold.
+    pub fn should_baseline_compile(&self, func_idx: usize) -> bool {
+        self.execution_counts
+            .get(&func_idx)
+            .map_or(false, |&count| count >= self.jit_threshold)
+    }
+
+    /// Check if a function should be optimizing JIT compiled
+    ///
+    /// Returns true if the function has reached the optimizing JIT threshold.
+    pub fn should_optimizing_compile(&self, func_idx: usize) -> bool {
+        self.execution_counts
+            .get(&func_idx)
+            .map_or(false, |&count| count >= self.opt_threshold)
+    }
+
+    /// Get functions that are hot and should be baseline compiled
+    ///
+    /// Returns a list of function indices that have reached the baseline threshold.
+    pub fn get_hot_functions(&self) -> Vec<usize> {
+        self.execution_counts
+            .iter()
+            .filter_map(|(&idx, &count)| {
+                if count >= self.jit_threshold {
+                    Some(idx)
+                } else {
+                    None
                 }
-            }
-        }
+            })
+            .collect()
     }
 
-    /// Trigger optimizing JIT compilation for a function
+    /// Get functions that should be optimizing compiled
     ///
-    /// Compiles the function using the optimizing (speculative) JIT compiler.
-    /// This provides maximum speedup but takes longer to compile.
-    fn trigger_optimizing_jit(&mut self, func_idx: usize) {
-        if let Some(ref mut jit) = self.optimizing_jit {
-            if let Some(chunk) = self.functions.get(func_idx) {
-                // Get profile data for this function
-                let profile = self
-                    .profile_data
-                    .get(&func_idx)
-                    .cloned()
-                    .unwrap_or_default();
-
-                match jit.compile(chunk, &profile) {
-                    Ok(compiled) => {
-                        eprintln!("[JIT] Optimizing compiled function {}", func_idx);
-                        self.compiled_code.insert(func_idx, compiled);
-                    }
-                    Err(e) => {
-                        eprintln!("[JIT] Optimizing compilation failed for function {}: {}", func_idx, e);
-                    }
+    /// Returns a list of function indices that have reached the optimizing threshold.
+    pub fn get_very_hot_functions(&self) -> Vec<usize> {
+        self.execution_counts
+            .iter()
+            .filter_map(|(&idx, &count)| {
+                if count >= self.opt_threshold {
+                    Some(idx)
+                } else {
+                    None
                 }
-            }
-        }
-    }
-
-    /// Get compiled code for a function if available
-    ///
-    /// # Arguments
-    /// * `func_idx` - The index of the function
-    ///
-    /// # Returns
-    /// The compiled code if the function has been JIT compiled, None otherwise
-    pub fn get_compiled(&self, func_idx: usize) -> Option<&CompiledCode> {
-        self.compiled_code.get(&func_idx)
-    }
-
-    /// Get mutable reference to compiled code for a function
-    ///
-    /// Used for invalidating compiled code during deoptimization.
-    pub fn get_compiled_mut(&mut self, func_idx: usize) -> Option<&mut CompiledCode> {
-        self.compiled_code.get_mut(&func_idx)
+            })
+            .collect()
     }
 
     /// Set the baseline JIT threshold
@@ -379,11 +295,6 @@ impl VM {
         &self.execution_counts
     }
 
-    /// Get the number of functions that have been JIT compiled
-    pub fn compiled_functions_count(&self) -> usize {
-        self.compiled_code.len()
-    }
-
     /// Record profile data for a function
     ///
     /// # Arguments
@@ -406,35 +317,9 @@ impl VM {
 
     /// Get mutable profile data for a function, creating if necessary
     pub fn get_or_create_profile_data(&mut self, func_idx: usize) -> &mut ProfileData {
-        self.profile_data.entry(func_idx).or_insert_with(ProfileData::new)
-    }
-
-    /// Check if baseline JIT is available
-    pub fn is_baseline_jit_available(&self) -> bool {
-        self.baseline_jit.as_ref().map_or(false, |jit| jit.is_available())
-    }
-
-    /// Check if optimizing JIT is available
-    pub fn is_optimizing_jit_available(&self) -> bool {
-        self.optimizing_jit.as_ref().map_or(false, |jit| jit.is_available())
-    }
-
-    /// Invalidate compiled code for a function (deoptimization)
-    ///
-    /// # Arguments
-    /// * `func_idx` - The index of the function to invalidate
-    pub fn invalidate_compiled(&mut self, func_idx: usize) {
-        if let Some(compiled) = self.compiled_code.get_mut(&func_idx) {
-            compiled.invalidate();
-        }
-    }
-
-    /// Remove compiled code for a function
-    ///
-    /// # Arguments
-    /// * `func_idx` - The index of the function
-    pub fn remove_compiled(&mut self, func_idx: usize) -> Option<CompiledCode> {
-        self.compiled_code.remove(&func_idx)
+        self.profile_data
+            .entry(func_idx)
+            .or_insert_with(ProfileData::new)
     }
 
     /// Get reference to internal functions registry
@@ -442,37 +327,44 @@ impl VM {
         &self.functions
     }
 
-    /// Get a reference to the GC heap
-    ///
-    /// The heap manages JavaScript object allocation and garbage collection.
+    /// Get a specific function bytecode by index
+    pub fn get_function(&self, func_idx: usize) -> Option<&BytecodeChunk> {
+        self.functions.get(func_idx)
+    }
+
+    /// Reset execution counts (useful for testing)
+    pub fn reset_execution_counts(&mut self) {
+        self.execution_counts.clear();
+    }
+
+    /// Reset profile data (useful for testing)
+    pub fn reset_profile_data(&mut self) {
+        self.profile_data.clear();
+    }
+
+    /// Get reference to the GC heap
     pub fn heap(&self) -> &VMHeap {
         &self.heap
     }
 
-    /// Get a mutable reference to the GC heap
-    ///
-    /// The heap manages JavaScript object allocation and garbage collection.
+    /// Get mutable reference to the GC heap
     pub fn heap_mut(&mut self) -> &mut VMHeap {
         &mut self.heap
-    }
-
-    /// Trigger garbage collection
-    ///
-    /// Performs a young generation collection.
-    pub fn collect_garbage(&self) {
-        self.heap.collect_garbage();
-    }
-
-    /// Trigger a full garbage collection
-    ///
-    /// Collects both young and old generations.
-    pub fn full_gc(&self) {
-        self.heap.full_gc();
     }
 
     /// Get GC statistics
     pub fn gc_stats(&self) -> memory_manager::GcStats {
         self.heap.gc_stats()
+    }
+
+    /// Trigger garbage collection
+    pub fn collect_garbage(&mut self) {
+        self.heap.collect_garbage();
+    }
+
+    /// Trigger full garbage collection
+    pub fn full_gc(&mut self) {
+        self.heap.full_gc();
     }
 }
 
@@ -493,7 +385,6 @@ mod tests {
         assert_eq!(vm.call_stack_depth(), 0);
         assert_eq!(vm.jit_threshold(), 100);
         assert_eq!(vm.opt_threshold(), 10000);
-        assert_eq!(vm.compiled_functions_count(), 0);
     }
 
     #[test]
@@ -551,9 +442,6 @@ mod tests {
     #[test]
     fn test_vm_record_call_increments_count() {
         let mut vm = VM::new();
-        // Disable JIT for this test by setting very high thresholds
-        vm.set_jit_threshold(u64::MAX);
-        vm.set_opt_threshold(u64::MAX);
 
         assert_eq!(vm.get_execution_count(0), 0);
 
@@ -571,7 +459,6 @@ mod tests {
     #[test]
     fn test_vm_execution_counts_map() {
         let mut vm = VM::new();
-        vm.set_jit_threshold(u64::MAX);
 
         vm.record_call(0);
         vm.record_call(0);
@@ -584,6 +471,82 @@ mod tests {
         assert_eq!(counts.get(&0), Some(&2));
         assert_eq!(counts.get(&1), Some(&1));
         assert_eq!(counts.get(&2), Some(&3));
+    }
+
+    #[test]
+    fn test_vm_should_baseline_compile() {
+        let mut vm = VM::new();
+        vm.set_jit_threshold(5);
+
+        // Not hot yet
+        for _ in 0..4 {
+            vm.record_call(0);
+        }
+        assert!(!vm.should_baseline_compile(0));
+
+        // Now hot
+        vm.record_call(0);
+        assert!(vm.should_baseline_compile(0));
+    }
+
+    #[test]
+    fn test_vm_should_optimizing_compile() {
+        let mut vm = VM::new();
+        vm.set_opt_threshold(10);
+
+        // Not hot enough
+        for _ in 0..9 {
+            vm.record_call(0);
+        }
+        assert!(!vm.should_optimizing_compile(0));
+
+        // Now hot enough
+        vm.record_call(0);
+        assert!(vm.should_optimizing_compile(0));
+    }
+
+    #[test]
+    fn test_vm_get_hot_functions() {
+        let mut vm = VM::new();
+        vm.set_jit_threshold(5);
+
+        // Make function 0 hot
+        for _ in 0..5 {
+            vm.record_call(0);
+        }
+        // Function 1 is not hot
+        for _ in 0..3 {
+            vm.record_call(1);
+        }
+        // Function 2 is hot
+        for _ in 0..10 {
+            vm.record_call(2);
+        }
+
+        let hot = vm.get_hot_functions();
+        assert!(hot.contains(&0));
+        assert!(!hot.contains(&1));
+        assert!(hot.contains(&2));
+    }
+
+    #[test]
+    fn test_vm_get_very_hot_functions() {
+        let mut vm = VM::new();
+        vm.set_jit_threshold(5);
+        vm.set_opt_threshold(10);
+
+        // Function 0 is baseline hot only
+        for _ in 0..5 {
+            vm.record_call(0);
+        }
+        // Function 1 is optimizing hot
+        for _ in 0..15 {
+            vm.record_call(1);
+        }
+
+        let very_hot = vm.get_very_hot_functions();
+        assert!(!very_hot.contains(&0));
+        assert!(very_hot.contains(&1));
     }
 
     #[test]
@@ -612,21 +575,6 @@ mod tests {
     }
 
     #[test]
-    fn test_vm_jit_availability() {
-        let vm = VM::new();
-        // JIT compilers should be available if Cranelift is working
-        assert!(vm.is_baseline_jit_available());
-        assert!(vm.is_optimizing_jit_available());
-    }
-
-    #[test]
-    fn test_vm_get_compiled_not_compiled() {
-        let vm = VM::new();
-        assert!(vm.get_compiled(0).is_none());
-        assert!(vm.get_compiled(999).is_none());
-    }
-
-    #[test]
     fn test_vm_register_function() {
         let mut vm = VM::new();
         let mut chunk = BytecodeChunk::new();
@@ -646,95 +594,63 @@ mod tests {
     }
 
     #[test]
-    fn test_vm_jit_trigger_at_threshold() {
+    fn test_vm_get_function() {
         let mut vm = VM::new();
-        vm.set_jit_threshold(5);
-
-        // Register a simple function
         let mut chunk = BytecodeChunk::new();
-        let const_idx = chunk.add_constant(bytecode_system::Value::Number(42.0));
-        chunk.emit(Opcode::LoadConstant(const_idx));
         chunk.emit(Opcode::Return);
         vm.register_function(chunk);
 
-        // Call 4 times - no JIT yet
-        for _ in 0..4 {
-            vm.record_call(0);
-        }
-        assert!(vm.get_compiled(0).is_none());
-
-        // 5th call triggers JIT
-        vm.record_call(0);
-        assert!(vm.get_compiled(0).is_some());
-        assert_eq!(vm.compiled_functions_count(), 1);
+        assert!(vm.get_function(0).is_some());
+        assert!(vm.get_function(1).is_none());
     }
 
     #[test]
-    fn test_vm_optimizing_jit_trigger() {
+    fn test_vm_reset_execution_counts() {
         let mut vm = VM::new();
-        vm.set_jit_threshold(5);
-        vm.set_opt_threshold(10);
+        vm.record_call(0);
+        vm.record_call(1);
 
-        // Register a simple function
-        let mut chunk = BytecodeChunk::new();
-        let const_idx = chunk.add_constant(bytecode_system::Value::Number(42.0));
-        chunk.emit(Opcode::LoadConstant(const_idx));
-        chunk.emit(Opcode::Return);
-        vm.register_function(chunk);
-
-        // Call up to baseline threshold
-        for _ in 0..5 {
-            vm.record_call(0);
-        }
-        assert!(vm.get_compiled(0).is_some());
-
-        // Continue to optimizing threshold
-        for _ in 5..10 {
-            vm.record_call(0);
-        }
-        // Should have recompiled with optimizing JIT
-        assert!(vm.get_compiled(0).is_some());
+        vm.reset_execution_counts();
+        assert_eq!(vm.get_execution_count(0), 0);
+        assert_eq!(vm.get_execution_count(1), 0);
+        assert!(vm.execution_counts().is_empty());
     }
 
     #[test]
-    fn test_vm_invalidate_compiled() {
+    fn test_vm_reset_profile_data() {
         let mut vm = VM::new();
-        vm.set_jit_threshold(1);
+        vm.get_or_create_profile_data(0);
+        vm.get_or_create_profile_data(1);
 
-        // Register and compile a function
-        let mut chunk = BytecodeChunk::new();
-        let const_idx = chunk.add_constant(bytecode_system::Value::Number(42.0));
-        chunk.emit(Opcode::LoadConstant(const_idx));
-        chunk.emit(Opcode::Return);
-        vm.register_function(chunk);
-
-        vm.record_call(0);
-        assert!(vm.get_compiled(0).is_some());
-
-        // Invalidate
-        vm.invalidate_compiled(0);
-        let compiled = vm.get_compiled(0).unwrap();
-        assert!(!compiled.is_valid());
+        vm.reset_profile_data();
+        assert!(vm.get_profile_data(0).is_none());
+        assert!(vm.get_profile_data(1).is_none());
     }
 
     #[test]
-    fn test_vm_remove_compiled() {
+    fn test_vm_execute_function() {
         let mut vm = VM::new();
-        vm.set_jit_threshold(1);
-
-        // Register and compile a function
         let mut chunk = BytecodeChunk::new();
+
         let const_idx = chunk.add_constant(bytecode_system::Value::Number(42.0));
         chunk.emit(Opcode::LoadConstant(const_idx));
         chunk.emit(Opcode::Return);
-        vm.register_function(chunk);
 
-        vm.record_call(0);
-        assert!(vm.get_compiled(0).is_some());
+        let func_idx = vm.register_function(chunk);
 
-        // Remove
-        let removed = vm.remove_compiled(0);
-        assert!(removed.is_some());
-        assert!(vm.get_compiled(0).is_none());
+        let result = vm.execute_function(func_idx);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), Value::Smi(42));
+
+        // Should have recorded the call
+        assert_eq!(vm.get_execution_count(func_idx), 1);
+    }
+
+    #[test]
+    fn test_vm_execute_function_not_found() {
+        let mut vm = VM::new();
+
+        let result = vm.execute_function(999);
+        assert!(result.is_err());
     }
 }

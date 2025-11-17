@@ -6,8 +6,7 @@
 use crate::compiled_code::CompiledCode;
 use crate::cranelift_backend::CraneliftBackend;
 use bytecode_system::BytecodeChunk;
-use core_types::{ErrorKind, JsError};
-use interpreter::{ProfileData, TypeInfo};
+use core_types::{ErrorKind, JsError, ProfileData, TypeInfo};
 
 /// Statistics for optimizing JIT compilation
 #[derive(Debug, Clone, Default)]
@@ -77,7 +76,7 @@ impl OptimizingJIT {
     /// ```
     /// use jit_compiler::OptimizingJIT;
     /// use bytecode_system::{BytecodeChunk, Opcode, Value};
-    /// use interpreter::ProfileData;
+    /// use core_types::ProfileData;
     ///
     /// let mut jit = OptimizingJIT::new();
     /// let mut chunk = BytecodeChunk::new();

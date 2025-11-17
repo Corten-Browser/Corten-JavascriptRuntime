@@ -187,6 +187,73 @@ impl Runtime {
     pub fn is_print_ast_enabled(&self) -> bool {
         self.print_ast
     }
+
+    /// Enable or disable JIT compilation
+    ///
+    /// When enabled, functions that are called frequently will be
+    /// JIT compiled for improved performance.
+    pub fn set_jit_enabled(&mut self, enabled: bool) {
+        self.enable_jit = enabled;
+        if enabled {
+            // Set reasonable thresholds for JIT compilation
+            self.vm.set_jit_threshold(100); // Baseline JIT after 100 calls
+            self.vm.set_opt_threshold(10000); // Optimizing JIT after 10,000 calls
+        } else {
+            // Disable JIT by setting very high thresholds
+            self.vm.set_jit_threshold(u64::MAX);
+            self.vm.set_opt_threshold(u64::MAX);
+        }
+    }
+
+    /// Set the threshold for baseline JIT compilation
+    ///
+    /// # Arguments
+    /// * `threshold` - Number of calls before a function is baseline-compiled
+    pub fn set_jit_threshold(&mut self, threshold: u64) {
+        self.vm.set_jit_threshold(threshold);
+    }
+
+    /// Set the threshold for optimizing JIT compilation
+    ///
+    /// # Arguments
+    /// * `threshold` - Number of calls before a function is optimizing-compiled
+    pub fn set_opt_threshold(&mut self, threshold: u64) {
+        self.vm.set_opt_threshold(threshold);
+    }
+
+    /// Get runtime statistics
+    ///
+    /// Returns information about JIT compilation and function execution.
+    pub fn stats(&self) -> RuntimeStats {
+        RuntimeStats {
+            functions_compiled: self.vm.compiled_functions_count(),
+            jit_threshold: self.vm.jit_threshold(),
+            opt_threshold: self.vm.opt_threshold(),
+            execution_counts: self.vm.execution_counts().clone(),
+            jit_enabled: self.enable_jit,
+            baseline_jit_available: self.vm.is_baseline_jit_available(),
+            optimizing_jit_available: self.vm.is_optimizing_jit_available(),
+        }
+    }
+}
+
+/// Statistics about the runtime's JIT compilation and execution
+#[derive(Debug, Clone)]
+pub struct RuntimeStats {
+    /// Number of functions that have been JIT compiled
+    pub functions_compiled: usize,
+    /// Threshold for baseline JIT compilation
+    pub jit_threshold: u64,
+    /// Threshold for optimizing JIT compilation
+    pub opt_threshold: u64,
+    /// Execution counts per function index
+    pub execution_counts: std::collections::HashMap<usize, u64>,
+    /// Whether JIT is currently enabled
+    pub jit_enabled: bool,
+    /// Whether baseline JIT compiler is available
+    pub baseline_jit_available: bool,
+    /// Whether optimizing JIT compiler is available
+    pub optimizing_jit_available: bool,
 }
 
 #[cfg(test)]
@@ -211,5 +278,61 @@ mod tests {
         assert!(runtime.is_jit_enabled());
         assert!(runtime.is_print_bytecode_enabled());
         assert!(runtime.is_print_ast_enabled());
+    }
+
+    #[test]
+    fn test_runtime_jit_control() {
+        let mut runtime = Runtime::new(false);
+        assert!(!runtime.is_jit_enabled());
+
+        // Enable JIT
+        runtime.set_jit_enabled(true);
+        assert!(runtime.is_jit_enabled());
+
+        let stats = runtime.stats();
+        assert!(stats.jit_enabled);
+        assert_eq!(stats.jit_threshold, 100);
+        assert_eq!(stats.opt_threshold, 10000);
+
+        // Disable JIT
+        runtime.set_jit_enabled(false);
+        let stats = runtime.stats();
+        assert!(!stats.jit_enabled);
+        assert_eq!(stats.jit_threshold, u64::MAX);
+    }
+
+    #[test]
+    fn test_runtime_jit_thresholds() {
+        let mut runtime = Runtime::new(true);
+
+        runtime.set_jit_threshold(50);
+        runtime.set_opt_threshold(5000);
+
+        let stats = runtime.stats();
+        assert_eq!(stats.jit_threshold, 50);
+        assert_eq!(stats.opt_threshold, 5000);
+    }
+
+    #[test]
+    fn test_runtime_stats() {
+        let runtime = Runtime::new(true);
+        let stats = runtime.stats();
+
+        assert_eq!(stats.functions_compiled, 0);
+        assert!(stats.execution_counts.is_empty());
+        assert!(stats.baseline_jit_available);
+        assert!(stats.optimizing_jit_available);
+    }
+
+    #[test]
+    fn test_runtime_vm_access() {
+        let mut runtime = Runtime::new(false);
+
+        // Access VM directly
+        let vm = runtime.vm();
+        vm.set_jit_threshold(25);
+
+        let stats = runtime.stats();
+        assert_eq!(stats.jit_threshold, 25);
     }
 }

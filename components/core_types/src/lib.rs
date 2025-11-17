@@ -35,9 +35,11 @@
 #![deny(unsafe_code)]
 
 mod error;
+mod profile;
 mod source;
 mod value;
 
 pub use error::{ErrorKind, JsError};
+pub use profile::{BranchOutcome, ProfileData, TypeInfo};
 pub use source::{SourcePosition, StackFrame};
 pub use value::Value;

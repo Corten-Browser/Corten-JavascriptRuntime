@@ -5,7 +5,34 @@
 
 use crate::compiled_code::CompiledCode;
 use bytecode_system::BytecodeChunk;
-use interpreter::ExecutionContext;
+use core_types::Value;
+
+/// Interpreter state for deoptimization
+///
+/// This represents the state that the interpreter needs to resume execution.
+/// It mirrors the structure of interpreter::ExecutionContext but is defined
+/// here to avoid cyclic dependencies.
+#[derive(Debug, Clone, PartialEq)]
+pub struct InterpreterState {
+    /// Register file for local variable storage
+    pub registers: Vec<Value>,
+    /// Current instruction pointer
+    pub instruction_pointer: usize,
+    /// The bytecode being executed
+    pub bytecode: BytecodeChunk,
+}
+
+impl InterpreterState {
+    /// Create a new interpreter state from bytecode
+    pub fn new(bytecode: BytecodeChunk) -> Self {
+        let register_count = bytecode.register_count as usize;
+        Self {
+            registers: vec![Value::Undefined; register_count],
+            instruction_pointer: 0,
+            bytecode,
+        }
+    }
+}
 
 /// Reason for deoptimization
 #[derive(Debug, Clone, PartialEq)]
@@ -75,18 +102,22 @@ impl Deoptimizer {
 
     /// Deoptimize from compiled code back to interpreter
     ///
-    /// Reconstructs interpreter execution context from the original bytecode.
+    /// Returns the interpreter state needed to resume execution.
     /// The bytecode must be provided separately since CompiledCode now only
     /// contains native code pointers.
-    pub fn deoptimize(&self, _compiled: &CompiledCode, bytecode: &BytecodeChunk) -> ExecutionContext {
-        // Create a fresh execution context from the original bytecode
+    pub fn deoptimize(
+        &self,
+        _compiled: &CompiledCode,
+        bytecode: &BytecodeChunk,
+    ) -> InterpreterState {
+        // Create a fresh interpreter state from the original bytecode
         // In a real implementation, we would:
         // 1. Save current compiled frame state
         // 2. Map compiled registers to interpreter registers
         // 3. Reconstruct interpreter stack frames
         // 4. Set instruction pointer to correct bytecode offset
         // 5. Resume interpreter execution
-        ExecutionContext::new(bytecode.clone())
+        InterpreterState::new(bytecode.clone())
     }
 
     /// Deoptimize with reason tracking
@@ -96,18 +127,18 @@ impl Deoptimizer {
         bytecode: &BytecodeChunk,
         reason: DeoptReason,
         bytecode_offset: usize,
-    ) -> ExecutionContext {
+    ) -> InterpreterState {
         // Track the deoptimization
         let info = DeoptInfo::new(reason, bytecode_offset);
         self.deopt_history.push(info);
 
-        // Create interpreter context
-        let mut context = ExecutionContext::new(bytecode.clone());
+        // Create interpreter state
+        let mut state = InterpreterState::new(bytecode.clone());
 
         // Set instruction pointer to resume point
-        context.instruction_pointer = bytecode_offset;
+        state.instruction_pointer = bytecode_offset;
 
-        context
+        state
     }
 
     /// Check if too many deoptimizations have occurred

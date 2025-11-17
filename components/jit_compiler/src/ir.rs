@@ -4,7 +4,7 @@
 //! enabling optimization passes.
 
 use bytecode_system::{BytecodeChunk, Opcode};
-use interpreter::TypeInfo;
+use core_types::TypeInfo;
 
 /// IR operation types
 #[derive(Debug, Clone, PartialEq)]

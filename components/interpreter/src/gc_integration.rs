@@ -14,7 +14,6 @@ use std::rc::Rc;
 /// This structure represents a JavaScript object that is allocated
 /// on the GC heap and supports property access with hidden class
 /// optimization.
-#[derive(Debug)]
 pub struct GCObject {
     /// Reference to the shared heap
     heap: Rc<RefCell<Heap>>,
@@ -24,6 +23,16 @@ pub struct GCObject {
     prototype: Option<Box<GCObject>>,
     /// Hidden class for property layout optimization
     hidden_class: Option<Box<HiddenClass>>,
+}
+
+impl std::fmt::Debug for GCObject {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GCObject")
+            .field("properties", &self.properties)
+            .field("prototype", &self.prototype.as_ref().map(|_| "..."))
+            .field("hidden_class", &self.hidden_class.as_ref().map(|_| "HiddenClass"))
+            .finish()
+    }
 }
 
 impl GCObject {

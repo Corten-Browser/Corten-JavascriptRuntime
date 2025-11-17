@@ -11,7 +11,7 @@
 //! ```
 //! use jit_compiler::{BaselineJIT, OptimizingJIT};
 //! use bytecode_system::{BytecodeChunk, Opcode, Value as BcValue};
-//! use interpreter::ProfileData;
+//! use core_types::ProfileData;
 //!
 //! // Baseline JIT compilation
 //! let mut baseline = BaselineJIT::new();
@@ -45,6 +45,6 @@ pub mod osr;
 pub use baseline::BaselineJIT;
 pub use compiled_code::CompiledCode;
 pub use cranelift_backend::{CompiledFunction, CraneliftBackend};
-pub use deopt::Deoptimizer;
+pub use deopt::{Deoptimizer, InterpreterState};
 pub use optimizing::OptimizingJIT;
 pub use osr::{FrameMapping, OSREntry};

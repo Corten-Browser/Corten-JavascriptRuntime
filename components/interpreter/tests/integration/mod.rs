@@ -522,7 +522,7 @@ fn test_vm_gc_stats() {
 
 #[test]
 fn test_vm_collect_garbage() {
-    let vm = VM::new();
+    let mut vm = VM::new();
     vm.collect_garbage();
     let stats = vm.gc_stats();
     assert_eq!(stats.young_gc_count, 1);
@@ -530,7 +530,7 @@ fn test_vm_collect_garbage() {
 
 #[test]
 fn test_vm_full_gc() {
-    let vm = VM::new();
+    let mut vm = VM::new();
     vm.full_gc();
     let stats = vm.gc_stats();
     assert_eq!(stats.young_gc_count, 1);
@@ -708,7 +708,7 @@ fn test_gc_object_various_value_types() {
 
 #[test]
 fn test_vm_heap_multiple_collections() {
-    let vm = VM::new();
+    let mut vm = VM::new();
 
     // Perform multiple GC cycles
     vm.collect_garbage();
@@ -738,7 +738,7 @@ fn test_gc_object_set_prototype_after_creation() {
 
 #[test]
 fn test_vm_heap_reset_stats() {
-    let vm = VM::new();
+    let mut vm = VM::new();
 
     // Do some GC operations
     vm.collect_garbage();
