@@ -4,6 +4,7 @@
 //! when speculation fails or guards are violated.
 
 use crate::compiled_code::CompiledCode;
+use bytecode_system::BytecodeChunk;
 use interpreter::ExecutionContext;
 
 /// Reason for deoptimization
@@ -74,9 +75,10 @@ impl Deoptimizer {
 
     /// Deoptimize from compiled code back to interpreter
     ///
-    /// Reconstructs interpreter execution context from the compiled code's
-    /// original bytecode.
-    pub fn deoptimize(&self, compiled: &CompiledCode) -> ExecutionContext {
+    /// Reconstructs interpreter execution context from the original bytecode.
+    /// The bytecode must be provided separately since CompiledCode now only
+    /// contains native code pointers.
+    pub fn deoptimize(&self, _compiled: &CompiledCode, bytecode: &BytecodeChunk) -> ExecutionContext {
         // Create a fresh execution context from the original bytecode
         // In a real implementation, we would:
         // 1. Save current compiled frame state
@@ -84,14 +86,14 @@ impl Deoptimizer {
         // 3. Reconstruct interpreter stack frames
         // 4. Set instruction pointer to correct bytecode offset
         // 5. Resume interpreter execution
-        let bytecode = compiled.bytecode().clone();
-        ExecutionContext::new(bytecode)
+        ExecutionContext::new(bytecode.clone())
     }
 
     /// Deoptimize with reason tracking
     pub fn deoptimize_with_reason(
         &mut self,
-        compiled: &CompiledCode,
+        _compiled: &CompiledCode,
+        bytecode: &BytecodeChunk,
         reason: DeoptReason,
         bytecode_offset: usize,
     ) -> ExecutionContext {
@@ -100,8 +102,7 @@ impl Deoptimizer {
         self.deopt_history.push(info);
 
         // Create interpreter context
-        let bytecode = compiled.bytecode().clone();
-        let mut context = ExecutionContext::new(bytecode);
+        let mut context = ExecutionContext::new(bytecode.clone());
 
         // Set instruction pointer to resume point
         context.instruction_pointer = bytecode_offset;
@@ -149,18 +150,21 @@ impl Default for Deoptimizer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::compiled_code::CompilationTier;
-    use crate::ir::IRFunction;
+    use crate::cranelift_backend::CraneliftBackend;
     use bytecode_system::{BytecodeChunk, Opcode};
 
-    fn create_test_compiled_code() -> CompiledCode {
+    fn create_test_bytecode() -> BytecodeChunk {
         let mut chunk = BytecodeChunk::new();
         chunk.emit(Opcode::LoadUndefined);
         chunk.emit(Opcode::Return);
         chunk.register_count = 3;
+        chunk
+    }
 
-        let ir = IRFunction::from_bytecode(&chunk);
-        CompiledCode::new(chunk, ir, CompilationTier::Optimized)
+    fn create_test_compiled_code(chunk: &BytecodeChunk) -> CompiledCode {
+        let mut backend = CraneliftBackend::new().unwrap();
+        let compiled_func = backend.compile_function(chunk).unwrap();
+        CompiledCode::new(compiled_func.code_ptr, compiled_func.code_size, vec![])
     }
 
     #[test]
@@ -185,9 +189,10 @@ mod tests {
     #[test]
     fn test_deoptimize() {
         let deopt = Deoptimizer::new();
-        let compiled = create_test_compiled_code();
+        let bytecode = create_test_bytecode();
+        let compiled = create_test_compiled_code(&bytecode);
 
-        let context = deopt.deoptimize(&compiled);
+        let context = deopt.deoptimize(&compiled, &bytecode);
         assert_eq!(context.instruction_pointer, 0);
         assert_eq!(context.registers.len(), 3);
     }
@@ -195,9 +200,11 @@ mod tests {
     #[test]
     fn test_deoptimize_with_reason() {
         let mut deopt = Deoptimizer::new();
-        let compiled = create_test_compiled_code();
+        let bytecode = create_test_bytecode();
+        let compiled = create_test_compiled_code(&bytecode);
 
-        let context = deopt.deoptimize_with_reason(&compiled, DeoptReason::TypeGuardFailure, 1);
+        let context =
+            deopt.deoptimize_with_reason(&compiled, &bytecode, DeoptReason::TypeGuardFailure, 1);
 
         assert_eq!(context.instruction_pointer, 1);
         assert_eq!(deopt.deopt_count(), 1);
@@ -207,27 +214,29 @@ mod tests {
     #[test]
     fn test_should_disable_optimization() {
         let mut deopt = Deoptimizer::with_max_count(3);
-        let compiled = create_test_compiled_code();
+        let bytecode = create_test_bytecode();
+        let compiled = create_test_compiled_code(&bytecode);
 
         assert!(!deopt.should_disable_optimization());
 
-        deopt.deoptimize_with_reason(&compiled, DeoptReason::TypeGuardFailure, 0);
+        deopt.deoptimize_with_reason(&compiled, &bytecode, DeoptReason::TypeGuardFailure, 0);
         assert!(!deopt.should_disable_optimization());
 
-        deopt.deoptimize_with_reason(&compiled, DeoptReason::ShapeMismatch, 0);
+        deopt.deoptimize_with_reason(&compiled, &bytecode, DeoptReason::ShapeMismatch, 0);
         assert!(!deopt.should_disable_optimization());
 
-        deopt.deoptimize_with_reason(&compiled, DeoptReason::BoundsCheckFailure, 0);
+        deopt.deoptimize_with_reason(&compiled, &bytecode, DeoptReason::BoundsCheckFailure, 0);
         assert!(deopt.should_disable_optimization());
     }
 
     #[test]
     fn test_clear_history() {
         let mut deopt = Deoptimizer::new();
-        let compiled = create_test_compiled_code();
+        let bytecode = create_test_bytecode();
+        let compiled = create_test_compiled_code(&bytecode);
 
-        deopt.deoptimize_with_reason(&compiled, DeoptReason::Explicit, 0);
-        deopt.deoptimize_with_reason(&compiled, DeoptReason::Explicit, 0);
+        deopt.deoptimize_with_reason(&compiled, &bytecode, DeoptReason::Explicit, 0);
+        deopt.deoptimize_with_reason(&compiled, &bytecode, DeoptReason::Explicit, 0);
 
         assert_eq!(deopt.deopt_count(), 2);
         deopt.clear_history();
@@ -237,15 +246,16 @@ mod tests {
     #[test]
     fn test_is_frequent_deopt_reason() {
         let mut deopt = Deoptimizer::new();
-        let compiled = create_test_compiled_code();
+        let bytecode = create_test_bytecode();
+        let compiled = create_test_compiled_code(&bytecode);
 
-        deopt.deoptimize_with_reason(&compiled, DeoptReason::TypeGuardFailure, 0);
+        deopt.deoptimize_with_reason(&compiled, &bytecode, DeoptReason::TypeGuardFailure, 0);
         assert!(!deopt.is_frequent_deopt_reason(&DeoptReason::TypeGuardFailure));
 
-        deopt.deoptimize_with_reason(&compiled, DeoptReason::TypeGuardFailure, 0);
+        deopt.deoptimize_with_reason(&compiled, &bytecode, DeoptReason::TypeGuardFailure, 0);
         assert!(!deopt.is_frequent_deopt_reason(&DeoptReason::TypeGuardFailure));
 
-        deopt.deoptimize_with_reason(&compiled, DeoptReason::TypeGuardFailure, 0);
+        deopt.deoptimize_with_reason(&compiled, &bytecode, DeoptReason::TypeGuardFailure, 0);
         assert!(deopt.is_frequent_deopt_reason(&DeoptReason::TypeGuardFailure));
 
         // Other reasons should not be frequent

@@ -50,11 +50,11 @@ fn compiled_code_has_required_fields() {
 
     let code = jit.compile(&chunk).unwrap();
 
-    // Test field existence (contract requirement)
-    let _code_ptr: *const u8 = code.code;
-    let _size: usize = code.size;
-    let _entry: *const () = code.entry_point;
-    let _osr: &Vec<OSREntry> = &code.osr_entries;
+    // Test public API methods (contract requirement)
+    let _code_ptr: *const u8 = code.code_ptr();
+    let _size: usize = code.size();
+    let _entry: *const () = code.entry_point();
+    let _osr: &[OSREntry] = code.osr_entries();
 }
 
 #[test]
@@ -81,7 +81,7 @@ fn osr_entry_has_required_fields() {
 
     let code = jit.compile(&chunk).unwrap();
 
-    if let Some(entry) = code.osr_entries.first() {
+    if let Some(entry) = code.osr_entries().first() {
         let _bytecode_offset: usize = entry.bytecode_offset;
         let _native_offset: usize = entry.native_offset;
         let _frame_mapping = &entry.frame_mapping;
@@ -108,5 +108,6 @@ fn deoptimizer_deoptimize_returns_execution_context() {
     let code = jit.compile(&chunk).unwrap();
     let deopt = Deoptimizer::new();
 
-    let _ctx: ExecutionContext = deopt.deoptimize(&code);
+    // Deoptimizer now requires bytecode to be provided separately
+    let _ctx: ExecutionContext = deopt.deoptimize(&code, &chunk);
 }

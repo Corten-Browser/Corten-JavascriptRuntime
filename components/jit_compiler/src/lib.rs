@@ -35,6 +35,7 @@
 pub mod baseline;
 pub mod codegen;
 pub mod compiled_code;
+pub mod cranelift_backend;
 pub mod deopt;
 pub mod ir;
 pub mod optimizing;
@@ -43,6 +44,7 @@ pub mod osr;
 // Re-export main types at crate root
 pub use baseline::BaselineJIT;
 pub use compiled_code::CompiledCode;
+pub use cranelift_backend::{CompiledFunction, CraneliftBackend};
 pub use deopt::Deoptimizer;
 pub use optimizing::OptimizingJIT;
 pub use osr::{FrameMapping, OSREntry};
