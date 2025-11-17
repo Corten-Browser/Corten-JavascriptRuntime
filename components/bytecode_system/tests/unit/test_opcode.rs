@@ -153,9 +153,12 @@ fn test_store_property_opcode() {
 
 #[test]
 fn test_create_closure_opcode() {
-    let op = Opcode::CreateClosure(3);
+    let op = Opcode::CreateClosure(3, vec![]);
     match op {
-        Opcode::CreateClosure(idx) => assert_eq!(idx, 3),
+        Opcode::CreateClosure(idx, upvalues) => {
+            assert_eq!(idx, 3);
+            assert!(upvalues.is_empty());
+        }
         _ => panic!("Expected CreateClosure"),
     }
 }

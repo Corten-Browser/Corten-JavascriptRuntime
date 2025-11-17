@@ -30,13 +30,19 @@
 pub mod call_frame;
 pub mod context;
 pub mod dispatch;
+pub mod gc_integration;
 pub mod inline_cache;
 pub mod profile;
+pub mod promise_integration;
+pub mod upvalue;
 pub mod vm;
 
 // Re-export main types at crate root
 pub use call_frame::CallFrame;
 pub use context::ExecutionContext;
+pub use gc_integration::{GCObject, VMHeap};
 pub use inline_cache::{InlineCache, ShapeId};
 pub use profile::{BranchOutcome, ProfileData, TypeInfo};
+pub use promise_integration::{PromiseConstructor, PromiseObject};
+pub use upvalue::{Closure, Upvalue, UpvalueHandle};
 pub use vm::VM;

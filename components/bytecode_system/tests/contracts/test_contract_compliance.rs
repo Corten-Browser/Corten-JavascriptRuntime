@@ -49,7 +49,7 @@ fn test_contract_opcode_variants() {
     let _ = Opcode::StoreProperty(String::new());
 
     // Functions
-    let _ = Opcode::CreateClosure(0);
+    let _ = Opcode::CreateClosure(0, vec![]);
     let _ = Opcode::Call(0);
 }
 

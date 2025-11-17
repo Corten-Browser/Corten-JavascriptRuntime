@@ -5,8 +5,8 @@
 //! - Exit compiled code back to interpreter
 //! - Frame reconstruction at transition points
 
+use crate::deopt::InterpreterState;
 use core_types::{ErrorKind, JsError};
-use interpreter::ExecutionContext;
 
 /// Frame mapping for OSR transitions
 ///
@@ -103,16 +103,16 @@ impl OSREntry {
 
     /// Enter compiled code at this OSR point
     ///
-    /// Transfers execution from interpreter context to compiled code.
+    /// Transfers execution from interpreter state to compiled code.
     /// This is a mock implementation that validates the transition.
-    pub fn enter_at(&self, context: &ExecutionContext) -> Result<(), JsError> {
-        // Validate that context matches expected state
-        if context.instruction_pointer > self.bytecode_offset {
+    pub fn enter_at(&self, state: &InterpreterState) -> Result<(), JsError> {
+        // Validate that state matches expected state
+        if state.instruction_pointer > self.bytecode_offset {
             return Err(JsError {
                 kind: ErrorKind::InternalError,
                 message: format!(
-                    "OSR entry at {} but context at {}",
-                    self.bytecode_offset, context.instruction_pointer
+                    "OSR entry at {} but state at {}",
+                    self.bytecode_offset, state.instruction_pointer
                 ),
                 stack: vec![],
                 source_position: None,
@@ -121,7 +121,7 @@ impl OSREntry {
 
         // Validate frame mapping is compatible
         if !self.frame_mapping.register_map.is_empty()
-            && context.registers.len() > self.frame_mapping.register_map.len()
+            && state.registers.len() > self.frame_mapping.register_map.len()
         {
             return Err(JsError {
                 kind: ErrorKind::InternalError,
@@ -208,9 +208,9 @@ mod tests {
     fn test_osr_entry_enter_at_success() {
         let entry = OSREntry::new(0, 0);
         let chunk = BytecodeChunk::new();
-        let context = ExecutionContext::new(chunk);
+        let state = InterpreterState::new(chunk);
 
-        let result = entry.enter_at(&context);
+        let result = entry.enter_at(&state);
         assert!(result.is_ok());
     }
 
@@ -218,10 +218,10 @@ mod tests {
     fn test_osr_entry_enter_at_invalid_position() {
         let entry = OSREntry::new(0, 0);
         let chunk = BytecodeChunk::new();
-        let mut context = ExecutionContext::new(chunk);
-        context.instruction_pointer = 10; // Past the OSR entry point
+        let mut state = InterpreterState::new(chunk);
+        state.instruction_pointer = 10; // Past the OSR entry point
 
-        let result = entry.enter_at(&context);
+        let result = entry.enter_at(&state);
         assert!(result.is_err());
     }
 }

@@ -4,7 +4,7 @@
 //! enabling optimization passes.
 
 use bytecode_system::{BytecodeChunk, Opcode};
-use interpreter::TypeInfo;
+use core_types::TypeInfo;
 
 /// IR operation types
 #[derive(Debug, Clone, PartialEq)]
@@ -35,6 +35,8 @@ pub enum IROpcode {
     Mod(Option<TypeInfo>),
     /// Negate value
     Neg(Option<TypeInfo>),
+    /// Logical NOT
+    Not,
     /// Equality check
     Equal,
     /// Strict equality check
@@ -69,6 +71,12 @@ pub enum IROpcode {
     LoadGlobal(String),
     /// Store global variable
     StoreGlobal(String),
+    /// Load upvalue (captured variable)
+    LoadUpvalue(u32),
+    /// Store upvalue (captured variable)
+    StoreUpvalue(u32),
+    /// Close upvalue
+    CloseUpvalue,
     /// Create closure
     CreateClosure(usize),
     /// Call function
@@ -77,6 +85,28 @@ pub enum IROpcode {
     TypeGuard(TypeInfo),
     /// Deoptimization point
     DeoptPoint(usize),
+
+    // Exception handling
+    /// Throw exception
+    Throw,
+    /// Push try handler with catch offset
+    PushTry(usize),
+    /// Pop try handler
+    PopTry,
+    /// Push finally handler offset
+    PushFinally(usize),
+    /// Pop finally handler
+    PopFinally,
+    /// Pop value from stack
+    Pop,
+    /// Duplicate top value on stack
+    Dup,
+
+    // Async operations
+    /// Await a promise
+    Await,
+    /// Create async function
+    CreateAsyncFunction(usize),
 }
 
 /// Single IR instruction
@@ -142,6 +172,7 @@ impl IRFunction {
                 Opcode::Div => IROpcode::Div(None),
                 Opcode::Mod => IROpcode::Mod(None),
                 Opcode::Neg => IROpcode::Neg(None),
+                Opcode::Not => IROpcode::Not,
                 Opcode::Equal => IROpcode::Equal,
                 Opcode::StrictEqual => IROpcode::StrictEqual,
                 Opcode::NotEqual => IROpcode::NotEqual,
@@ -157,8 +188,22 @@ impl IRFunction {
                 Opcode::CreateObject => IROpcode::CreateObject,
                 Opcode::LoadProperty(name) => IROpcode::LoadProperty(name.clone()),
                 Opcode::StoreProperty(name) => IROpcode::StoreProperty(name.clone()),
-                Opcode::CreateClosure(idx) => IROpcode::CreateClosure(*idx),
+                Opcode::LoadUpvalue(idx) => IROpcode::LoadUpvalue(*idx),
+                Opcode::StoreUpvalue(idx) => IROpcode::StoreUpvalue(*idx),
+                Opcode::CloseUpvalue => IROpcode::CloseUpvalue,
+                Opcode::CreateClosure(idx, _) => IROpcode::CreateClosure(*idx),
                 Opcode::Call(argc) => IROpcode::Call(*argc),
+                // Exception handling
+                Opcode::Throw => IROpcode::Throw,
+                Opcode::PushTry(offset) => IROpcode::PushTry(*offset),
+                Opcode::PopTry => IROpcode::PopTry,
+                Opcode::PushFinally(offset) => IROpcode::PushFinally(*offset),
+                Opcode::PopFinally => IROpcode::PopFinally,
+                Opcode::Pop => IROpcode::Pop,
+                Opcode::Dup => IROpcode::Dup,
+                // Async operations
+                Opcode::Await => IROpcode::Await,
+                Opcode::CreateAsyncFunction(idx, _) => IROpcode::CreateAsyncFunction(*idx),
             };
 
             ir_func.instructions.push(IRInstruction::new(ir_op, offset));

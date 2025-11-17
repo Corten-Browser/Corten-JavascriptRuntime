@@ -6,6 +6,22 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct RegisterId(pub u32);
 
+/// Descriptor for a captured variable (upvalue)
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct UpvalueDescriptor {
+    /// true if directly in parent scope, false if in grandparent+
+    pub is_local: bool,
+    /// Register index (if local) or upvalue index (if not)
+    pub index: u32,
+}
+
+impl UpvalueDescriptor {
+    /// Create a new upvalue descriptor
+    pub fn new(is_local: bool, index: u32) -> Self {
+        Self { is_local, index }
+    }
+}
+
 /// Bytecode opcodes for JavaScript execution
 #[derive(Debug, Clone, PartialEq)]
 pub enum Opcode {
@@ -31,6 +47,14 @@ pub enum Opcode {
     /// Store to local variable in register
     StoreLocal(RegisterId),
 
+    // Upvalue operations for closures
+    /// Load captured variable by upvalue index
+    LoadUpvalue(u32),
+    /// Store to captured variable
+    StoreUpvalue(u32),
+    /// Close over local variable (move from stack to heap)
+    CloseUpvalue,
+
     // Arithmetic operations
     /// Add top two stack values
     Add,
@@ -44,6 +68,8 @@ pub enum Opcode {
     Mod,
     /// Negate top value
     Neg,
+    /// Logical NOT (invert truthiness)
+    Not,
 
     // Comparison operations
     /// Loose equality (==)
@@ -82,10 +108,32 @@ pub enum Opcode {
     StoreProperty(String),
 
     // Function operations
-    /// Create closure from function at index
-    CreateClosure(usize),
+    /// Create closure from function at index with captured variables
+    CreateClosure(usize, Vec<UpvalueDescriptor>),
     /// Call function with given number of arguments
     Call(u8),
+
+    // Exception handling
+    /// Pop value from stack and throw as exception
+    Throw,
+    /// Push exception handler (catch block offset)
+    PushTry(usize),
+    /// Pop exception handler from try stack
+    PopTry,
+    /// Push finally block offset onto current handler
+    PushFinally(usize),
+    /// Pop finally handler and re-throw if exception pending
+    PopFinally,
+    /// Pop value from stack (for discarding exception when not needed)
+    Pop,
+    /// Duplicate top value on stack
+    Dup,
+
+    // Async operations
+    /// Await a promise - suspend until promise resolves
+    Await,
+    /// Create async function wrapper from function at index
+    CreateAsyncFunction(usize, Vec<UpvalueDescriptor>),
 }
 
 impl Opcode {
@@ -93,13 +141,17 @@ impl Opcode {
     pub fn is_terminator(&self) -> bool {
         matches!(
             self,
-            Opcode::Return | Opcode::Jump(_) | Opcode::JumpIfTrue(_) | Opcode::JumpIfFalse(_)
+            Opcode::Return
+                | Opcode::Jump(_)
+                | Opcode::JumpIfTrue(_)
+                | Opcode::JumpIfFalse(_)
+                | Opcode::Throw
         )
     }
 
     /// Check if this opcode is an unconditional terminator
     pub fn is_unconditional_terminator(&self) -> bool {
-        matches!(self, Opcode::Return | Opcode::Jump(_))
+        matches!(self, Opcode::Return | Opcode::Jump(_) | Opcode::Throw)
     }
 
     /// Check if this opcode is a binary arithmetic operation

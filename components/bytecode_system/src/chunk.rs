@@ -3,7 +3,7 @@
 //! Contains instructions, constants, and metadata for execution.
 
 use crate::instruction::{Instruction, SourcePosition};
-use crate::opcode::{Opcode, RegisterId};
+use crate::opcode::{Opcode, RegisterId, UpvalueDescriptor};
 use crate::optimizer::Optimizer;
 use crate::value::Value;
 
@@ -16,6 +16,8 @@ pub struct BytecodeChunk {
     pub constants: Vec<Value>,
     /// Number of registers needed for execution
     pub register_count: u32,
+    /// Nested function bytecode chunks (for closures)
+    pub nested_functions: Vec<BytecodeChunk>,
 }
 
 impl BytecodeChunk {
@@ -25,7 +27,20 @@ impl BytecodeChunk {
             instructions: Vec::new(),
             constants: Vec::new(),
             register_count: 0,
+            nested_functions: Vec::new(),
         }
+    }
+
+    /// Get a reference to nested functions
+    pub fn nested_functions(&self) -> &[BytecodeChunk] {
+        &self.nested_functions
+    }
+
+    /// Add a nested function and return its index
+    pub fn add_nested_function(&mut self, chunk: BytecodeChunk) -> usize {
+        let idx = self.nested_functions.len();
+        self.nested_functions.push(chunk);
+        idx
     }
 
     /// Emit an instruction without source position
@@ -153,6 +168,7 @@ impl BytecodeChunk {
             instructions,
             constants,
             register_count,
+            nested_functions: Vec::new(), // TODO: Serialize nested functions
         })
     }
 
@@ -209,6 +225,7 @@ impl BytecodeChunk {
             Opcode::Div => (12, vec![]),
             Opcode::Mod => (13, vec![]),
             Opcode::Neg => (14, vec![]),
+            Opcode::Not => (44, vec![]),
             Opcode::Equal => (15, vec![]),
             Opcode::StrictEqual => (16, vec![]),
             Opcode::NotEqual => (17, vec![]),
@@ -234,8 +251,40 @@ impl BytecodeChunk {
                 data.extend_from_slice(s_bytes);
                 (29, data)
             }
-            Opcode::CreateClosure(idx) => (30, (*idx as u32).to_le_bytes().to_vec()),
+            Opcode::CreateClosure(idx, upvalues) => {
+                let mut data = (*idx as u32).to_le_bytes().to_vec();
+                // Encode upvalue count
+                data.extend_from_slice(&(upvalues.len() as u32).to_le_bytes());
+                // Encode each upvalue descriptor
+                for upvalue in upvalues {
+                    data.push(if upvalue.is_local { 1 } else { 0 });
+                    data.extend_from_slice(&upvalue.index.to_le_bytes());
+                }
+                (30, data)
+            }
             Opcode::Call(argc) => (31, vec![*argc]),
+            Opcode::LoadUpvalue(idx) => (32, idx.to_le_bytes().to_vec()),
+            Opcode::StoreUpvalue(idx) => (33, idx.to_le_bytes().to_vec()),
+            Opcode::CloseUpvalue => (34, vec![]),
+            Opcode::Throw => (35, vec![]),
+            Opcode::PushTry(offset) => (36, (*offset as u32).to_le_bytes().to_vec()),
+            Opcode::PopTry => (37, vec![]),
+            Opcode::PushFinally(offset) => (38, (*offset as u32).to_le_bytes().to_vec()),
+            Opcode::PopFinally => (39, vec![]),
+            Opcode::Pop => (40, vec![]),
+            Opcode::Dup => (43, vec![]),
+            Opcode::Await => (41, vec![]),
+            Opcode::CreateAsyncFunction(idx, upvalues) => {
+                let mut data = (*idx as u32).to_le_bytes().to_vec();
+                // Encode upvalue count
+                data.extend_from_slice(&(upvalues.len() as u32).to_le_bytes());
+                // Encode each upvalue descriptor
+                for upvalue in upvalues {
+                    data.push(if upvalue.is_local { 1 } else { 0 });
+                    data.extend_from_slice(&upvalue.index.to_le_bytes());
+                }
+                (42, data)
+            }
         }
     }
 
@@ -337,6 +386,7 @@ impl BytecodeChunk {
             12 => Opcode::Div,
             13 => Opcode::Mod,
             14 => Opcode::Neg,
+            44 => Opcode::Not,
             15 => Opcode::Equal,
             16 => Opcode::StrictEqual,
             17 => Opcode::NotEqual,
@@ -387,13 +437,72 @@ impl BytecodeChunk {
                 let idx =
                     u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap()) as usize;
                 offset += 4;
-                Opcode::CreateClosure(idx)
+                let upvalue_count =
+                    u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap()) as usize;
+                offset += 4;
+                let mut upvalues = Vec::with_capacity(upvalue_count);
+                for _ in 0..upvalue_count {
+                    let is_local = bytes[offset] != 0;
+                    offset += 1;
+                    let index =
+                        u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap());
+                    offset += 4;
+                    upvalues.push(UpvalueDescriptor::new(is_local, index));
+                }
+                Opcode::CreateClosure(idx, upvalues)
             }
             31 => {
                 let argc = bytes[offset];
                 offset += 1;
                 Opcode::Call(argc)
             }
+            32 => {
+                let idx = u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap());
+                offset += 4;
+                Opcode::LoadUpvalue(idx)
+            }
+            33 => {
+                let idx = u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap());
+                offset += 4;
+                Opcode::StoreUpvalue(idx)
+            }
+            34 => Opcode::CloseUpvalue,
+            35 => Opcode::Throw,
+            36 => {
+                let off =
+                    u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap()) as usize;
+                offset += 4;
+                Opcode::PushTry(off)
+            }
+            37 => Opcode::PopTry,
+            38 => {
+                let off =
+                    u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap()) as usize;
+                offset += 4;
+                Opcode::PushFinally(off)
+            }
+            39 => Opcode::PopFinally,
+            40 => Opcode::Pop,
+            41 => Opcode::Await,
+            42 => {
+                let idx =
+                    u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap()) as usize;
+                offset += 4;
+                let upvalue_count =
+                    u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap()) as usize;
+                offset += 4;
+                let mut upvalues = Vec::with_capacity(upvalue_count);
+                for _ in 0..upvalue_count {
+                    let is_local = bytes[offset] != 0;
+                    offset += 1;
+                    let index =
+                        u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap());
+                    offset += 4;
+                    upvalues.push(UpvalueDescriptor::new(is_local, index));
+                }
+                Opcode::CreateAsyncFunction(idx, upvalues)
+            }
+            43 => Opcode::Dup,
             _ => return Err(format!("Unknown opcode tag: {}", tag)),
         };
 

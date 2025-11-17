@@ -3,9 +3,10 @@
 //! These tests verify that the public API matches the contract in contracts/jit_compiler.yaml
 
 use bytecode_system::{BytecodeChunk, Opcode};
-use core_types::{JsError, Value};
-use interpreter::{ExecutionContext, ProfileData};
-use jit_compiler::{BaselineJIT, CompiledCode, Deoptimizer, OSREntry, OptimizingJIT};
+use core_types::{JsError, ProfileData, Value};
+use jit_compiler::{
+    BaselineJIT, CompiledCode, Deoptimizer, InterpreterState, OSREntry, OptimizingJIT,
+};
 
 #[test]
 fn baseline_jit_has_new_constructor() {
@@ -89,18 +90,18 @@ fn osr_entry_has_required_fields() {
 }
 
 #[test]
-fn osr_entry_enter_at_takes_context_returns_result() {
+fn osr_entry_enter_at_takes_state_returns_result() {
     let osr_entry = OSREntry::new(0, 0);
     let chunk = BytecodeChunk::new();
-    let context = ExecutionContext::new(chunk);
+    let state = InterpreterState::new(chunk);
 
-    let result: Result<(), JsError> = osr_entry.enter_at(&context);
+    let result: Result<(), JsError> = osr_entry.enter_at(&state);
     // OSR entry might fail if not properly set up, that's OK for contract test
     let _ = result;
 }
 
 #[test]
-fn deoptimizer_deoptimize_returns_execution_context() {
+fn deoptimizer_deoptimize_returns_interpreter_state() {
     let mut jit = BaselineJIT::new();
     let mut chunk = BytecodeChunk::new();
     chunk.emit(Opcode::Return);
@@ -109,5 +110,5 @@ fn deoptimizer_deoptimize_returns_execution_context() {
     let deopt = Deoptimizer::new();
 
     // Deoptimizer now requires bytecode to be provided separately
-    let _ctx: ExecutionContext = deopt.deoptimize(&code, &chunk);
+    let _state: InterpreterState = deopt.deoptimize(&code, &chunk);
 }
