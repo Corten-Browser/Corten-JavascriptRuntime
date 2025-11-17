@@ -15,7 +15,7 @@ pub mod write_barrier;
 
 // Re-export main types
 pub use gc::*;
-pub use heap::Heap;
+pub use heap::{GcStats, Heap};
 pub use hidden_class::HiddenClass;
 pub use object::JSObject;
-pub use write_barrier::{write_barrier, Object};
+pub use write_barrier::{write_barrier, CardTable, Object, RememberedSet};
