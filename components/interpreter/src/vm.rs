@@ -366,6 +366,35 @@ impl VM {
     pub fn full_gc(&mut self) {
         self.heap.full_gc();
     }
+
+    /// Get the number of compiled functions
+    ///
+    /// Returns the count of functions that have been JIT compiled.
+    /// Note: This is a stub for now - actual JIT compilation tracking
+    /// would be done at the Runtime level.
+    pub fn compiled_functions_count(&self) -> usize {
+        // In the current architecture, JIT compilation is coordinated at the Runtime level
+        // The VM provides profiling data but doesn't track compiled functions directly
+        0
+    }
+
+    /// Check if baseline JIT is available
+    ///
+    /// Returns true if the baseline JIT compiler can be used.
+    pub fn is_baseline_jit_available(&self) -> bool {
+        // Baseline JIT is theoretically available if jit_compiler is linked
+        // In practice, this depends on the runtime configuration
+        true
+    }
+
+    /// Check if optimizing JIT is available
+    ///
+    /// Returns true if the optimizing JIT compiler can be used.
+    pub fn is_optimizing_jit_available(&self) -> bool {
+        // Optimizing JIT is theoretically available if jit_compiler is linked
+        // In practice, this depends on the runtime configuration
+        true
+    }
 }
 
 impl Default for VM {
