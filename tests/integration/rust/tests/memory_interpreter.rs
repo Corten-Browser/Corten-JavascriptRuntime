@@ -15,14 +15,23 @@ fn test_heap_allocation() {
     let ptr = heap.allocate(128);
     assert!(!ptr.is_null(), "Heap allocation should not return null");
 
-    // Verify heap has both generations
+    // Verify young generation has used space after allocation
     assert!(
         heap.young_generation_size() > 0,
-        "Young generation should have size"
+        "Young generation should have used space after allocation"
     );
+
+    // Old generation starts empty (objects are promoted after GC cycles)
+    assert_eq!(
+        heap.old_generation_size(),
+        0,
+        "Old generation should be empty initially"
+    );
+
+    // Verify heap capacity is configured
     assert!(
-        heap.old_generation_size() > 0,
-        "Old generation should have size"
+        heap.young_generation_capacity() > 0,
+        "Young generation should have capacity"
     );
 }
 
@@ -144,20 +153,32 @@ fn test_jsobject_different_value_types() {
 fn test_heap_generation_sizes() {
     let heap = Heap::new();
 
-    let young_size = heap.young_generation_size();
+    let young_capacity = heap.young_generation_capacity();
+    let young_used = heap.young_generation_size();
     let old_size = heap.old_generation_size();
 
-    // Old generation should be larger than young generation
+    // Young generation should have capacity but no used space initially
     assert!(
-        old_size > young_size,
-        "Old generation ({}) should be larger than young generation ({})",
-        old_size,
-        young_size
+        young_capacity > 0,
+        "Young generation should have positive capacity"
+    );
+    assert_eq!(
+        young_used, 0,
+        "Young generation should have no used space initially"
     );
 
-    // Both should have reasonable sizes
-    assert!(young_size > 0, "Young generation should have positive size");
-    assert!(old_size > 0, "Old generation should have positive size");
+    // Old generation starts empty (no objects promoted yet)
+    assert_eq!(
+        old_size, 0,
+        "Old generation should be empty initially"
+    );
+
+    // Verify default configuration (4MB young gen)
+    assert_eq!(
+        young_capacity,
+        4 * 1024 * 1024,
+        "Default young generation capacity should be 4MB"
+    );
 }
 
 /// Test: Property overwriting
