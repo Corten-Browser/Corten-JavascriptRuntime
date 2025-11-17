@@ -1,9 +1,22 @@
 //! Bytecode generation from AST
 
 use crate::ast::*;
-use bytecode_system::{BytecodeChunk, Opcode, RegisterId, Value as BytecodeValue};
+use bytecode_system::{
+    BytecodeChunk, Opcode, RegisterId, UpvalueDescriptor, Value as BytecodeValue,
+};
 use core_types::{ErrorKind, JsError};
 use std::collections::HashMap;
+
+/// Result of resolving a variable name
+#[derive(Debug, Clone)]
+enum VarResolution {
+    /// Variable is a local in the current scope
+    Local(RegisterId),
+    /// Variable is captured from an outer scope
+    Upvalue(u32),
+    /// Variable is a global
+    Global,
+}
 
 /// Bytecode generator that converts AST to bytecode
 pub struct BytecodeGenerator {
@@ -13,6 +26,12 @@ pub struct BytecodeGenerator {
     loop_starts: Vec<usize>,
     loop_exits: Vec<Vec<usize>>,
     last_was_expression: bool,
+
+    // For closure support
+    /// Parent scope (for nested functions)
+    enclosing: Option<Box<BytecodeGenerator>>,
+    /// Captured variables from outer scopes
+    upvalues: Vec<UpvalueDescriptor>,
 }
 
 impl BytecodeGenerator {
@@ -25,7 +44,75 @@ impl BytecodeGenerator {
             loop_starts: Vec::new(),
             loop_exits: Vec::new(),
             last_was_expression: false,
+            enclosing: None,
+            upvalues: Vec::new(),
         }
+    }
+
+    /// Create a new bytecode generator with an enclosing scope
+    fn with_enclosing(enclosing: Box<BytecodeGenerator>) -> Self {
+        Self {
+            chunk: BytecodeChunk::new(),
+            locals: HashMap::new(),
+            next_register: 0,
+            loop_starts: Vec::new(),
+            loop_exits: Vec::new(),
+            last_was_expression: false,
+            enclosing: Some(enclosing),
+            upvalues: Vec::new(),
+        }
+    }
+
+    /// Resolve a variable name to its location (local, upvalue, or global)
+    fn resolve_variable(&mut self, name: &str) -> VarResolution {
+        // Check local scope first
+        if let Some(&reg) = self.locals.get(name) {
+            return VarResolution::Local(reg);
+        }
+
+        // Check enclosing scopes (for closures)
+        if let Some(ref mut enclosing) = self.enclosing {
+            match enclosing.resolve_variable(name) {
+                VarResolution::Local(reg) => {
+                    // Capture from parent - it's a local in parent scope
+                    let upvalue_idx = self.add_upvalue(UpvalueDescriptor {
+                        is_local: true,
+                        index: reg.0,
+                    });
+                    return VarResolution::Upvalue(upvalue_idx);
+                }
+                VarResolution::Upvalue(idx) => {
+                    // Capture from grandparent+ - it's already an upvalue in parent
+                    let upvalue_idx = self.add_upvalue(UpvalueDescriptor {
+                        is_local: false,
+                        index: idx,
+                    });
+                    return VarResolution::Upvalue(upvalue_idx);
+                }
+                VarResolution::Global => {}
+            }
+        }
+
+        VarResolution::Global
+    }
+
+    /// Add an upvalue descriptor and return its index
+    fn add_upvalue(&mut self, descriptor: UpvalueDescriptor) -> u32 {
+        // Check if already captured
+        for (i, uv) in self.upvalues.iter().enumerate() {
+            if uv == &descriptor {
+                return i as u32;
+            }
+        }
+        // Add new upvalue
+        let idx = self.upvalues.len() as u32;
+        self.upvalues.push(descriptor);
+        idx
+    }
+
+    /// Get the captured upvalues for this function
+    pub fn get_upvalues(&self) -> Vec<UpvalueDescriptor> {
+        self.upvalues.clone()
     }
 
     /// Generate bytecode from AST
@@ -94,8 +181,10 @@ impl BytecodeGenerator {
             Statement::FunctionDeclaration {
                 name, params, body, ..
             } => {
-                // Create function bytecode
-                let mut func_gen = BytecodeGenerator::new();
+                // Create function bytecode with enclosing scope for closure support
+                // We need to temporarily take ownership of self to pass it as enclosing
+                let current_gen = std::mem::replace(self, BytecodeGenerator::new());
+                let mut func_gen = BytecodeGenerator::with_enclosing(Box::new(current_gen));
 
                 // Set up parameters as locals
                 for param in params {
@@ -123,12 +212,17 @@ impl BytecodeGenerator {
 
                 func_gen.chunk.register_count = func_gen.next_register;
 
+                // Get the upvalues captured by this function
+                let upvalues = func_gen.get_upvalues();
+
+                // Restore the outer generator from the enclosing scope
+                *self = *func_gen.enclosing.take().unwrap();
+
                 // Store function index (simplified - real impl would store function metadata)
-                // For now, we just emit CreateClosure with a placeholder index
                 let func_idx = self.chunk.constants.len();
 
-                // Create closure and store
-                self.chunk.emit(Opcode::CreateClosure(func_idx));
+                // Create closure with upvalue descriptors
+                self.chunk.emit(Opcode::CreateClosure(func_idx, upvalues));
                 let reg = self.allocate_register();
                 self.chunk.emit(Opcode::StoreLocal(reg));
                 self.locals.insert(name.clone(), reg);
@@ -327,10 +421,16 @@ impl BytecodeGenerator {
     fn visit_expression(&mut self, expr: &Expression) -> Result<(), JsError> {
         match expr {
             Expression::Identifier { name, .. } => {
-                if let Some(&reg) = self.locals.get(name) {
-                    self.chunk.emit(Opcode::LoadLocal(reg));
-                } else {
-                    self.chunk.emit(Opcode::LoadGlobal(name.clone()));
+                match self.resolve_variable(name) {
+                    VarResolution::Local(reg) => {
+                        self.chunk.emit(Opcode::LoadLocal(reg));
+                    }
+                    VarResolution::Upvalue(idx) => {
+                        self.chunk.emit(Opcode::LoadUpvalue(idx));
+                    }
+                    VarResolution::Global => {
+                        self.chunk.emit(Opcode::LoadGlobal(name.clone()));
+                    }
                 }
             }
 
@@ -487,10 +587,16 @@ impl BytecodeGenerator {
 
                 match left {
                     AssignmentTarget::Identifier(name) => {
-                        if let Some(&reg) = self.locals.get(name) {
-                            self.chunk.emit(Opcode::StoreLocal(reg));
-                        } else {
-                            self.chunk.emit(Opcode::StoreGlobal(name.clone()));
+                        match self.resolve_variable(name) {
+                            VarResolution::Local(reg) => {
+                                self.chunk.emit(Opcode::StoreLocal(reg));
+                            }
+                            VarResolution::Upvalue(idx) => {
+                                self.chunk.emit(Opcode::StoreUpvalue(idx));
+                            }
+                            VarResolution::Global => {
+                                self.chunk.emit(Opcode::StoreGlobal(name.clone()));
+                            }
                         }
                     }
                     AssignmentTarget::Member(member_expr) => {
@@ -604,7 +710,9 @@ impl BytecodeGenerator {
             }
 
             Expression::ArrowFunctionExpression { params, body, .. } => {
-                let mut func_gen = BytecodeGenerator::new();
+                // Create function bytecode with enclosing scope for closure support
+                let current_gen = std::mem::replace(self, BytecodeGenerator::new());
+                let mut func_gen = BytecodeGenerator::with_enclosing(Box::new(current_gen));
 
                 for param in params {
                     if let Pattern::Identifier(name) = param {
@@ -636,16 +744,24 @@ impl BytecodeGenerator {
 
                 func_gen.chunk.register_count = func_gen.next_register;
 
+                // Get the upvalues captured by this function
+                let upvalues = func_gen.get_upvalues();
+
+                // Restore the outer generator
+                *self = *func_gen.enclosing.take().unwrap();
+
                 // Store function (simplified - use placeholder index)
                 let func_idx = self.chunk.constants.len();
 
-                self.chunk.emit(Opcode::CreateClosure(func_idx));
+                self.chunk.emit(Opcode::CreateClosure(func_idx, upvalues));
             }
 
             Expression::FunctionExpression {
                 name, params, body, ..
             } => {
-                let mut func_gen = BytecodeGenerator::new();
+                // Create function bytecode with enclosing scope for closure support
+                let current_gen = std::mem::replace(self, BytecodeGenerator::new());
+                let mut func_gen = BytecodeGenerator::with_enclosing(Box::new(current_gen));
 
                 if let Some(n) = name {
                     let reg = func_gen.allocate_register();
@@ -675,10 +791,16 @@ impl BytecodeGenerator {
 
                 func_gen.chunk.register_count = func_gen.next_register;
 
+                // Get the upvalues captured by this function
+                let upvalues = func_gen.get_upvalues();
+
+                // Restore the outer generator
+                *self = *func_gen.enclosing.take().unwrap();
+
                 // Store function (simplified - use placeholder index)
                 let func_idx = self.chunk.constants.len();
 
-                self.chunk.emit(Opcode::CreateClosure(func_idx));
+                self.chunk.emit(Opcode::CreateClosure(func_idx, upvalues));
             }
 
             Expression::ThisExpression { .. } => {

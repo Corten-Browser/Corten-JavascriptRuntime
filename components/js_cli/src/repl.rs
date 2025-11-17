@@ -199,6 +199,8 @@ fn format_value(value: &core_types::Value) -> String {
             }
         }
         core_types::Value::HeapObject(_) => "[Object]".to_string(),
+        core_types::Value::NativeObject(_) => "[native object]".to_string(),
+        core_types::Value::NativeFunction(name) => format!("[Function: {}]", name),
     }
 }
 

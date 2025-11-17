@@ -151,9 +151,9 @@ fn test_simple_function_call() {
     let two_idx = main.add_constant(BcValue::Number(2.0));
     let three_idx = main.add_constant(BcValue::Number(3.0));
 
+    main.emit(Opcode::CreateClosure(fn_idx, vec![])); // push function first
     main.emit(Opcode::LoadConstant(two_idx)); // arg 1: 2
     main.emit(Opcode::LoadConstant(three_idx)); // arg 2: 3
-    main.emit(Opcode::CreateClosure(fn_idx)); // push function
     main.emit(Opcode::Call(2)); // call with 2 args
     main.emit(Opcode::Return); // return result
 
@@ -169,7 +169,7 @@ fn test_function_with_no_arguments() {
     let fn_idx = vm.register_function(void_fn);
 
     let mut main = BytecodeChunk::new();
-    main.emit(Opcode::CreateClosure(fn_idx));
+    main.emit(Opcode::CreateClosure(fn_idx, vec![]));
     main.emit(Opcode::Call(0));
     main.emit(Opcode::Return);
 
@@ -185,7 +185,7 @@ fn test_function_returns_constant() {
     let fn_idx = vm.register_function(const_fn);
 
     let mut main = BytecodeChunk::new();
-    main.emit(Opcode::CreateClosure(fn_idx));
+    main.emit(Opcode::CreateClosure(fn_idx, vec![]));
     main.emit(Opcode::Call(0));
     main.emit(Opcode::Return);
 
@@ -211,19 +211,19 @@ fn test_nested_function_calls() {
     let four = main.add_constant(BcValue::Number(4.0));
 
     // First inner call: add(1, 2)
+    main.emit(Opcode::CreateClosure(add_idx, vec![]));
     main.emit(Opcode::LoadConstant(one));
     main.emit(Opcode::LoadConstant(two));
-    main.emit(Opcode::CreateClosure(add_idx));
     main.emit(Opcode::Call(2));
 
     // Second inner call: add(3, 4)
+    main.emit(Opcode::CreateClosure(add_idx, vec![]));
     main.emit(Opcode::LoadConstant(three));
     main.emit(Opcode::LoadConstant(four));
-    main.emit(Opcode::CreateClosure(add_idx));
     main.emit(Opcode::Call(2));
 
     // Outer call: add(result1, result2)
-    main.emit(Opcode::CreateClosure(add_idx));
+    main.emit(Opcode::CreateClosure(add_idx, vec![]));
     main.emit(Opcode::Call(2));
 
     main.emit(Opcode::Return);
@@ -243,8 +243,8 @@ fn test_iife_immediate_invocation() {
     let mut main = BytecodeChunk::new();
     let ten_idx = main.add_constant(BcValue::Number(10.0));
 
+    main.emit(Opcode::CreateClosure(fn_idx, vec![])); // create function first
     main.emit(Opcode::LoadConstant(ten_idx)); // arg: 10
-    main.emit(Opcode::CreateClosure(fn_idx)); // create function
     main.emit(Opcode::Call(1)); // call immediately
     main.emit(Opcode::Return);
 
@@ -265,8 +265,8 @@ fn test_factorial_base_case() {
     let mut main = BytecodeChunk::new();
     let one_idx = main.add_constant(BcValue::Number(1.0));
 
+    main.emit(Opcode::CreateClosure(fn_idx, vec![])); // load factorial first
     main.emit(Opcode::LoadConstant(one_idx)); // arg: 1
-    main.emit(Opcode::CreateClosure(fn_idx)); // load factorial
     main.emit(Opcode::Call(1));
     main.emit(Opcode::Return);
 
@@ -287,8 +287,8 @@ fn test_factorial_recursive() {
     let mut main = BytecodeChunk::new();
     let five_idx = main.add_constant(BcValue::Number(5.0));
 
+    main.emit(Opcode::CreateClosure(fn_idx, vec![])); // function first
     main.emit(Opcode::LoadConstant(five_idx)); // arg: 5
-    main.emit(Opcode::CreateClosure(fn_idx));
     main.emit(Opcode::Call(1));
     main.emit(Opcode::Return);
 
@@ -306,8 +306,8 @@ fn test_identity_function() {
     let mut main = BytecodeChunk::new();
     let val_idx = main.add_constant(BcValue::Number(999.0));
 
+    main.emit(Opcode::CreateClosure(fn_idx, vec![])); // function first
     main.emit(Opcode::LoadConstant(val_idx));
-    main.emit(Opcode::CreateClosure(fn_idx));
     main.emit(Opcode::Call(1));
     main.emit(Opcode::Return);
 
@@ -329,10 +329,10 @@ fn test_call_with_extra_arguments() {
     let three_idx = main.add_constant(BcValue::Number(3.0));
 
     // Call with 3 arguments, function only uses first
+    main.emit(Opcode::CreateClosure(fn_idx, vec![])); // function first
     main.emit(Opcode::LoadConstant(one_idx));
     main.emit(Opcode::LoadConstant(two_idx));
     main.emit(Opcode::LoadConstant(three_idx));
-    main.emit(Opcode::CreateClosure(fn_idx));
     main.emit(Opcode::Call(3));
     main.emit(Opcode::Return);
 
@@ -352,8 +352,8 @@ fn test_call_with_missing_arguments() {
     let one_idx = main.add_constant(BcValue::Number(1.0));
 
     // Call with 1 argument, function expects 2
+    main.emit(Opcode::CreateClosure(fn_idx, vec![])); // function first
     main.emit(Opcode::LoadConstant(one_idx));
-    main.emit(Opcode::CreateClosure(fn_idx));
     main.emit(Opcode::Call(1));
     main.emit(Opcode::Return);
 
@@ -393,12 +393,12 @@ fn test_deeply_nested_calls() {
     let mut main = BytecodeChunk::new();
     let val_idx = main.add_constant(BcValue::Number(42.0));
 
+    main.emit(Opcode::CreateClosure(fn_idx, vec![]));
     main.emit(Opcode::LoadConstant(val_idx));
-    main.emit(Opcode::CreateClosure(fn_idx));
     main.emit(Opcode::Call(1));
-    main.emit(Opcode::CreateClosure(fn_idx));
+    main.emit(Opcode::CreateClosure(fn_idx, vec![]));
     main.emit(Opcode::Call(1));
-    main.emit(Opcode::CreateClosure(fn_idx));
+    main.emit(Opcode::CreateClosure(fn_idx, vec![]));
     main.emit(Opcode::Call(1));
     main.emit(Opcode::Return);
 
@@ -433,8 +433,8 @@ fn test_multiple_return_paths() {
     // Test with x = 3 (should return 10)
     let mut main1 = BytecodeChunk::new();
     let three_idx = main1.add_constant(BcValue::Number(3.0));
+    main1.emit(Opcode::CreateClosure(fn_idx, vec![])); // function first
     main1.emit(Opcode::LoadConstant(three_idx));
-    main1.emit(Opcode::CreateClosure(fn_idx));
     main1.emit(Opcode::Call(1));
     main1.emit(Opcode::Return);
 
@@ -444,8 +444,8 @@ fn test_multiple_return_paths() {
     // Test with x = 7 (should return 20)
     let mut main2 = BytecodeChunk::new();
     let seven_idx = main2.add_constant(BcValue::Number(7.0));
+    main2.emit(Opcode::CreateClosure(fn_idx, vec![])); // function first
     main2.emit(Opcode::LoadConstant(seven_idx));
-    main2.emit(Opcode::CreateClosure(fn_idx));
     main2.emit(Opcode::Call(1));
     main2.emit(Opcode::Return);
 
@@ -469,7 +469,7 @@ fn test_function_stored_in_variable() {
     let two_idx = main.add_constant(BcValue::Number(2.0));
 
     // Create closure and store in global
-    main.emit(Opcode::CreateClosure(fn_idx));
+    main.emit(Opcode::CreateClosure(fn_idx, vec![]));
     main.emit(Opcode::StoreGlobal("myAdd".to_string()));
 
     // Load from global and call

@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use crate::context::ExecutionContext;
-use crate::upvalue::{new_upvalue_handle, Closure, Upvalue, UpvalueHandle};
+use crate::upvalue::{new_upvalue_handle, Upvalue, UpvalueHandle};
 
 /// Dispatch handler for executing bytecode
 pub struct Dispatcher {
@@ -452,19 +452,6 @@ impl Dispatcher {
                         }
                     }
                 }
-                Opcode::LoadUpvalue(_idx) => {
-                    // Placeholder: load captured variable
-                    // Upvalues are used for closures to access parent scope variables
-                    self.stack.push(Value::Undefined);
-                }
-                Opcode::StoreUpvalue(_idx) => {
-                    // Placeholder: store to captured variable
-                    self.stack.pop();
-                }
-                Opcode::CloseUpvalue => {
-                    // Placeholder: close over local variable (move from stack to heap)
-                    // This is used when a closure outlives its creating scope
-                }
             }
         }
     }
@@ -830,14 +817,22 @@ mod tests {
     #[test]
     fn test_dispatcher_new() {
         let dispatcher = Dispatcher::new();
-        assert!(dispatcher.globals.is_empty());
+        // Globals contains console and Math by default
+        assert_eq!(dispatcher.globals.len(), 2);
+        assert!(dispatcher.globals.contains_key("console"));
+        assert!(dispatcher.globals.contains_key("Math"));
         assert!(dispatcher.stack.is_empty());
+        assert!(dispatcher.open_upvalues.is_empty());
+        assert!(dispatcher.current_upvalues.is_empty());
     }
 
     #[test]
     fn test_dispatcher_default() {
         let dispatcher = Dispatcher::default();
-        assert!(dispatcher.globals.is_empty());
+        // Default has console and Math globals
+        assert_eq!(dispatcher.globals.len(), 2);
+        assert!(dispatcher.globals.contains_key("console"));
+        assert!(dispatcher.globals.contains_key("Math"));
     }
 
     #[test]

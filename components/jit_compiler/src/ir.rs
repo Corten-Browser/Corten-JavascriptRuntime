@@ -69,6 +69,12 @@ pub enum IROpcode {
     LoadGlobal(String),
     /// Store global variable
     StoreGlobal(String),
+    /// Load upvalue (captured variable)
+    LoadUpvalue(u32),
+    /// Store upvalue (captured variable)
+    StoreUpvalue(u32),
+    /// Close upvalue
+    CloseUpvalue,
     /// Create closure
     CreateClosure(usize),
     /// Call function
@@ -157,7 +163,10 @@ impl IRFunction {
                 Opcode::CreateObject => IROpcode::CreateObject,
                 Opcode::LoadProperty(name) => IROpcode::LoadProperty(name.clone()),
                 Opcode::StoreProperty(name) => IROpcode::StoreProperty(name.clone()),
-                Opcode::CreateClosure(idx) => IROpcode::CreateClosure(*idx),
+                Opcode::LoadUpvalue(idx) => IROpcode::LoadUpvalue(*idx),
+                Opcode::StoreUpvalue(idx) => IROpcode::StoreUpvalue(*idx),
+                Opcode::CloseUpvalue => IROpcode::CloseUpvalue,
+                Opcode::CreateClosure(idx, _) => IROpcode::CreateClosure(*idx),
                 Opcode::Call(argc) => IROpcode::Call(*argc),
             };
 
