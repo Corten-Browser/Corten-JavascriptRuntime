@@ -1,6 +1,10 @@
-use web_platform::{Worker, SharedArrayBuffer, Atomics};
+use web_platform::{Worker, SharedArrayBuffer, Atomics, DevToolsServer, DebugProtocol, SourceMap, ContentSecurityPolicy};
+use web_platform::devtools::{ProtocolMessage, CallFrame, Location, Scope, RemoteObject};
+use web_platform::source_maps::{SourceMapping, OriginalPosition, GeneratedPosition};
+use web_platform::csp::CspViolation;
 use std::thread;
 use std::time::Duration;
+use serde_json::json;
 
 #[cfg(test)]
 mod worker_tests {
@@ -373,5 +377,695 @@ mod integration_tests {
         let ids: Vec<_> = workers.iter().map(|w| w.id()).collect();
         let unique_count = ids.iter().collect::<std::collections::HashSet<_>>().len();
         assert_eq!(unique_count, 3);
+    }
+}
+
+#[cfg(test)]
+mod source_map_tests {
+    use super::*;
+
+    #[test]
+    fn test_source_map_new() {
+        let map = SourceMap::new();
+        assert_eq!(map.version, 3);
+        assert_eq!(map.sources.len(), 0);
+        assert_eq!(map.names.len(), 0);
+        assert_eq!(map.mappings, "");
+    }
+
+    #[test]
+    fn test_source_map_default() {
+        let map = SourceMap::default();
+        assert_eq!(map.version, 3);
+    }
+
+    #[test]
+    fn test_source_map_from_json_simple() {
+        let json = r#"{
+            "version": 3,
+            "file": "output.js",
+            "sources": ["input.js"],
+            "names": [],
+            "mappings": "AAAA"
+        }"#;
+
+        let map = SourceMap::from_json(json).expect("Should parse JSON");
+        assert_eq!(map.version, 3);
+        assert_eq!(map.file, Some("output.js".to_string()));
+        assert_eq!(map.sources, vec!["input.js"]);
+        assert_eq!(map.mappings_count(), 1);
+    }
+
+    #[test]
+    fn test_source_map_from_json_with_names() {
+        let json = r#"{
+            "version": 3,
+            "sources": ["app.ts"],
+            "names": ["foo", "bar"],
+            "mappings": "AAAA,EAAC"
+        }"#;
+
+        let map = SourceMap::from_json(json).expect("Should parse JSON");
+        assert_eq!(map.names, vec!["foo", "bar"]);
+        assert!(map.mappings_count() >= 1);
+    }
+
+    #[test]
+    fn test_source_map_from_json_invalid() {
+        let json = "not valid json";
+        let result = SourceMap::from_json(json);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_source_map_to_json() {
+        let mut map = SourceMap::new();
+        map.file = Some("output.js".to_string());
+        map.sources.push("input.js".to_string());
+
+        let json = map.to_json().expect("Should serialize to JSON");
+        assert!(json.contains("\"version\":3"));
+        assert!(json.contains("\"output.js\""));
+        assert!(json.contains("\"input.js\""));
+    }
+
+    #[test]
+    fn test_vlq_decode_single_positive() {
+        let result = SourceMap::encode_vlq(&[0]);
+        assert_eq!(result, "A");
+
+        let result = SourceMap::encode_vlq(&[1]);
+        assert_eq!(result, "C");
+
+        let result = SourceMap::encode_vlq(&[15]);
+        assert_eq!(result, "e");
+    }
+
+    #[test]
+    fn test_vlq_decode_single_negative() {
+        let result = SourceMap::encode_vlq(&[-1]);
+        assert_eq!(result, "D");
+    }
+
+    #[test]
+    fn test_vlq_decode_multiple() {
+        let result = SourceMap::encode_vlq(&[0, 0, 0, 0]);
+        assert_eq!(result, "AAAA");
+    }
+
+    #[test]
+    fn test_vlq_decode_large_number() {
+        // Large number requires multiple base64 characters
+        let result = SourceMap::encode_vlq(&[100]);
+        assert!(result.len() > 1);
+    }
+
+    #[test]
+    fn test_source_map_original_position_for() {
+        let json = r#"{
+            "version": 3,
+            "sources": ["input.js"],
+            "names": [],
+            "mappings": "AAAA"
+        }"#;
+
+        let map = SourceMap::from_json(json).expect("Should parse JSON");
+        let result = map.original_position_for(0, 0);
+
+        assert!(result.is_some());
+        let (source, line, col) = result.unwrap();
+        assert_eq!(source, "input.js");
+        assert_eq!(line, 0);
+        assert_eq!(col, 0);
+    }
+
+    #[test]
+    fn test_source_map_original_position_not_found() {
+        let json = r#"{
+            "version": 3,
+            "sources": ["input.js"],
+            "names": [],
+            "mappings": "AAAA"
+        }"#;
+
+        let map = SourceMap::from_json(json).expect("Should parse JSON");
+        // Line 10 doesn't exist in mappings
+        let result = map.original_position_for(10, 0);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_source_map_multiple_lines() {
+        let json = r#"{
+            "version": 3,
+            "sources": ["input.js"],
+            "names": [],
+            "mappings": "AAAA;AACA;AACA"
+        }"#;
+
+        let map = SourceMap::from_json(json).expect("Should parse JSON");
+        assert_eq!(map.mappings_count(), 3);
+
+        // Check first line
+        let pos1 = map.original_position_for(0, 0);
+        assert!(pos1.is_some());
+
+        // Check second line
+        let pos2 = map.original_position_for(1, 0);
+        assert!(pos2.is_some());
+
+        // Check third line
+        let pos3 = map.original_position_for(2, 0);
+        assert!(pos3.is_some());
+    }
+
+    #[test]
+    fn test_source_map_multiple_segments() {
+        let json = r#"{
+            "version": 3,
+            "sources": ["input.js"],
+            "names": [],
+            "mappings": "AAAA,EAAC,GAAE"
+        }"#;
+
+        let map = SourceMap::from_json(json).expect("Should parse JSON");
+        assert_eq!(map.mappings_count(), 3);
+    }
+
+    #[test]
+    fn test_source_map_add_mapping() {
+        let mut map = SourceMap::new();
+        map.sources.push("test.js".to_string());
+
+        let mapping = SourceMapping {
+            generated_line: 0,
+            generated_column: 0,
+            source_index: Some(0),
+            original_line: Some(10),
+            original_column: Some(5),
+            name_index: None,
+        };
+
+        map.add_mapping(mapping);
+        assert_eq!(map.mappings_count(), 1);
+    }
+
+    #[test]
+    fn test_source_map_add_source() {
+        let mut map = SourceMap::new();
+        let idx1 = map.add_source("file1.js".to_string());
+        let idx2 = map.add_source("file2.js".to_string());
+
+        assert_eq!(idx1, 0);
+        assert_eq!(idx2, 1);
+        assert_eq!(map.sources.len(), 2);
+    }
+
+    #[test]
+    fn test_source_map_add_name() {
+        let mut map = SourceMap::new();
+        let idx1 = map.add_name("foo".to_string());
+        let idx2 = map.add_name("bar".to_string());
+
+        assert_eq!(idx1, 0);
+        assert_eq!(idx2, 1);
+        assert_eq!(map.names.len(), 2);
+    }
+
+    #[test]
+    fn test_source_map_get_mappings() {
+        let json = r#"{
+            "version": 3,
+            "sources": ["input.js"],
+            "names": [],
+            "mappings": "AAAA,CAAC"
+        }"#;
+
+        let map = SourceMap::from_json(json).expect("Should parse JSON");
+        let mappings = map.get_mappings();
+
+        assert_eq!(mappings.len(), 2);
+        assert_eq!(mappings[0].generated_line, 0);
+        assert_eq!(mappings[0].generated_column, 0);
+        assert_eq!(mappings[1].generated_column, 1);
+    }
+
+    #[test]
+    fn test_source_map_original_position_detailed() {
+        let json = r#"{
+            "version": 3,
+            "sources": ["input.js"],
+            "names": ["myFunction"],
+            "mappings": "AAAAA"
+        }"#;
+
+        let map = SourceMap::from_json(json).expect("Should parse JSON");
+        let result = map.original_position_for_detailed(0, 0);
+
+        assert!(result.is_some());
+        let pos = result.unwrap();
+        assert_eq!(pos.source, "input.js");
+        assert_eq!(pos.line, 0);
+        assert_eq!(pos.column, 0);
+        assert_eq!(pos.name, Some("myFunction".to_string()));
+    }
+
+    #[test]
+    fn test_source_map_generated_position_for() {
+        let json = r#"{
+            "version": 3,
+            "sources": ["input.js"],
+            "names": [],
+            "mappings": "AAAA"
+        }"#;
+
+        let map = SourceMap::from_json(json).expect("Should parse JSON");
+        let result = map.generated_position_for("input.js", 0, 0);
+
+        assert!(result.is_some());
+        let pos = result.unwrap();
+        assert_eq!(pos.line, 0);
+        assert_eq!(pos.column, 0);
+    }
+
+    #[test]
+    fn test_source_map_generated_position_not_found() {
+        let json = r#"{
+            "version": 3,
+            "sources": ["input.js"],
+            "names": [],
+            "mappings": "AAAA"
+        }"#;
+
+        let map = SourceMap::from_json(json).expect("Should parse JSON");
+        // Source doesn't exist
+        let result = map.generated_position_for("other.js", 0, 0);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_source_map_regenerate_mappings() {
+        let mut map = SourceMap::new();
+        map.sources.push("test.js".to_string());
+
+        map.add_mapping(SourceMapping {
+            generated_line: 0,
+            generated_column: 0,
+            source_index: Some(0),
+            original_line: Some(0),
+            original_column: Some(0),
+            name_index: None,
+        });
+
+        map.regenerate_mappings();
+        assert!(!map.mappings.is_empty());
+        assert_eq!(map.mappings, "AAAA");
+    }
+
+    #[test]
+    fn test_source_map_with_source_content() {
+        let json = r#"{
+            "version": 3,
+            "sources": ["input.js"],
+            "sourcesContent": ["console.log('hello');"],
+            "names": [],
+            "mappings": "AAAA"
+        }"#;
+
+        let map = SourceMap::from_json(json).expect("Should parse JSON");
+        assert!(map.sources_content.is_some());
+        let content = map.sources_content.unwrap();
+        assert_eq!(content[0], "console.log('hello');");
+    }
+
+    #[test]
+    fn test_source_map_empty_mappings() {
+        let json = r#"{
+            "version": 3,
+            "sources": [],
+            "names": [],
+            "mappings": ""
+        }"#;
+
+        let map = SourceMap::from_json(json).expect("Should parse JSON");
+        assert_eq!(map.mappings_count(), 0);
+    }
+}
+
+#[cfg(test)]
+mod csp_tests {
+    use super::*;
+
+    #[test]
+    fn test_csp_new() {
+        let csp = ContentSecurityPolicy::new();
+        assert!(csp.is_empty());
+        assert_eq!(csp.directive_count(), 0);
+    }
+
+    #[test]
+    fn test_csp_default() {
+        let csp = ContentSecurityPolicy::default();
+        assert!(csp.is_empty());
+    }
+
+    #[test]
+    fn test_csp_parse_simple() {
+        let header = "default-src 'self'";
+        let csp = ContentSecurityPolicy::parse(header).expect("Should parse");
+
+        assert!(csp.has_directive("default-src"));
+        assert_eq!(csp.directive_count(), 1);
+    }
+
+    #[test]
+    fn test_csp_parse_multiple_directives() {
+        let header = "default-src 'self'; script-src 'unsafe-inline'; style-src https:";
+        let csp = ContentSecurityPolicy::parse(header).expect("Should parse");
+
+        assert!(csp.has_directive("default-src"));
+        assert!(csp.has_directive("script-src"));
+        assert!(csp.has_directive("style-src"));
+        assert_eq!(csp.directive_count(), 3);
+    }
+
+    #[test]
+    fn test_csp_parse_multiple_values() {
+        let header = "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.example.com";
+        let csp = ContentSecurityPolicy::parse(header).expect("Should parse");
+
+        let values = csp.get_directive("script-src").expect("Should have directive");
+        assert_eq!(values.len(), 4);
+        assert!(values.contains(&"'self'".to_string()));
+        assert!(values.contains(&"'unsafe-inline'".to_string()));
+        assert!(values.contains(&"'unsafe-eval'".to_string()));
+    }
+
+    #[test]
+    fn test_csp_parse_case_insensitive() {
+        let header = "Default-Src 'self'; SCRIPT-SRC 'none'";
+        let csp = ContentSecurityPolicy::parse(header).expect("Should parse");
+
+        assert!(csp.has_directive("default-src"));
+        assert!(csp.has_directive("script-src"));
+    }
+
+    #[test]
+    fn test_csp_parse_empty_directive() {
+        let header = "upgrade-insecure-requests";
+        let csp = ContentSecurityPolicy::parse(header).expect("Should parse");
+
+        let values = csp.get_directive("upgrade-insecure-requests").expect("Should have directive");
+        assert_eq!(values.len(), 0);
+    }
+
+    #[test]
+    fn test_csp_from_header() {
+        let header = "default-src 'self'";
+        let csp = ContentSecurityPolicy::from_header(header).expect("Should parse");
+        assert!(csp.has_directive("default-src"));
+    }
+
+    #[test]
+    fn test_csp_allows_eval_allowed() {
+        let header = "script-src 'unsafe-eval'";
+        let csp = ContentSecurityPolicy::parse(header).expect("Should parse");
+        assert!(csp.allows_eval());
+    }
+
+    #[test]
+    fn test_csp_allows_eval_not_allowed() {
+        let header = "script-src 'self'";
+        let csp = ContentSecurityPolicy::parse(header).expect("Should parse");
+        assert!(!csp.allows_eval());
+    }
+
+    #[test]
+    fn test_csp_allows_inline_script_allowed() {
+        let header = "script-src 'unsafe-inline'";
+        let csp = ContentSecurityPolicy::parse(header).expect("Should parse");
+        assert!(csp.allows_inline_script());
+    }
+
+    #[test]
+    fn test_csp_allows_inline_script_not_allowed() {
+        let header = "script-src 'self'";
+        let csp = ContentSecurityPolicy::parse(header).expect("Should parse");
+        assert!(!csp.allows_inline_script());
+    }
+
+    #[test]
+    fn test_csp_allows_source_with_default_src() {
+        let header = "default-src 'self' https://cdn.example.com";
+        let csp = ContentSecurityPolicy::parse(header).expect("Should parse");
+
+        // Falls back to default-src
+        assert!(csp.allows_script_source("https://cdn.example.com"));
+        assert!(csp.allows_style_source("https://cdn.example.com"));
+        assert!(csp.allows_image_source("https://cdn.example.com"));
+    }
+
+    #[test]
+    fn test_csp_allows_source_specific_directive() {
+        let header = "default-src 'none'; script-src https://js.example.com";
+        let csp = ContentSecurityPolicy::parse(header).expect("Should parse");
+
+        // Uses specific directive, not default
+        assert!(csp.allows_script_source("https://js.example.com"));
+        assert!(!csp.allows_style_source("https://js.example.com"));
+    }
+
+    #[test]
+    fn test_csp_allows_source_no_policy() {
+        let csp = ContentSecurityPolicy::new();
+        // No policy means everything allowed
+        assert!(csp.allows_eval());
+        assert!(csp.allows_inline_script());
+        assert!(csp.allows_script_source("https://any.example.com"));
+    }
+
+    #[test]
+    fn test_csp_allows_source_wildcard() {
+        let header = "script-src *";
+        let csp = ContentSecurityPolicy::parse(header).expect("Should parse");
+        assert!(csp.allows_script_source("https://any.example.com"));
+    }
+
+    #[test]
+    fn test_csp_allows_source_prefix_wildcard() {
+        let header = "script-src https://cdn.*";
+        let csp = ContentSecurityPolicy::parse(header).expect("Should parse");
+
+        assert!(csp.allows_script_source("https://cdn.example.com"));
+        assert!(csp.allows_script_source("https://cdn.other.com"));
+        assert!(!csp.allows_script_source("https://other.example.com"));
+    }
+
+    #[test]
+    fn test_csp_allows_source_none() {
+        let header = "script-src 'none'";
+        let csp = ContentSecurityPolicy::parse(header).expect("Should parse");
+
+        assert!(!csp.allows_script_source("https://any.example.com"));
+        assert!(!csp.allows_eval());
+        assert!(!csp.allows_inline_script());
+    }
+
+    #[test]
+    fn test_csp_add_directive() {
+        let mut csp = ContentSecurityPolicy::new();
+        csp.add_directive("script-src", vec!["'self'".to_string(), "https://cdn.example.com".to_string()]);
+
+        assert!(csp.has_directive("script-src"));
+        let values = csp.get_directive("script-src").unwrap();
+        assert_eq!(values.len(), 2);
+    }
+
+    #[test]
+    fn test_csp_add_directive_str() {
+        let mut csp = ContentSecurityPolicy::new();
+        csp.add_directive_str("script-src", vec!["'self'", "https://cdn.example.com"]);
+
+        assert!(csp.has_directive("script-src"));
+    }
+
+    #[test]
+    fn test_csp_remove_directive() {
+        let header = "default-src 'self'; script-src 'none'";
+        let mut csp = ContentSecurityPolicy::parse(header).expect("Should parse");
+
+        let removed = csp.remove_directive("script-src");
+        assert!(removed.is_some());
+        assert!(!csp.has_directive("script-src"));
+    }
+
+    #[test]
+    fn test_csp_directive_names() {
+        let header = "default-src 'self'; script-src 'none'; style-src https:";
+        let csp = ContentSecurityPolicy::parse(header).expect("Should parse");
+
+        let names = csp.directive_names();
+        assert_eq!(names.len(), 3);
+        assert!(names.contains(&"default-src".to_string()));
+        assert!(names.contains(&"script-src".to_string()));
+        assert!(names.contains(&"style-src".to_string()));
+    }
+
+    #[test]
+    fn test_csp_to_header() {
+        let mut csp = ContentSecurityPolicy::new();
+        csp.add_directive_str("default-src", vec!["'self'"]);
+        csp.add_directive_str("script-src", vec!["'none'"]);
+
+        let header = csp.to_header();
+        assert!(header.contains("default-src 'self'"));
+        assert!(header.contains("script-src 'none'"));
+        assert!(header.contains("; "));
+    }
+
+    #[test]
+    fn test_csp_to_header_empty_directive() {
+        let mut csp = ContentSecurityPolicy::new();
+        csp.add_directive("upgrade-insecure-requests", vec![]);
+
+        let header = csp.to_header();
+        assert!(header.contains("upgrade-insecure-requests"));
+    }
+
+    #[test]
+    fn test_csp_strict() {
+        let csp = ContentSecurityPolicy::strict();
+
+        assert!(csp.has_directive("default-src"));
+        assert!(csp.has_directive("script-src"));
+        assert!(csp.has_directive("object-src"));
+        assert!(!csp.allows_eval());
+        assert!(!csp.allows_inline_script());
+    }
+
+    #[test]
+    fn test_csp_permissive() {
+        let csp = ContentSecurityPolicy::permissive();
+
+        assert!(csp.allows_eval());
+        assert!(csp.allows_inline_script());
+        assert!(csp.allows_script_source("https://any.example.com"));
+    }
+
+    #[test]
+    fn test_csp_report_violation() {
+        let csp = ContentSecurityPolicy::new();
+        let violation = CspViolation {
+            directive: "script-src".to_string(),
+            blocked_uri: "https://malicious.com/script.js".to_string(),
+            document_uri: "https://example.com/page".to_string(),
+            violated_directive: "script-src 'self'".to_string(),
+        };
+
+        let report = csp.report_violation(violation);
+        assert!(report.contains("malicious.com"));
+        assert!(report.contains("script-src"));
+    }
+
+    #[test]
+    fn test_csp_allows_connect_source() {
+        let header = "connect-src https://api.example.com";
+        let csp = ContentSecurityPolicy::parse(header).expect("Should parse");
+
+        assert!(csp.allows_connect_source("https://api.example.com"));
+        assert!(!csp.allows_connect_source("https://other.com"));
+    }
+
+    #[test]
+    fn test_csp_allows_font_source() {
+        let header = "font-src https://fonts.googleapis.com";
+        let csp = ContentSecurityPolicy::parse(header).expect("Should parse");
+
+        assert!(csp.allows_font_source("https://fonts.googleapis.com"));
+    }
+
+    #[test]
+    fn test_csp_allows_media_source() {
+        let header = "media-src https://media.example.com";
+        let csp = ContentSecurityPolicy::parse(header).expect("Should parse");
+
+        assert!(csp.allows_media_source("https://media.example.com"));
+    }
+
+    #[test]
+    fn test_csp_allows_object_source() {
+        let header = "object-src 'none'";
+        let csp = ContentSecurityPolicy::parse(header).expect("Should parse");
+
+        assert!(!csp.allows_object_source("https://any.com"));
+    }
+
+    #[test]
+    fn test_csp_allows_frame_source() {
+        let header = "frame-src https://iframe.example.com";
+        let csp = ContentSecurityPolicy::parse(header).expect("Should parse");
+
+        assert!(csp.allows_frame_source("https://iframe.example.com"));
+    }
+
+    #[test]
+    fn test_csp_allows_worker_source() {
+        let header = "worker-src 'self'";
+        let csp = ContentSecurityPolicy::parse(header).expect("Should parse");
+
+        // 'self' only matches exact 'self' keyword in our implementation
+        assert!(csp.allows_worker_source("'self'"));
+        assert!(!csp.allows_worker_source("https://other-origin.com"));
+    }
+
+    #[test]
+    fn test_csp_validate_nonce() {
+        let header = "script-src 'nonce-abc123'";
+        let csp = ContentSecurityPolicy::parse(header).expect("Should parse");
+
+        assert!(csp.validate_nonce("script-src", "abc123"));
+        assert!(!csp.validate_nonce("script-src", "wrong-nonce"));
+    }
+
+    #[test]
+    fn test_csp_validate_hash() {
+        let header = "script-src 'sha256-abc123hash'";
+        let csp = ContentSecurityPolicy::parse(header).expect("Should parse");
+
+        assert!(csp.validate_hash("script-src", "sha256", "abc123hash"));
+        assert!(!csp.validate_hash("script-src", "sha256", "wrong-hash"));
+    }
+
+    #[test]
+    fn test_csp_merge() {
+        let mut csp1 = ContentSecurityPolicy::new();
+        csp1.add_directive_str("script-src", vec!["'self'", "https://a.com", "https://b.com"]);
+
+        let mut csp2 = ContentSecurityPolicy::new();
+        csp2.add_directive_str("script-src", vec!["'self'", "https://b.com", "https://c.com"]);
+        csp2.add_directive_str("style-src", vec!["'self'"]);
+
+        csp1.merge(&csp2);
+
+        // Intersection of script-src
+        let script_sources = csp1.get_directive("script-src").unwrap();
+        assert!(script_sources.contains(&"'self'".to_string()));
+        assert!(script_sources.contains(&"https://b.com".to_string()));
+        assert!(!script_sources.contains(&"https://a.com".to_string()));
+        assert!(!script_sources.contains(&"https://c.com".to_string()));
+
+        // style-src added from csp2
+        assert!(csp1.has_directive("style-src"));
+    }
+
+    #[test]
+    fn test_csp_clone() {
+        let header = "default-src 'self'; script-src 'none'";
+        let csp1 = ContentSecurityPolicy::parse(header).expect("Should parse");
+        let csp2 = csp1.clone();
+
+        assert_eq!(csp1.directive_count(), csp2.directive_count());
+        assert!(csp2.has_directive("default-src"));
+        assert!(csp2.has_directive("script-src"));
     }
 }
