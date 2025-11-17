@@ -84,6 +84,42 @@ impl JSONObject {
                 }
                 Ok(serde_json::Value::Object(map))
             }
+            JsValue::Error(err) => {
+                // Errors serialize to an object with name, message, and stack
+                let error = err.borrow();
+                let mut map = serde_json::Map::new();
+                map.insert("name".to_string(), serde_json::Value::String(error.name().to_string()));
+                map.insert("message".to_string(), serde_json::Value::String(error.message().to_string()));
+                map.insert("stack".to_string(), serde_json::Value::String(error.stack()));
+                Ok(serde_json::Value::Object(map))
+            }
+            // Symbols are not serializable in JSON (would be undefined in real JS)
+            JsValue::Symbol(_) => Ok(serde_json::Value::Null),
+            // Map and Set serialize to empty objects (not JSON-serializable by default)
+            JsValue::Map(_) => Ok(serde_json::Value::Object(serde_json::Map::new())),
+            JsValue::Set(_) => Ok(serde_json::Value::Object(serde_json::Map::new())),
+            // RegExp serializes to empty object (not JSON-serializable)
+            JsValue::RegExp(_) => Ok(serde_json::Value::Object(serde_json::Map::new())),
+            // Functions are not serializable in JSON (would be undefined in real JS)
+            JsValue::Function(_) => Ok(serde_json::Value::Null),
+            JsValue::Constructor(_) => Ok(serde_json::Value::Null),
+            // Proxy serializes to empty object (behavior depends on handler)
+            JsValue::Proxy(_) => Ok(serde_json::Value::Object(serde_json::Map::new())),
+            // WeakMap and WeakSet are not serializable (would be empty object in real JS)
+            JsValue::WeakMap(_) => Ok(serde_json::Value::Object(serde_json::Map::new())),
+            JsValue::WeakSet(_) => Ok(serde_json::Value::Object(serde_json::Map::new())),
+            // Generator serializes to empty object
+            JsValue::Generator(_) => Ok(serde_json::Value::Object(serde_json::Map::new())),
+            // AsyncGenerator serializes to empty object
+            JsValue::AsyncGenerator(_) => Ok(serde_json::Value::Object(serde_json::Map::new())),
+            // BigInt throws in JSON.stringify in real JS, we serialize to string
+            JsValue::BigInt(n) => Ok(serde_json::Value::String(format!("{}", n))),
+            // WeakRef serializes to empty object
+            JsValue::WeakRef(_) => Ok(serde_json::Value::Object(serde_json::Map::new())),
+            // FinalizationRegistry serializes to empty object
+            JsValue::FinalizationRegistry(_) => {
+                Ok(serde_json::Value::Object(serde_json::Map::new()))
+            }
         }
     }
 }

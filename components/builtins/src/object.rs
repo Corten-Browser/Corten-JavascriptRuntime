@@ -39,8 +39,23 @@ impl ObjectPrototype {
             JsValue::Boolean(_) => "Boolean",
             JsValue::Number(_) => "Number",
             JsValue::String(_) => "String",
+            JsValue::Symbol(_) => "Symbol",
             JsValue::Object(_) => "Object",
             JsValue::Array(_) => "Array",
+            JsValue::Map(_) => "Map",
+            JsValue::Set(_) => "Set",
+            JsValue::Error(_) => "Error",
+            JsValue::RegExp(_) => "RegExp",
+            JsValue::Function(_) => "Function",
+            JsValue::Constructor(_) => "Function",
+            JsValue::Proxy(_) => "Object",
+            JsValue::WeakMap(_) => "WeakMap",
+            JsValue::WeakSet(_) => "WeakSet",
+            JsValue::Generator(_) => "Generator",
+            JsValue::AsyncGenerator(_) => "AsyncGenerator",
+            JsValue::BigInt(_) => "BigInt",
+            JsValue::WeakRef(_) => "WeakRef",
+            JsValue::FinalizationRegistry(_) => "FinalizationRegistry",
         };
         Ok(JsValue::string(format!("[object {}]", type_tag)))
     }
