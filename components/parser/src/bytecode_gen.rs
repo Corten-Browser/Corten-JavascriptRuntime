@@ -402,14 +402,65 @@ impl BytecodeGenerator {
 
             Statement::ThrowStatement { argument, .. } => {
                 self.visit_expression(argument)?;
-                // Would emit throw opcode - simplified for now
-                self.chunk.emit(Opcode::Return); // Placeholder behavior
+                self.chunk.emit(Opcode::Throw);
             }
 
-            Statement::TryStatement { block, .. } => {
-                // Simplified - just execute try block
+            Statement::TryStatement {
+                block,
+                handler,
+                finalizer,
+                ..
+            } => {
+                // Emit PushTry with placeholder for catch offset
+                let push_try_idx = self.chunk.instruction_count();
+                self.chunk.emit(Opcode::PushTry(0)); // Will patch later
+
+                // Execute try block
                 for stmt in block {
                     self.visit_statement(stmt)?;
+                }
+
+                // Pop the try handler (no exception occurred)
+                self.chunk.emit(Opcode::PopTry);
+
+                // Jump over catch block (normal execution path)
+                let jump_over_catch_idx = self.chunk.instruction_count();
+                self.chunk.emit(Opcode::Jump(0)); // Will patch later
+
+                // Patch PushTry to point to catch block start
+                let catch_start = self.chunk.instruction_count();
+                self.patch_jump(push_try_idx, catch_start);
+
+                // Handle catch block
+                if let Some(catch_clause) = handler {
+                    // Bind exception value to parameter (exception is on stack)
+                    if let Some(Pattern::Identifier(param_name)) = &catch_clause.param {
+                        let reg = self.allocate_register();
+                        self.locals.insert(param_name.clone(), reg);
+                        self.chunk.emit(Opcode::StoreLocal(reg));
+                    } else {
+                        // No parameter or non-identifier pattern - discard exception
+                        self.chunk.emit(Opcode::Pop);
+                    }
+
+                    // Execute catch block body
+                    for stmt in &catch_clause.body {
+                        self.visit_statement(stmt)?;
+                    }
+                } else {
+                    // No catch block - just pop the exception value
+                    self.chunk.emit(Opcode::Pop);
+                }
+
+                // Patch jump to skip over catch block
+                let after_catch = self.chunk.instruction_count();
+                self.patch_jump(jump_over_catch_idx, after_catch);
+
+                // Handle finally block (if present)
+                if let Some(finally_block) = finalizer {
+                    for stmt in finally_block {
+                        self.visit_statement(stmt)?;
+                    }
                 }
             }
 
@@ -813,7 +864,8 @@ impl BytecodeGenerator {
 
             Expression::AwaitExpression { argument, .. } => {
                 self.visit_expression(argument)?;
-                // Await is runtime behavior - just evaluate the expression for now
+                // Emit Await opcode to suspend execution until promise resolves
+                self.chunk.emit(Opcode::Await);
             }
 
             Expression::YieldExpression { argument, .. } => {
@@ -863,7 +915,9 @@ impl BytecodeGenerator {
             match &mut inst.opcode {
                 Opcode::Jump(ref mut addr)
                 | Opcode::JumpIfTrue(ref mut addr)
-                | Opcode::JumpIfFalse(ref mut addr) => {
+                | Opcode::JumpIfFalse(ref mut addr)
+                | Opcode::PushTry(ref mut addr)
+                | Opcode::PushFinally(ref mut addr) => {
                     *addr = target;
                 }
                 _ => {}

@@ -83,6 +83,26 @@ pub enum IROpcode {
     TypeGuard(TypeInfo),
     /// Deoptimization point
     DeoptPoint(usize),
+
+    // Exception handling
+    /// Throw exception
+    Throw,
+    /// Push try handler with catch offset
+    PushTry(usize),
+    /// Pop try handler
+    PopTry,
+    /// Push finally handler offset
+    PushFinally(usize),
+    /// Pop finally handler
+    PopFinally,
+    /// Pop value from stack
+    Pop,
+
+    // Async operations
+    /// Await a promise
+    Await,
+    /// Create async function
+    CreateAsyncFunction(usize),
 }
 
 /// Single IR instruction
@@ -168,6 +188,16 @@ impl IRFunction {
                 Opcode::CloseUpvalue => IROpcode::CloseUpvalue,
                 Opcode::CreateClosure(idx, _) => IROpcode::CreateClosure(*idx),
                 Opcode::Call(argc) => IROpcode::Call(*argc),
+                // Exception handling
+                Opcode::Throw => IROpcode::Throw,
+                Opcode::PushTry(offset) => IROpcode::PushTry(*offset),
+                Opcode::PopTry => IROpcode::PopTry,
+                Opcode::PushFinally(offset) => IROpcode::PushFinally(*offset),
+                Opcode::PopFinally => IROpcode::PopFinally,
+                Opcode::Pop => IROpcode::Pop,
+                // Async operations
+                Opcode::Await => IROpcode::Await,
+                Opcode::CreateAsyncFunction(idx, _) => IROpcode::CreateAsyncFunction(*idx),
             };
 
             ir_func.instructions.push(IRInstruction::new(ir_op, offset));

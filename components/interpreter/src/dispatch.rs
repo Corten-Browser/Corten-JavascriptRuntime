@@ -2,6 +2,7 @@
 //!
 //! Handles individual opcode execution.
 
+use async_runtime::PromiseState;
 use bytecode_system::{BytecodeChunk, Opcode, UpvalueDescriptor};
 use builtins::{ConsoleObject, JsValue as BuiltinValue, MathObject};
 use core_types::{ErrorKind, JsError, Value};
@@ -11,7 +12,19 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use crate::context::ExecutionContext;
+use crate::promise_integration::{PromiseConstructor, PromiseObject};
 use crate::upvalue::{new_upvalue_handle, Upvalue, UpvalueHandle};
+
+/// Exception handler for try/catch/finally blocks
+#[derive(Debug, Clone)]
+struct TryHandler {
+    /// Offset to jump to for catch block (if any)
+    catch_offset: Option<usize>,
+    /// Offset to jump to for finally block (if any)
+    finally_offset: Option<usize>,
+    /// Stack height when try block started (for unwinding)
+    stack_height: usize,
+}
 
 /// Dispatch handler for executing bytecode
 pub struct Dispatcher {
@@ -25,6 +38,10 @@ pub struct Dispatcher {
     open_upvalues: HashMap<usize, UpvalueHandle>,
     /// Current closure's upvalues (set when executing a closure)
     current_upvalues: Vec<UpvalueHandle>,
+    /// Stack of active try blocks for exception handling
+    try_stack: Vec<TryHandler>,
+    /// Currently thrown exception (if any)
+    current_exception: Option<Value>,
 }
 
 impl std::fmt::Debug for Dispatcher {
@@ -35,6 +52,8 @@ impl std::fmt::Debug for Dispatcher {
             .field("console", &"ConsoleObject")
             .field("open_upvalues_count", &self.open_upvalues.len())
             .field("current_upvalues_count", &self.current_upvalues.len())
+            .field("try_stack_depth", &self.try_stack.len())
+            .field("has_exception", &self.current_exception.is_some())
             .finish()
     }
 }
@@ -57,12 +76,21 @@ impl Dispatcher {
             Value::NativeObject(Rc::new(RefCell::new(MathObject)) as Rc<RefCell<dyn Any>>),
         );
 
+        // Inject Promise constructor as a NativeFunction
+        // Promise.resolve(), Promise.reject() are accessed via property lookup
+        globals.insert(
+            "Promise".to_string(),
+            Value::NativeFunction("Promise".to_string()),
+        );
+
         Self {
             globals,
             stack: Vec::with_capacity(256),
             console,
             open_upvalues: HashMap::new(),
             current_upvalues: Vec::new(),
+            try_stack: Vec::new(),
+            current_exception: None,
         }
     }
 
@@ -97,6 +125,46 @@ impl Dispatcher {
                 new_upvalue_handle(Upvalue::new_closed(Value::Undefined))
             }
         }
+    }
+
+    /// Throw an exception, unwinding the try stack to find a handler
+    ///
+    /// Returns Ok(()) if a handler was found and execution should continue,
+    /// or Err if no handler was found (uncaught exception).
+    fn throw_exception(
+        &mut self,
+        value: Value,
+        ctx: &mut ExecutionContext,
+    ) -> Result<(), JsError> {
+        self.current_exception = Some(value.clone());
+
+        // Find nearest catch handler
+        while let Some(handler) = self.try_stack.pop() {
+            // Unwind stack to try block's height
+            while self.stack.len() > handler.stack_height {
+                self.stack.pop();
+            }
+
+            if let Some(catch_offset) = handler.catch_offset {
+                // Jump to catch block, push exception value onto stack
+                self.stack.push(value);
+                ctx.instruction_pointer = catch_offset;
+                self.current_exception = None;
+                return Ok(());
+            } else if let Some(finally_offset) = handler.finally_offset {
+                // Must run finally block first (exception still pending)
+                ctx.instruction_pointer = finally_offset;
+                return Ok(());
+            }
+        }
+
+        // No handler found - propagate error as uncaught exception
+        Err(JsError {
+            kind: ErrorKind::InternalError,
+            message: format!("Uncaught exception: {:?}", value),
+            stack: vec![],
+            source_position: None,
+        })
     }
 
     /// Convert bytecode_system::Value to core_types::Value
@@ -380,6 +448,22 @@ impl Dispatcher {
                                 self.stack.push(Value::Undefined);
                             }
                         }
+                        Value::NativeFunction(fn_name) => {
+                            // Handle static properties on constructor functions
+                            if fn_name == "Promise" {
+                                match name.as_str() {
+                                    "resolve" => self
+                                        .stack
+                                        .push(Value::NativeFunction("Promise.resolve".to_string())),
+                                    "reject" => self
+                                        .stack
+                                        .push(Value::NativeFunction("Promise.reject".to_string())),
+                                    _ => self.stack.push(Value::Undefined),
+                                }
+                            } else {
+                                self.stack.push(Value::Undefined);
+                            }
+                        }
                         _ => self.stack.push(Value::Undefined),
                     }
                 }
@@ -450,6 +534,112 @@ impl Dispatcher {
                                 source_position: None,
                             });
                         }
+                    }
+                }
+
+                // Exception handling opcodes
+                Opcode::Throw => {
+                    let value = self.stack.pop().unwrap_or(Value::Undefined);
+                    self.throw_exception(value, ctx)?;
+                }
+
+                Opcode::PushTry(catch_offset) => {
+                    self.try_stack.push(TryHandler {
+                        catch_offset: Some(catch_offset),
+                        finally_offset: None,
+                        stack_height: self.stack.len(),
+                    });
+                }
+
+                Opcode::PopTry => {
+                    self.try_stack.pop();
+                }
+
+                Opcode::PushFinally(finally_offset) => {
+                    if let Some(handler) = self.try_stack.last_mut() {
+                        handler.finally_offset = Some(finally_offset);
+                    }
+                }
+
+                Opcode::PopFinally => {
+                    if let Some(handler) = self.try_stack.last_mut() {
+                        handler.finally_offset = None;
+                    }
+                    // If we're still throwing, re-throw after finally completes
+                    if let Some(exc) = self.current_exception.take() {
+                        self.throw_exception(exc, ctx)?;
+                    }
+                }
+
+                Opcode::Pop => {
+                    self.stack.pop();
+                }
+
+                // Async opcodes
+                Opcode::Await => {
+                    let promise_value = self.stack.pop().unwrap_or(Value::Undefined);
+
+                    // Check if it's a Promise
+                    match &promise_value {
+                        Value::NativeObject(obj) => {
+                            let borrowed = obj.borrow();
+                            if let Some(promise_obj) = borrowed.downcast_ref::<PromiseObject>() {
+                                match promise_obj.state() {
+                                    PromiseState::Fulfilled => {
+                                        // Promise is already resolved - get the value immediately
+                                        let result = promise_obj.value().cloned().unwrap_or(Value::Undefined);
+                                        drop(borrowed);
+                                        self.stack.push(result);
+                                    }
+                                    PromiseState::Rejected => {
+                                        // Promise is rejected - throw the error
+                                        if let Some(error) = promise_obj.error() {
+                                            return Err(error.clone());
+                                        } else {
+                                            let error_value = Value::Undefined;
+                                            drop(borrowed);
+                                            self.throw_exception(error_value, ctx)?;
+                                        }
+                                    }
+                                    PromiseState::Pending => {
+                                        // Promise is pending - in a real implementation we would
+                                        // suspend execution and schedule resume when promise resolves.
+                                        // For now, return undefined (synchronous fallback)
+                                        drop(borrowed);
+                                        self.stack.push(Value::Undefined);
+                                    }
+                                }
+                            } else {
+                                // Not a Promise object - return as-is
+                                drop(borrowed);
+                                self.stack.push(promise_value);
+                            }
+                        }
+                        _ => {
+                            // Not a Promise - just return the value (like awaiting a non-thenable)
+                            self.stack.push(promise_value);
+                        }
+                    }
+                }
+
+                Opcode::CreateAsyncFunction(idx, ref upvalue_descs) => {
+                    // Create an async function wrapper
+                    // In a full implementation, this would create a special async function
+                    // that returns a Promise when called
+                    if upvalue_descs.is_empty() {
+                        // No captured variables - use function index directly
+                        // Mark it as async by using a special encoding (high bit set)
+                        let async_marker = 0x8000_0000;
+                        self.stack.push(Value::HeapObject(idx | async_marker));
+                    } else {
+                        // With captured upvalues
+                        let mut captured_upvalues = Vec::with_capacity(upvalue_descs.len());
+                        for desc in upvalue_descs {
+                            let upvalue_handle = self.capture_upvalue(desc, ctx);
+                            captured_upvalues.push(upvalue_handle);
+                        }
+                        let async_marker = 0x8000_0000;
+                        self.stack.push(Value::HeapObject(idx | async_marker));
                     }
                 }
             }
@@ -554,6 +744,28 @@ impl Dispatcher {
             "Math.min" => {
                 let nums: Vec<f64> = args.iter().map(|v| self.to_number(v)).collect();
                 Ok(Value::Double(MathObject::min(&nums)))
+            }
+            // Promise methods
+            "Promise" => {
+                // Promise constructor - create a new pending promise
+                // In a full implementation, this would take an executor function
+                Ok(PromiseConstructor::new_pending())
+            }
+            "Promise.resolve" => {
+                // Create a resolved promise with the given value
+                let value = args.first().cloned().unwrap_or(Value::Undefined);
+                Ok(PromiseConstructor::resolve(value))
+            }
+            "Promise.reject" => {
+                // Create a rejected promise with the given error
+                let reason = args.first().cloned().unwrap_or(Value::Undefined);
+                let error = JsError {
+                    kind: ErrorKind::TypeError,
+                    message: format!("{:?}", reason),
+                    stack: vec![],
+                    source_position: None,
+                };
+                Ok(PromiseConstructor::reject(error))
             }
             _ => Err(JsError {
                 kind: ErrorKind::TypeError,
@@ -817,10 +1029,11 @@ mod tests {
     #[test]
     fn test_dispatcher_new() {
         let dispatcher = Dispatcher::new();
-        // Globals contains console and Math by default
-        assert_eq!(dispatcher.globals.len(), 2);
+        // Globals contains console, Math, and Promise by default
+        assert_eq!(dispatcher.globals.len(), 3);
         assert!(dispatcher.globals.contains_key("console"));
         assert!(dispatcher.globals.contains_key("Math"));
+        assert!(dispatcher.globals.contains_key("Promise"));
         assert!(dispatcher.stack.is_empty());
         assert!(dispatcher.open_upvalues.is_empty());
         assert!(dispatcher.current_upvalues.is_empty());
@@ -829,10 +1042,11 @@ mod tests {
     #[test]
     fn test_dispatcher_default() {
         let dispatcher = Dispatcher::default();
-        // Default has console and Math globals
-        assert_eq!(dispatcher.globals.len(), 2);
+        // Default has console, Math, and Promise globals
+        assert_eq!(dispatcher.globals.len(), 3);
         assert!(dispatcher.globals.contains_key("console"));
         assert!(dispatcher.globals.contains_key("Math"));
+        assert!(dispatcher.globals.contains_key("Promise"));
     }
 
     #[test]

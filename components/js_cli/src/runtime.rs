@@ -8,6 +8,7 @@
 //! - Builtins for standard library
 
 use crate::error::{CliError, CliResult};
+use async_runtime::EventLoop;
 use core_types::Value;
 
 /// Main runtime that orchestrates all JavaScript execution components
@@ -18,6 +19,10 @@ pub struct Runtime {
     print_bytecode: bool,
     /// Whether to print AST before execution
     print_ast: bool,
+    /// Event loop for async operations
+    event_loop: EventLoop,
+    /// Persistent VM instance for maintaining state
+    vm: interpreter::VM,
 }
 
 impl Runtime {
@@ -37,6 +42,8 @@ impl Runtime {
             enable_jit,
             print_bytecode: false,
             print_ast: false,
+            event_loop: EventLoop::new(),
+            vm: interpreter::VM::new(),
         }
     }
 
@@ -120,11 +127,31 @@ impl Runtime {
             println!("Bytecode: {:#?}", bytecode);
         }
 
-        // Execute using VM
-        let mut vm = interpreter::VM::new();
-        let result = vm.execute(&bytecode).map_err(CliError::JsError)?;
+        // Execute using persistent VM
+        let result = self.vm.execute(&bytecode).map_err(CliError::JsError)?;
+
+        // Run event loop to process pending promises and microtasks
+        self.event_loop.run_until_done().map_err(CliError::JsError)?;
 
         Ok(result)
+    }
+
+    /// Queue a microtask for execution in the event loop
+    ///
+    /// # Arguments
+    /// * `task` - A closure to execute as a microtask
+    pub fn queue_microtask(&mut self, task: impl FnOnce() -> Result<Value, core_types::JsError> + Send + 'static) {
+        self.event_loop.enqueue_microtask(async_runtime::MicroTask::new(task));
+    }
+
+    /// Get access to the event loop for advanced async operations
+    pub fn event_loop(&mut self) -> &mut EventLoop {
+        &mut self.event_loop
+    }
+
+    /// Get access to the VM for direct manipulation
+    pub fn vm(&mut self) -> &mut interpreter::VM {
+        &mut self.vm
     }
 
     /// Start the REPL (Read-Eval-Print Loop)

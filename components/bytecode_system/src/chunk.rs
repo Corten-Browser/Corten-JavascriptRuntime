@@ -249,6 +249,24 @@ impl BytecodeChunk {
             Opcode::LoadUpvalue(idx) => (32, idx.to_le_bytes().to_vec()),
             Opcode::StoreUpvalue(idx) => (33, idx.to_le_bytes().to_vec()),
             Opcode::CloseUpvalue => (34, vec![]),
+            Opcode::Throw => (35, vec![]),
+            Opcode::PushTry(offset) => (36, (*offset as u32).to_le_bytes().to_vec()),
+            Opcode::PopTry => (37, vec![]),
+            Opcode::PushFinally(offset) => (38, (*offset as u32).to_le_bytes().to_vec()),
+            Opcode::PopFinally => (39, vec![]),
+            Opcode::Pop => (40, vec![]),
+            Opcode::Await => (41, vec![]),
+            Opcode::CreateAsyncFunction(idx, upvalues) => {
+                let mut data = (*idx as u32).to_le_bytes().to_vec();
+                // Encode upvalue count
+                data.extend_from_slice(&(upvalues.len() as u32).to_le_bytes());
+                // Encode each upvalue descriptor
+                for upvalue in upvalues {
+                    data.push(if upvalue.is_local { 1 } else { 0 });
+                    data.extend_from_slice(&upvalue.index.to_le_bytes());
+                }
+                (42, data)
+            }
         }
     }
 
@@ -430,6 +448,41 @@ impl BytecodeChunk {
                 Opcode::StoreUpvalue(idx)
             }
             34 => Opcode::CloseUpvalue,
+            35 => Opcode::Throw,
+            36 => {
+                let off =
+                    u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap()) as usize;
+                offset += 4;
+                Opcode::PushTry(off)
+            }
+            37 => Opcode::PopTry,
+            38 => {
+                let off =
+                    u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap()) as usize;
+                offset += 4;
+                Opcode::PushFinally(off)
+            }
+            39 => Opcode::PopFinally,
+            40 => Opcode::Pop,
+            41 => Opcode::Await,
+            42 => {
+                let idx =
+                    u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap()) as usize;
+                offset += 4;
+                let upvalue_count =
+                    u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap()) as usize;
+                offset += 4;
+                let mut upvalues = Vec::with_capacity(upvalue_count);
+                for _ in 0..upvalue_count {
+                    let is_local = bytes[offset] != 0;
+                    offset += 1;
+                    let index =
+                        u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap());
+                    offset += 4;
+                    upvalues.push(UpvalueDescriptor::new(is_local, index));
+                }
+                Opcode::CreateAsyncFunction(idx, upvalues)
+            }
             _ => return Err(format!("Unknown opcode tag: {}", tag)),
         };
 
