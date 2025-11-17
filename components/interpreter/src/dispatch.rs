@@ -528,6 +528,119 @@ impl Dispatcher {
                         }
                     }
                 }
+                Opcode::GetIndex => {
+                    // Get value at computed index: obj[index]
+                    let index = self.stack.pop().unwrap_or(Value::Undefined);
+                    let obj = self.stack.pop().unwrap_or(Value::Undefined);
+
+                    let result = match obj {
+                        Value::NativeObject(native_obj) => {
+                            let borrowed = native_obj.borrow();
+                            if let Some(gc_obj) = borrowed.downcast_ref::<Box<dyn Any>>() {
+                                if let Some(gc_object) = gc_obj.downcast_ref::<GCObject>() {
+                                    // Convert index to string key
+                                    let key = self.to_property_key(&index);
+                                    gc_object.get(&key)
+                                } else {
+                                    Value::Undefined
+                                }
+                            } else {
+                                Value::Undefined
+                            }
+                        }
+                        Value::String(s) => {
+                            // String indexing: "hello"[1] => "e"
+                            match &index {
+                                Value::Smi(i) => {
+                                    if *i >= 0 {
+                                        s.chars()
+                                            .nth(*i as usize)
+                                            .map(|c| Value::String(c.to_string()))
+                                            .unwrap_or(Value::Undefined)
+                                    } else {
+                                        Value::Undefined
+                                    }
+                                }
+                                Value::Double(n) => {
+                                    if n.fract() == 0.0 && *n >= 0.0 {
+                                        s.chars()
+                                            .nth(*n as usize)
+                                            .map(|c| Value::String(c.to_string()))
+                                            .unwrap_or(Value::Undefined)
+                                    } else {
+                                        Value::Undefined
+                                    }
+                                }
+                                _ => Value::Undefined,
+                            }
+                        }
+                        _ => Value::Undefined,
+                    };
+                    self.stack.push(result);
+                }
+                Opcode::SetIndex => {
+                    // Set value at computed index: obj[index] = value
+                    let value = self.stack.pop().unwrap_or(Value::Undefined);
+                    let index = self.stack.pop().unwrap_or(Value::Undefined);
+                    let obj = self.stack.pop().unwrap_or(Value::Undefined);
+
+                    match obj {
+                        Value::NativeObject(native_obj) => {
+                            let mut borrowed = native_obj.borrow_mut();
+                            if let Some(gc_obj) = borrowed.downcast_mut::<Box<dyn Any>>() {
+                                if let Some(gc_object) = gc_obj.downcast_mut::<GCObject>() {
+                                    let key = self.to_property_key(&index);
+                                    gc_object.set(key, value);
+                                }
+                            }
+                        }
+                        _ => {
+                            // Ignore index stores to non-objects
+                        }
+                    }
+                }
+                Opcode::CreateArray(count) => {
+                    // Create array with elements from stack
+                    if let Some(ref heap) = self.heap {
+                        let gc_object = heap.create_object();
+                        let boxed: Box<dyn Any> = Box::new(gc_object);
+                        let obj_ref =
+                            Rc::new(RefCell::new(boxed)) as Rc<RefCell<dyn Any>>;
+
+                        // Pop elements from stack (in reverse order)
+                        let mut elements = Vec::with_capacity(count);
+                        for _ in 0..count {
+                            elements.push(self.stack.pop().unwrap_or(Value::Undefined));
+                        }
+                        elements.reverse(); // Now elements[0] is first
+
+                        // Store elements with numeric keys
+                        {
+                            let borrowed = obj_ref.borrow();
+                            if let Some(gc_obj) = borrowed.downcast_ref::<Box<dyn Any>>() {
+                                if let Some(_) = gc_obj.downcast_ref::<GCObject>() {
+                                    drop(borrowed);
+                                    let mut borrowed_mut = obj_ref.borrow_mut();
+                                    if let Some(gc_obj) = borrowed_mut.downcast_mut::<Box<dyn Any>>()
+                                    {
+                                        if let Some(gc_object) = gc_obj.downcast_mut::<GCObject>() {
+                                            for (i, elem) in elements.into_iter().enumerate() {
+                                                gc_object.set(i.to_string(), elem);
+                                            }
+                                            // Set length property
+                                            gc_object.set("length".to_string(), Value::Smi(count as i32));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        self.stack.push(Value::NativeObject(obj_ref));
+                    } else {
+                        // Fallback: push empty array representation
+                        self.stack.push(Value::HeapObject(0));
+                    }
+                }
                 Opcode::CreateClosure(idx, upvalue_descs) => {
                     // Create a closure by capturing upvalues from the current scope
                     if upvalue_descs.is_empty() {
@@ -578,6 +691,70 @@ impl Dispatcher {
                             return Err(JsError {
                                 kind: ErrorKind::TypeError,
                                 message: format!("{:?} is not a function", callee),
+                                stack: vec![],
+                                source_position: None,
+                            });
+                        }
+                    }
+                }
+                Opcode::CallMethod(argc) => {
+                    // Pop arguments first (in reverse order)
+                    let mut args = Vec::with_capacity(argc as usize);
+                    for _ in 0..argc {
+                        args.push(self.stack.pop().unwrap_or(Value::Undefined));
+                    }
+                    args.reverse(); // Now args[0] is first argument
+
+                    // Pop the method (function) from stack
+                    let method = self.stack.pop().unwrap_or(Value::Undefined);
+                    // Pop the receiver (this) from stack
+                    let receiver = self.stack.pop().unwrap_or(Value::Undefined);
+
+                    match method {
+                        Value::NativeFunction(name) => {
+                            let result = self.call_native_function(&name, args)?;
+                            self.stack.push(result);
+                        }
+                        Value::HeapObject(idx) => {
+                            // User-defined method - call with this binding
+                            let result = self.call_method_with_this(idx, receiver, args, functions)?;
+                            self.stack.push(result);
+                        }
+                        _ => {
+                            return Err(JsError {
+                                kind: ErrorKind::TypeError,
+                                message: format!("{:?} is not a function", method),
+                                stack: vec![],
+                                source_position: None,
+                            });
+                        }
+                    }
+                }
+                Opcode::CallNew(argc) => {
+                    // Pop arguments first (in reverse order)
+                    let mut args = Vec::with_capacity(argc as usize);
+                    for _ in 0..argc {
+                        args.push(self.stack.pop().unwrap_or(Value::Undefined));
+                    }
+                    args.reverse(); // Now args[0] is first argument
+
+                    // Pop the constructor from stack
+                    let constructor = self.stack.pop().unwrap_or(Value::Undefined);
+
+                    match constructor {
+                        Value::NativeFunction(name) => {
+                            let result = self.call_native_function(&name, args)?;
+                            self.stack.push(result);
+                        }
+                        Value::HeapObject(idx) => {
+                            // User-defined constructor - call with new instance as this
+                            let result = self.call_constructor(idx, args, functions)?;
+                            self.stack.push(result);
+                        }
+                        _ => {
+                            return Err(JsError {
+                                kind: ErrorKind::TypeError,
+                                message: format!("{:?} is not a constructor", constructor),
                                 stack: vec![],
                                 source_position: None,
                             });
@@ -938,6 +1115,200 @@ impl Dispatcher {
         result
     }
 
+    /// Execute a method call with `this` binding
+    ///
+    /// # Arguments
+    /// * `func_idx_or_closure` - The function index or closure encoded ID
+    /// * `receiver` - The receiver object (this binding)
+    /// * `args` - The function arguments
+    /// * `functions` - The function registry
+    ///
+    /// # Returns
+    /// The return value of the method
+    fn call_method_with_this(
+        &mut self,
+        func_idx_or_closure: usize,
+        receiver: Value,
+        args: Vec<Value>,
+        functions: &[BytecodeChunk],
+    ) -> Result<Value, JsError> {
+        // Check for recursion depth
+        static CALL_DEPTH: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let depth = CALL_DEPTH.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if depth > 10000 {
+            CALL_DEPTH.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+            return Err(JsError {
+                kind: ErrorKind::RangeError,
+                message: "Maximum call stack size exceeded".to_string(),
+                stack: vec![],
+                source_position: None,
+            });
+        }
+
+        // Determine the actual function index and closure upvalues
+        let (fn_idx, closure_upvalues) = if func_idx_or_closure >= 1_000_000 {
+            let closure_id = func_idx_or_closure - 1_000_000;
+            match self.closure_registry.get(&closure_id) {
+                Some((func_idx, upvalues)) => (*func_idx, Some(upvalues.clone())),
+                None => {
+                    CALL_DEPTH.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+                    return Err(JsError {
+                        kind: ErrorKind::ReferenceError,
+                        message: format!("Invalid closure ID: {}", closure_id),
+                        stack: vec![],
+                        source_position: None,
+                    });
+                }
+            }
+        } else {
+            (func_idx_or_closure, None)
+        };
+
+        // Get the function bytecode
+        let fn_bytecode = match functions.get(fn_idx) {
+            Some(chunk) => chunk.clone(),
+            None => {
+                CALL_DEPTH.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+                return Err(JsError {
+                    kind: ErrorKind::ReferenceError,
+                    message: format!("Invalid function index: {}", fn_idx),
+                    stack: vec![],
+                    source_position: None,
+                });
+            }
+        };
+
+        // Create new execution context
+        let mut fn_ctx = ExecutionContext::new(fn_bytecode);
+
+        // Set `this` as register 0 (special convention for method calls)
+        fn_ctx.set_register(0, receiver);
+
+        // Set arguments starting from register 1
+        for (i, arg) in args.into_iter().enumerate() {
+            fn_ctx.set_register(i + 1, arg);
+        }
+
+        // Save and restore upvalues
+        let saved_upvalues = std::mem::take(&mut self.current_upvalues);
+        let saved_open_upvalues = std::mem::take(&mut self.open_upvalues);
+        if let Some(upvalues) = closure_upvalues {
+            self.current_upvalues = upvalues;
+        }
+
+        let result = self.execute(&mut fn_ctx, functions);
+
+        self.current_upvalues = saved_upvalues;
+        self.open_upvalues = saved_open_upvalues;
+        CALL_DEPTH.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+
+        result
+    }
+
+    /// Execute a constructor call (new operator)
+    ///
+    /// # Arguments
+    /// * `func_idx_or_closure` - The function index or closure encoded ID
+    /// * `args` - The constructor arguments
+    /// * `functions` - The function registry
+    ///
+    /// # Returns
+    /// The newly created instance
+    fn call_constructor(
+        &mut self,
+        func_idx_or_closure: usize,
+        args: Vec<Value>,
+        functions: &[BytecodeChunk],
+    ) -> Result<Value, JsError> {
+        // Check for recursion depth
+        static CALL_DEPTH: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let depth = CALL_DEPTH.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if depth > 10000 {
+            CALL_DEPTH.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+            return Err(JsError {
+                kind: ErrorKind::RangeError,
+                message: "Maximum call stack size exceeded".to_string(),
+                stack: vec![],
+                source_position: None,
+            });
+        }
+
+        // Determine the actual function index and closure upvalues
+        let (fn_idx, closure_upvalues) = if func_idx_or_closure >= 1_000_000 {
+            let closure_id = func_idx_or_closure - 1_000_000;
+            match self.closure_registry.get(&closure_id) {
+                Some((func_idx, upvalues)) => (*func_idx, Some(upvalues.clone())),
+                None => {
+                    CALL_DEPTH.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+                    return Err(JsError {
+                        kind: ErrorKind::ReferenceError,
+                        message: format!("Invalid closure ID: {}", closure_id),
+                        stack: vec![],
+                        source_position: None,
+                    });
+                }
+            }
+        } else {
+            (func_idx_or_closure, None)
+        };
+
+        // Get the function bytecode
+        let fn_bytecode = match functions.get(fn_idx) {
+            Some(chunk) => chunk.clone(),
+            None => {
+                CALL_DEPTH.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+                return Err(JsError {
+                    kind: ErrorKind::ReferenceError,
+                    message: format!("Invalid function index: {}", fn_idx),
+                    stack: vec![],
+                    source_position: None,
+                });
+            }
+        };
+
+        // Create new instance object
+        let instance = if let Some(ref heap) = self.heap {
+            let gc_object = heap.create_object();
+            let boxed: Box<dyn Any> = Box::new(gc_object);
+            Value::NativeObject(Rc::new(RefCell::new(boxed)) as Rc<RefCell<dyn Any>>)
+        } else {
+            // Fallback
+            Value::HeapObject(0)
+        };
+
+        // Create new execution context
+        let mut fn_ctx = ExecutionContext::new(fn_bytecode);
+
+        // Set `this` (the new instance) as register 0
+        fn_ctx.set_register(0, instance.clone());
+
+        // Set arguments starting from register 1
+        for (i, arg) in args.into_iter().enumerate() {
+            fn_ctx.set_register(i + 1, arg);
+        }
+
+        // Save and restore upvalues
+        let saved_upvalues = std::mem::take(&mut self.current_upvalues);
+        let saved_open_upvalues = std::mem::take(&mut self.open_upvalues);
+        if let Some(upvalues) = closure_upvalues {
+            self.current_upvalues = upvalues;
+        }
+
+        let result = self.execute(&mut fn_ctx, functions);
+
+        self.current_upvalues = saved_upvalues;
+        self.open_upvalues = saved_open_upvalues;
+        CALL_DEPTH.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+
+        // If constructor returns an object, use that; otherwise return the instance
+        match result {
+            Ok(Value::Undefined) | Ok(Value::Null) => Ok(instance),
+            Ok(Value::NativeObject(_)) | Ok(Value::HeapObject(_)) => result,
+            Ok(_) => Ok(instance), // Primitive return values are ignored
+            Err(e) => Err(e),
+        }
+    }
+
     /// Get global variable
     pub fn get_global(&self, name: &str) -> Option<Value> {
         self.globals.get(name).cloned()
@@ -984,6 +1355,26 @@ impl Dispatcher {
             Value::HeapObject(id) => format!("[object Object {}]", id),
             Value::NativeObject(_) => "[object Object]".to_string(),
             Value::NativeFunction(name) => format!("function {}() {{ [native code] }}", name),
+        }
+    }
+
+    /// Convert a value to a property key (string)
+    fn to_property_key(&self, value: &Value) -> String {
+        match value {
+            Value::Smi(n) => n.to_string(),
+            Value::Double(n) => {
+                // Check if it's an integer
+                if n.fract() == 0.0 && *n >= 0.0 && *n <= (i32::MAX as f64) {
+                    (*n as i32).to_string()
+                } else {
+                    n.to_string()
+                }
+            }
+            Value::String(s) => s.clone(),
+            Value::Boolean(b) => b.to_string(),
+            Value::Undefined => "undefined".to_string(),
+            Value::Null => "null".to_string(),
+            _ => "[object]".to_string(),
         }
     }
 
