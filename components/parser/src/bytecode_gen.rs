@@ -643,29 +643,64 @@ impl BytecodeGenerator {
                 prefix,
                 ..
             } => {
-                // Simplified update expression
-                self.visit_expression(argument)?;
-
-                let one_idx = self.chunk.add_constant(BytecodeValue::Number(1.0));
-                self.chunk.emit(Opcode::LoadConstant(one_idx));
-
-                match operator {
-                    UpdateOperator::Increment => {
-                        self.chunk.emit(Opcode::Add);
-                    }
-                    UpdateOperator::Decrement => {
-                        self.chunk.emit(Opcode::Sub);
-                    }
-                }
-
-                // Store back (simplified - doesn't handle all cases)
+                // Handle update expressions (++i, i++, --i, i--)
                 if let Expression::Identifier { name, .. } = argument.as_ref() {
                     if let Some(&reg) = self.locals.get(name) {
-                        if !prefix {
-                            // Return old value for postfix
+                        if *prefix {
+                            // Prefix: ++i or --i
+                            // 1. Load current value
+                            // 2. Add/Sub 1
+                            // 3. Store back
+                            // 4. Result on stack is new value
                             self.visit_expression(argument)?;
+                            let one_idx = self.chunk.add_constant(BytecodeValue::Number(1.0));
+                            self.chunk.emit(Opcode::LoadConstant(one_idx));
+                            match operator {
+                                UpdateOperator::Increment => self.chunk.emit(Opcode::Add),
+                                UpdateOperator::Decrement => self.chunk.emit(Opcode::Sub),
+                            }
+                            // Duplicate the new value so we have one for storage and one for return
+                            self.chunk.emit(Opcode::Dup);
+                            self.chunk.emit(Opcode::StoreLocal(reg));
+                        } else {
+                            // Postfix: i++ or i--
+                            // 1. Load current value (for return)
+                            // 2. Load current value again (for computation)
+                            // 3. Add/Sub 1
+                            // 4. Store new value back
+                            // 5. Result on stack is old value
+                            self.visit_expression(argument)?; // old value (for return)
+                            self.visit_expression(argument)?; // old value (for computation)
+                            let one_idx = self.chunk.add_constant(BytecodeValue::Number(1.0));
+                            self.chunk.emit(Opcode::LoadConstant(one_idx));
+                            match operator {
+                                UpdateOperator::Increment => self.chunk.emit(Opcode::Add),
+                                UpdateOperator::Decrement => self.chunk.emit(Opcode::Sub),
+                            }
+                            // Stack now has: [old_value, new_value]
+                            // Store new value back to register
+                            self.chunk.emit(Opcode::StoreLocal(reg));
+                            // Stack now has: [old_value] - this is the return value
                         }
-                        self.chunk.emit(Opcode::StoreLocal(reg));
+                    } else {
+                        // Global variable - fallback to simpler approach
+                        self.visit_expression(argument)?;
+                        let one_idx = self.chunk.add_constant(BytecodeValue::Number(1.0));
+                        self.chunk.emit(Opcode::LoadConstant(one_idx));
+                        match operator {
+                            UpdateOperator::Increment => self.chunk.emit(Opcode::Add),
+                            UpdateOperator::Decrement => self.chunk.emit(Opcode::Sub),
+                        }
+                        self.chunk.emit(Opcode::StoreGlobal(name.clone()));
+                    }
+                } else {
+                    // Non-identifier argument (e.g., obj.prop++) - not fully implemented
+                    self.visit_expression(argument)?;
+                    let one_idx = self.chunk.add_constant(BytecodeValue::Number(1.0));
+                    self.chunk.emit(Opcode::LoadConstant(one_idx));
+                    match operator {
+                        UpdateOperator::Increment => self.chunk.emit(Opcode::Add),
+                        UpdateOperator::Decrement => self.chunk.emit(Opcode::Sub),
                     }
                 }
             }
@@ -1878,5 +1913,293 @@ mod tests {
         });
         assert!(!has_regular_call, "Constructor call should NOT use regular Call opcode");
     }
+
+    #[test]
+    fn test_postfix_increment_stores_new_value() {
+        let mut gen = BytecodeGenerator::new();
+        // let i = 0; i++;
+        let ast = ASTNode::Program(vec![
+            Statement::VariableDeclaration {
+                kind: VariableKind::Let,
+                declarations: vec![VariableDeclarator {
+                    id: Pattern::Identifier("i".to_string()),
+                    init: Some(Expression::Literal {
+                        value: Literal::Number(0.0),
+                        position: None,
+                    }),
+                }],
+                position: None,
+            },
+            Statement::ExpressionStatement {
+                expression: Expression::UpdateExpression {
+                    operator: UpdateOperator::Increment,
+                    argument: Box::new(Expression::Identifier {
+                        name: "i".to_string(),
+                        position: None,
+                    }),
+                    prefix: false,
+                    position: None,
+                },
+                position: None,
+            },
+        ]);
+
+        let chunk = gen.generate(&ast).unwrap();
+
+        // Count StoreLocal operations - there should be at least 2:
+        // 1. Initial variable assignment (i = 0)
+        // 2. Storing incremented value back (i = i + 1)
+        let store_count = chunk
+            .instructions
+            .iter()
+            .filter(|i| matches!(i.opcode, Opcode::StoreLocal(_)))
+            .count();
+
+        // Should have at least 2 StoreLocal operations
+        assert!(
+            store_count >= 2,
+            "Expected at least 2 StoreLocal operations (init + increment), got {}",
+            store_count
+        );
+
+        // Should have Add operation for increment
+        let has_add = chunk
+            .instructions
+            .iter()
+            .any(|i| matches!(i.opcode, Opcode::Add));
+        assert!(has_add, "Expected Add opcode for increment");
+
+        // Check that we have Load operations before Add (to compute i + 1)
+        let has_load_constant = chunk
+            .instructions
+            .iter()
+            .any(|i| matches!(i.opcode, Opcode::LoadConstant(_)));
+        assert!(has_load_constant, "Expected LoadConstant(1) for increment");
+    }
+
+    #[test]
+    fn test_for_loop_bytecode_structure() {
+        let mut gen = BytecodeGenerator::new();
+        // for (let i = 0; i < 3; i++) { }
+        let ast = ASTNode::Program(vec![Statement::ForStatement {
+            init: Some(ForInit::VariableDeclaration {
+                kind: VariableKind::Let,
+                declarations: vec![VariableDeclarator {
+                    id: Pattern::Identifier("i".to_string()),
+                    init: Some(Expression::Literal {
+                        value: Literal::Number(0.0),
+                        position: None,
+                    }),
+                }],
+            }),
+            test: Some(Expression::BinaryExpression {
+                left: Box::new(Expression::Identifier {
+                    name: "i".to_string(),
+                    position: None,
+                }),
+                operator: BinaryOperator::Lt,
+                right: Box::new(Expression::Literal {
+                    value: Literal::Number(3.0),
+                    position: None,
+                }),
+                position: None,
+            }),
+            update: Some(Expression::UpdateExpression {
+                operator: UpdateOperator::Increment,
+                argument: Box::new(Expression::Identifier {
+                    name: "i".to_string(),
+                    position: None,
+                }),
+                prefix: false,
+                position: None,
+            }),
+            body: Box::new(Statement::BlockStatement {
+                body: vec![],
+                position: None,
+            }),
+            position: None,
+        }]);
+
+        let chunk = gen.generate(&ast).unwrap();
+
+        // For loop must have:
+        // 1. StoreLocal for init (i = 0)
+        // 2. LoadLocal + LoadConstant + LessThan for test (i < 3)
+        // 3. JumpIfFalse to exit
+        // 4. Body (empty)
+        // 5. LoadLocal + LoadConstant + Add + StoreLocal for update (i++)
+        // 6. Jump back to test
+
+        // Check for Jump (loop back)
+        let jump_count = chunk
+            .instructions
+            .iter()
+            .filter(|i| matches!(i.opcode, Opcode::Jump(_)))
+            .count();
+        assert!(jump_count >= 1, "For loop must have at least one Jump (loop back)");
+
+        // Check for JumpIfFalse (exit condition)
+        let has_jump_if_false = chunk
+            .instructions
+            .iter()
+            .any(|i| matches!(i.opcode, Opcode::JumpIfFalse(_)));
+        assert!(has_jump_if_false, "For loop must have JumpIfFalse for exit condition");
+
+        // Check for LessThan (test condition)
+        let has_less_than = chunk
+            .instructions
+            .iter()
+            .any(|i| matches!(i.opcode, Opcode::LessThan));
+        assert!(has_less_than, "For loop test should have LessThan comparison");
+
+        // Check for Add (increment)
+        let has_add = chunk
+            .instructions
+            .iter()
+            .any(|i| matches!(i.opcode, Opcode::Add));
+        assert!(has_add, "For loop update (i++) should have Add operation");
+
+        // CRITICAL: Check that StoreLocal appears AFTER Add for the increment
+        // This ensures the new value is stored back, not the old value
+        let mut add_idx = None;
+        let mut store_after_add = false;
+
+        for (idx, inst) in chunk.instructions.iter().enumerate() {
+            if matches!(inst.opcode, Opcode::Add) {
+                add_idx = Some(idx);
+            }
+            if let Some(ai) = add_idx {
+                if idx > ai && matches!(inst.opcode, Opcode::StoreLocal(_)) {
+                    store_after_add = true;
+                    break;
+                }
+            }
+        }
+
+        assert!(
+            store_after_add,
+            "CRITICAL: StoreLocal must appear AFTER Add to store incremented value. This is the root cause of infinite loops!"
+        );
+    }
+
+    #[test]
+    fn test_prefix_increment_stores_new_value() {
+        let mut gen = BytecodeGenerator::new();
+        // let i = 0; ++i;
+        let ast = ASTNode::Program(vec![
+            Statement::VariableDeclaration {
+                kind: VariableKind::Let,
+                declarations: vec![VariableDeclarator {
+                    id: Pattern::Identifier("i".to_string()),
+                    init: Some(Expression::Literal {
+                        value: Literal::Number(0.0),
+                        position: None,
+                    }),
+                }],
+                position: None,
+            },
+            Statement::ExpressionStatement {
+                expression: Expression::UpdateExpression {
+                    operator: UpdateOperator::Increment,
+                    argument: Box::new(Expression::Identifier {
+                        name: "i".to_string(),
+                        position: None,
+                    }),
+                    prefix: true,
+                    position: None,
+                },
+                position: None,
+            },
+        ]);
+
+        let chunk = gen.generate(&ast).unwrap();
+
+        // For prefix increment (++i):
+        // 1. Load i
+        // 2. Load 1
+        // 3. Add
+        // 4. Store back to i (new value)
+        // Result on stack: new value
+
+        let store_count = chunk
+            .instructions
+            .iter()
+            .filter(|i| matches!(i.opcode, Opcode::StoreLocal(_)))
+            .count();
+
+        assert!(
+            store_count >= 2,
+            "Expected at least 2 StoreLocal (init + increment), got {}",
+            store_count
+        );
+
+        // Check Add appears before StoreLocal (for the increment, not init)
+        let mut saw_add = false;
+        let mut store_after_add = false;
+        for inst in &chunk.instructions {
+            if matches!(inst.opcode, Opcode::Add) {
+                saw_add = true;
+            }
+            if saw_add && matches!(inst.opcode, Opcode::StoreLocal(_)) {
+                store_after_add = true;
+                break;
+            }
+        }
+        assert!(store_after_add, "Prefix increment must Store after Add");
+    }
+
+    #[test]
+    fn debug_postfix_increment_bytecode() {
+        let mut gen = BytecodeGenerator::new();
+        // let i = 0; i++;
+        let ast = ASTNode::Program(vec![
+            Statement::VariableDeclaration {
+                kind: VariableKind::Let,
+                declarations: vec![VariableDeclarator {
+                    id: Pattern::Identifier("i".to_string()),
+                    init: Some(Expression::Literal {
+                        value: Literal::Number(0.0),
+                        position: None,
+                    }),
+                }],
+                position: None,
+            },
+            Statement::ExpressionStatement {
+                expression: Expression::UpdateExpression {
+                    operator: UpdateOperator::Increment,
+                    argument: Box::new(Expression::Identifier {
+                        name: "i".to_string(),
+                        position: None,
+                    }),
+                    prefix: false,
+                    position: None,
+                },
+                position: None,
+            },
+        ]);
+
+        let chunk = gen.generate(&ast).unwrap();
+
+        println!("\nBYTECODE FOR 'let i = 0; i++':");
+        for (idx, inst) in chunk.instructions.iter().enumerate() {
+            println!("{:3}: {:?}", idx, inst.opcode);
+        }
+        println!();
+
+        // Verify: The correct sequence should be:
+        // 0: LoadConstant(0) - load 0.0
+        // 1: StoreLocal(r0) - i = 0
+        // 2: LoadLocal(r0) - load i (old value)
+        // 3: LoadConstant(1) - load 1.0
+        // 4: Add - compute i + 1
+        // 5: LoadLocal(r0) - WRONG! This loads old value again
+        // 6: StoreLocal(r0) - stores old value back, NOT the result!
+        // 7: Return
+
+        // The bug: after computing i + 1, it loads i again and stores THAT
+        // The incremented value is never stored back!
+    }
 }
+
+
 
