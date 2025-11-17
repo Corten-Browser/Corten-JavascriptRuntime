@@ -629,13 +629,13 @@ fn test_limitation_strings() {
     // Currently this might not work as expected
 }
 
-// Object creation is placeholder
+// Object creation uses GC-managed NativeObject
 #[test]
 fn test_limitation_objects() {
     let mut runtime = Runtime::new(false);
 
-    // Object creation returns HeapObject placeholder
+    // Object creation returns NativeObject (GC-managed JavaScript object)
     let result = runtime.execute_string("let obj = {}; obj").unwrap();
-    assert!(matches!(result, Value::HeapObject(_)));
+    assert!(matches!(result, Value::NativeObject(_)));
     // TODO: Property access and manipulation need implementation
 }
