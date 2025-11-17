@@ -1,132 +1,123 @@
-# memory_manager Component
+# Memory Manager Component
 
-**Type**: Core Library (Level 1)
-**Tech Stack**: Rust, parking_lot, crossbeam
-**Version**: 0.1.0
+## Component Information
 
-## Purpose
-Garbage collector implementation with generational collection, hidden class system for property access optimization, and heap management using arena allocation.
+- **Name**: memory_manager
+- **Version**: 0.1.0
+- **Type**: Core
+- **Language**: Rust
+
+## Description
+
+Garbage collector and heap management for the JavaScript runtime. This component provides memory allocation, generational garbage collection, and object layout optimization through hidden classes.
+
+## Tech Stack
+
+- **Rust**: Primary implementation language
+- **Unsafe internals**: Low-level memory operations require unsafe Rust
+- **Safe wrappers**: All unsafe operations wrapped in safe, documented APIs
+- **No external GC libraries**: Custom implementation for JavaScript semantics
+
+## Responsibilities
+
+1. **Heap Management**
+   - Memory allocation for JavaScript values
+   - Young and old generation heap spaces
+   - Memory reclamation through garbage collection
+
+2. **Generational Garbage Collection**
+   - Young generation (nursery) for short-lived objects
+   - Old generation for long-lived objects
+   - Promotion policies for objects surviving collections
+   - Write barriers for maintaining remembered sets
+
+3. **Hidden Classes**
+   - Object shape tracking for property access optimization
+   - Transition chains for property additions
+   - Inline cache support for fast property access
+
+4. **Object Layout**
+   - Efficient property storage based on hidden classes
+   - Array element storage for indexed access
+   - Memory-efficient representation
 
 ## Dependencies
-- `core_types`: Value, JsError
 
-## Token Budget
-- Optimal: 60,000 tokens
-- Warning: 80,000 tokens
-- Critical: 100,000 tokens
+- `core_types`: JavaScript value types (Value, String, etc.)
 
-## Exported Types
+## Module Structure
 
-```rust
-// Heap management
-pub struct Heap {
-    pub young_gen: Arena<Object>,
-    pub old_gen: Arena<Object>,
-    pub remembered_set: HashSet<*mut Object>,
-}
-
-// Hidden classes for property optimization
-pub struct HiddenClass {
-    pub properties: Vec<PropertyDescriptor>,
-    pub transitions: HashMap<String, Box<HiddenClass>>,
-    pub prototype: Option<ObjectRef>,
-}
-
-// JavaScript object representation
-pub struct JSObject {
-    pub class: *const HiddenClass,
-    pub properties: Vec<Value>,
-    pub elements: Vec<Value>,
-}
-
-// Write barrier for GC
-pub unsafe fn write_barrier(obj: *mut Object, slot: *mut Value, new_val: Value);
-
-// Arena allocator
-pub struct Arena<T> {
-    // Semi-space for copying collector
-}
-```
-
-## Key Implementation Requirements
-
-### Generational GC
-1. **Young Generation**: Semi-space copying collector
-   - Fast bump-pointer allocation
-   - Scavenge when from-space full
-   - Copy survivors to to-space
-
-2. **Old Generation**: Mark-and-sweep
-   - Tri-color marking (white/gray/black)
-   - Concurrent marking capability
-   - Write barriers for remembered set
-
-### Write Barriers
-```rust
-unsafe fn write_barrier(obj: *mut Object, slot: *mut Value, new_val: Value) {
-    *slot = new_val;
-    // Track old-to-young pointers
-    if is_in_old_gen(obj) && is_in_young_gen(new_val) {
-        REMEMBERED_SET.insert(obj);
-    }
-    // Maintain tri-color invariant during marking
-    if is_marking() && is_black(obj) && is_white(new_val) {
-        mark_gray(new_val);
-    }
-}
-```
-
-### Hidden Classes
-- Objects with same properties in same order share hidden class
-- Transitions create new hidden classes
-- Enable fast property access (offset-based)
-
-## Mandatory Requirements
-
-### 1. Test-Driven Development
-- Write tests FIRST
-- 80%+ coverage
-- TDD pattern in git commits
-
-### 2. Unsafe Rust Documentation
-Every unsafe block must have:
-```rust
-// SAFETY: <explain why this is safe>
-unsafe {
-    // code
-}
-```
-
-### 3. Memory Safety Testing
-- Test for memory leaks
-- Test write barriers
-- Test GC correctness
-
-### 4. File Structure
 ```
 src/
-  lib.rs           # Public exports
-  heap.rs          # Heap and Arena
-  gc.rs            # Garbage collector
-  hidden_class.rs  # Hidden class system
-  object.rs        # JSObject
-  barriers.rs      # Write barriers
-tests/
-  unit/
-  integration/
-  contracts/
+├── lib.rs           # Module declarations and re-exports
+├── heap.rs          # Heap allocation and management
+├── gc.rs            # GC algorithms and policies
+├── hidden_class.rs  # Hidden class implementation
+├── object.rs        # JSObject representation
+└── write_barrier.rs # Write barrier for generational GC
 ```
 
-## Git Commit Format
-```
-[memory_manager] <type>: <description>
+## Safety Requirements
+
+- **All unsafe blocks must be documented** with safety invariants
+- **Safe wrappers required** for all public APIs using unsafe internals
+- **Memory safety** must be maintained across all operations
+- **No undefined behavior** from improper pointer usage
+
+## Quality Standards
+
+- Minimum 80% test coverage
+- All unsafe code blocks documented
+- Integration tests with core_types
+- Performance benchmarks for GC operations
+
+## Testing Strategy
+
+1. **Unit Tests**: Individual component functionality
+2. **Integration Tests**: Interaction between heap, GC, and objects
+3. **Property Tests**: Invariant checking (e.g., no dangling pointers)
+4. **Stress Tests**: Large allocation and collection scenarios
+5. **Memory Safety Tests**: Verify no leaks or corruption
+
+## Key Interfaces
+
+### Heap
+```rust
+impl Heap {
+    fn new() -> Self;
+    fn allocate(&mut self, size: usize) -> *mut u8;
+    fn collect_garbage(&mut self);
+    fn young_generation_size(&self) -> usize;
+    fn old_generation_size(&self) -> usize;
+}
 ```
 
-## Definition of Done
-- [ ] TDD cycles in git history
-- [ ] 80%+ coverage
-- [ ] All unsafe blocks documented
-- [ ] GC correctness tests passing
-- [ ] No memory leaks
-- [ ] `cargo fmt` && `cargo clippy`
-- [ ] Contract tests passing
+### HiddenClass
+```rust
+impl HiddenClass {
+    fn new() -> Self;
+    fn add_property(&self, name: String) -> Box<HiddenClass>;
+    fn lookup_property(&self, name: &str) -> Option<u32>;
+}
+```
+
+### JSObject
+```rust
+impl JSObject {
+    fn new(class: *const HiddenClass) -> Self;
+    fn get_property(&self, name: &str) -> Option<Value>;
+    fn set_property(&mut self, name: String, value: Value);
+}
+```
+
+### Write Barrier
+```rust
+unsafe fn write_barrier(obj: *mut Object, slot: *mut Value, new_val: Value);
+```
+
+## Development Notes
+
+- Start with simple mark-and-sweep, optimize later
+- Hidden classes are immutable; transitions create new classes
+- Write barriers are critical for GC correctness
+- Consider concurrent/incremental GC for future optimization
