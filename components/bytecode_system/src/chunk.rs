@@ -285,6 +285,11 @@ impl BytecodeChunk {
                 }
                 (42, data)
             }
+            Opcode::GetIndex => (45, vec![]),
+            Opcode::SetIndex => (46, vec![]),
+            Opcode::CreateArray(count) => (47, (*count as u32).to_le_bytes().to_vec()),
+            Opcode::CallMethod(argc) => (48, vec![*argc]),
+            Opcode::CallNew(argc) => (49, vec![*argc]),
         }
     }
 
@@ -503,6 +508,24 @@ impl BytecodeChunk {
                 Opcode::CreateAsyncFunction(idx, upvalues)
             }
             43 => Opcode::Dup,
+            45 => Opcode::GetIndex,
+            46 => Opcode::SetIndex,
+            47 => {
+                let count =
+                    u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap()) as usize;
+                offset += 4;
+                Opcode::CreateArray(count)
+            }
+            48 => {
+                let argc = bytes[offset];
+                offset += 1;
+                Opcode::CallMethod(argc)
+            }
+            49 => {
+                let argc = bytes[offset];
+                offset += 1;
+                Opcode::CallNew(argc)
+            }
             _ => return Err(format!("Unknown opcode tag: {}", tag)),
         };
 

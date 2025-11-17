@@ -1003,7 +1003,8 @@ impl<'a> Parser<'a> {
 
     fn parse_new_expression(&mut self) -> Result<Expression, JsError> {
         self.expect_keyword(Keyword::New)?;
-        let callee = Box::new(self.parse_left_hand_side_expression()?);
+        // Parse callee without consuming call expressions - those belong to the NewExpression
+        let callee = Box::new(self.parse_member_expression_without_call()?);
         let arguments = if self.check_punctuator(Punctuator::LParen)? {
             self.parse_arguments()?
         } else {
@@ -1015,6 +1016,48 @@ impl<'a> Parser<'a> {
             arguments,
             position: None,
         })
+    }
+
+    fn parse_member_expression_without_call(&mut self) -> Result<Expression, JsError> {
+        let mut expr = if self.check_keyword(Keyword::New)? {
+            self.parse_new_expression()?
+        } else {
+            self.parse_primary_expression()?
+        };
+
+        // Parse member access but NOT call expressions
+        loop {
+            if self.check_punctuator(Punctuator::Dot)? {
+                self.lexer.next_token()?;
+                let property = self.expect_identifier()?;
+                expr = Expression::MemberExpression {
+                    object: Box::new(expr),
+                    property: Box::new(Expression::Identifier {
+                        name: property,
+                        position: None,
+                    }),
+                    computed: false,
+                    optional: false,
+                    position: None,
+                };
+            } else if self.check_punctuator(Punctuator::LBracket)? {
+                self.lexer.next_token()?;
+                let property = Box::new(self.parse_expression()?);
+                self.expect_punctuator(Punctuator::RBracket)?;
+                expr = Expression::MemberExpression {
+                    object: Box::new(expr),
+                    property,
+                    computed: true,
+                    optional: false,
+                    position: None,
+                };
+            } else {
+                // Do NOT parse LParen here - that's for the NewExpression's arguments
+                break;
+            }
+        }
+
+        Ok(expr)
     }
 
     fn parse_arguments(&mut self) -> Result<Vec<Expression>, JsError> {

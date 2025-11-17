@@ -106,12 +106,24 @@ pub enum Opcode {
     LoadProperty(String),
     /// Store property to object
     StoreProperty(String),
+    /// Get value at computed index (for array[index] or obj[expr])
+    GetIndex,
+    /// Set value at computed index (for array[index] = value)
+    SetIndex,
+
+    // Array operations
+    /// Create array with given number of elements (elements are on stack)
+    CreateArray(usize),
 
     // Function operations
     /// Create closure from function at index with captured variables
     CreateClosure(usize, Vec<UpvalueDescriptor>),
     /// Call function with given number of arguments
     Call(u8),
+    /// Call method on object with this binding (argc includes this)
+    CallMethod(u8),
+    /// Call constructor with new (creates instance)
+    CallNew(u8),
 
     // Exception handling
     /// Pop value from stack and throw as exception

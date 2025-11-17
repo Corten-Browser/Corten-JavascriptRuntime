@@ -305,10 +305,126 @@ impl BytecodeGenerator {
                 }
             }
 
-            Statement::ClassDeclaration { .. } => {
-                // Simplified class compilation
-                self.chunk.emit(Opcode::CreateObject);
-                // Real implementation would set up prototype chain
+            Statement::ClassDeclaration { name, body, .. } => {
+                // A class declaration creates a constructor function bound to the class name
+                // Find the constructor method in the class body
+                let constructor_method = body.iter().find_map(|element| {
+                    if let ClassElement::MethodDefinition {
+                        kind: MethodKind::Constructor,
+                        value,
+                        ..
+                    } = element
+                    {
+                        Some(value)
+                    } else {
+                        None
+                    }
+                });
+
+                if let Some(constructor_expr) = constructor_method {
+                    // Extract parameters and body from the constructor function expression
+                    if let Expression::FunctionExpression {
+                        params,
+                        body: func_body,
+                        ..
+                    } = constructor_expr
+                    {
+                        // Create function bytecode with enclosing scope for closure support
+                        let current_gen = std::mem::replace(self, BytecodeGenerator::new());
+                        let mut func_gen =
+                            BytecodeGenerator::with_enclosing(Box::new(current_gen));
+
+                        // Set up parameters as locals
+                        for param in params {
+                            if let Pattern::Identifier(param_name) = param {
+                                let reg = func_gen.allocate_register();
+                                func_gen.locals.insert(param_name.clone(), reg);
+                            }
+                        }
+
+                        // Generate constructor body
+                        for stmt in func_body {
+                            func_gen.visit_statement(stmt)?;
+                        }
+
+                        // Ensure return (constructor returns 'this' implicitly, but we handle that in VM)
+                        if func_gen.chunk.instructions.is_empty()
+                            || !matches!(
+                                func_gen.chunk.instructions.last().map(|i| &i.opcode),
+                                Some(Opcode::Return)
+                            )
+                        {
+                            func_gen.chunk.emit(Opcode::LoadUndefined);
+                            func_gen.chunk.emit(Opcode::Return);
+                        }
+
+                        func_gen.chunk.register_count = func_gen.next_register;
+
+                        // Get the upvalues captured by this function
+                        let upvalues = func_gen.get_upvalues();
+
+                        // Get the compiled function bytecode
+                        let mut func_bytecode = func_gen.chunk.clone();
+
+                        // Collect any nested functions from the inner function
+                        let inner_nested = func_gen.take_nested_functions();
+
+                        // Restore the outer generator from the enclosing scope
+                        *self = *func_gen.enclosing.take().unwrap();
+
+                        // Add the compiled function to our nested functions list
+                        let func_idx = self.nested_functions.len();
+
+                        // Adjust indices in the function's bytecode for nested functions
+                        let inner_base_idx = func_idx + 1;
+                        Self::adjust_closure_indices(&mut func_bytecode, inner_base_idx);
+
+                        self.nested_functions.push(func_bytecode);
+
+                        // Also include any nested functions from the inner function
+                        let mut adjusted_inner_nested = inner_nested;
+                        for nested_chunk in &mut adjusted_inner_nested {
+                            Self::adjust_closure_indices(nested_chunk, inner_base_idx);
+                        }
+                        self.nested_functions.extend(adjusted_inner_nested);
+
+                        // Create closure with upvalue descriptors
+                        self.chunk.emit(Opcode::CreateClosure(func_idx, upvalues));
+
+                        // Store the constructor function with the class name as a global
+                        self.chunk.emit(Opcode::StoreGlobal(name.clone()));
+                    } else {
+                        // Constructor is not a function expression (shouldn't happen with valid parsing)
+                        // Fallback: create empty constructor
+                        let current_gen = std::mem::replace(self, BytecodeGenerator::new());
+                        let mut func_gen =
+                            BytecodeGenerator::with_enclosing(Box::new(current_gen));
+                        func_gen.chunk.emit(Opcode::LoadUndefined);
+                        func_gen.chunk.emit(Opcode::Return);
+                        func_gen.chunk.register_count = func_gen.next_register;
+                        let upvalues = func_gen.get_upvalues();
+                        let func_bytecode = func_gen.chunk.clone();
+                        *self = *func_gen.enclosing.take().unwrap();
+                        let func_idx = self.nested_functions.len();
+                        self.nested_functions.push(func_bytecode);
+                        self.chunk.emit(Opcode::CreateClosure(func_idx, upvalues));
+                        self.chunk.emit(Opcode::StoreGlobal(name.clone()));
+                    }
+                } else {
+                    // No explicit constructor - create a default empty constructor
+                    let current_gen = std::mem::replace(self, BytecodeGenerator::new());
+                    let mut func_gen = BytecodeGenerator::with_enclosing(Box::new(current_gen));
+                    func_gen.chunk.emit(Opcode::LoadUndefined);
+                    func_gen.chunk.emit(Opcode::Return);
+                    func_gen.chunk.register_count = func_gen.next_register;
+                    let upvalues = func_gen.get_upvalues();
+                    let func_bytecode = func_gen.chunk.clone();
+                    *self = *func_gen.enclosing.take().unwrap();
+                    let func_idx = self.nested_functions.len();
+                    self.nested_functions.push(func_bytecode);
+                    self.chunk.emit(Opcode::CreateClosure(func_idx, upvalues));
+                    self.chunk.emit(Opcode::StoreGlobal(name.clone()));
+                }
             }
 
             Statement::ExpressionStatement { expression, .. } => {
@@ -643,29 +759,64 @@ impl BytecodeGenerator {
                 prefix,
                 ..
             } => {
-                // Simplified update expression
-                self.visit_expression(argument)?;
-
-                let one_idx = self.chunk.add_constant(BytecodeValue::Number(1.0));
-                self.chunk.emit(Opcode::LoadConstant(one_idx));
-
-                match operator {
-                    UpdateOperator::Increment => {
-                        self.chunk.emit(Opcode::Add);
-                    }
-                    UpdateOperator::Decrement => {
-                        self.chunk.emit(Opcode::Sub);
-                    }
-                }
-
-                // Store back (simplified - doesn't handle all cases)
+                // Handle update expressions (++i, i++, --i, i--)
                 if let Expression::Identifier { name, .. } = argument.as_ref() {
                     if let Some(&reg) = self.locals.get(name) {
-                        if !prefix {
-                            // Return old value for postfix
+                        if *prefix {
+                            // Prefix: ++i or --i
+                            // 1. Load current value
+                            // 2. Add/Sub 1
+                            // 3. Store back
+                            // 4. Result on stack is new value
                             self.visit_expression(argument)?;
+                            let one_idx = self.chunk.add_constant(BytecodeValue::Number(1.0));
+                            self.chunk.emit(Opcode::LoadConstant(one_idx));
+                            match operator {
+                                UpdateOperator::Increment => self.chunk.emit(Opcode::Add),
+                                UpdateOperator::Decrement => self.chunk.emit(Opcode::Sub),
+                            }
+                            // Duplicate the new value so we have one for storage and one for return
+                            self.chunk.emit(Opcode::Dup);
+                            self.chunk.emit(Opcode::StoreLocal(reg));
+                        } else {
+                            // Postfix: i++ or i--
+                            // 1. Load current value (for return)
+                            // 2. Load current value again (for computation)
+                            // 3. Add/Sub 1
+                            // 4. Store new value back
+                            // 5. Result on stack is old value
+                            self.visit_expression(argument)?; // old value (for return)
+                            self.visit_expression(argument)?; // old value (for computation)
+                            let one_idx = self.chunk.add_constant(BytecodeValue::Number(1.0));
+                            self.chunk.emit(Opcode::LoadConstant(one_idx));
+                            match operator {
+                                UpdateOperator::Increment => self.chunk.emit(Opcode::Add),
+                                UpdateOperator::Decrement => self.chunk.emit(Opcode::Sub),
+                            }
+                            // Stack now has: [old_value, new_value]
+                            // Store new value back to register
+                            self.chunk.emit(Opcode::StoreLocal(reg));
+                            // Stack now has: [old_value] - this is the return value
                         }
-                        self.chunk.emit(Opcode::StoreLocal(reg));
+                    } else {
+                        // Global variable - fallback to simpler approach
+                        self.visit_expression(argument)?;
+                        let one_idx = self.chunk.add_constant(BytecodeValue::Number(1.0));
+                        self.chunk.emit(Opcode::LoadConstant(one_idx));
+                        match operator {
+                            UpdateOperator::Increment => self.chunk.emit(Opcode::Add),
+                            UpdateOperator::Decrement => self.chunk.emit(Opcode::Sub),
+                        }
+                        self.chunk.emit(Opcode::StoreGlobal(name.clone()));
+                    }
+                } else {
+                    // Non-identifier argument (e.g., obj.prop++) - not fully implemented
+                    self.visit_expression(argument)?;
+                    let one_idx = self.chunk.add_constant(BytecodeValue::Number(1.0));
+                    self.chunk.emit(Opcode::LoadConstant(one_idx));
+                    match operator {
+                        UpdateOperator::Increment => self.chunk.emit(Opcode::Add),
+                        UpdateOperator::Decrement => self.chunk.emit(Opcode::Sub),
                     }
                 }
             }
@@ -733,11 +884,18 @@ impl BytecodeGenerator {
                             ..
                         } = member_expr.as_ref()
                         {
-                            // StoreProperty expects stack: [obj, value]
-                            // So we need to visit object first, then the value
-                            self.visit_expression(object)?;
-                            self.visit_expression(right)?;
-                            if !computed {
+                            if *computed {
+                                // Computed assignment: obj[key] = value
+                                // SetIndex expects stack: [obj, key, value]
+                                self.visit_expression(object)?;
+                                self.visit_expression(property)?;
+                                self.visit_expression(right)?;
+                                self.chunk.emit(Opcode::SetIndex);
+                            } else {
+                                // Static assignment: obj.prop = value
+                                // StoreProperty expects stack: [obj, value]
+                                self.visit_expression(object)?;
+                                self.visit_expression(right)?;
                                 if let Expression::Identifier { name, .. } = property.as_ref() {
                                     self.chunk.emit(Opcode::StoreProperty(name.clone()));
                                 }
@@ -777,54 +935,109 @@ impl BytecodeGenerator {
             Expression::CallExpression {
                 callee, arguments, ..
             } => {
-                // Push callee first (it goes underneath the arguments on stack)
-                self.visit_expression(callee)?;
+                // Check if this is a method call (callee is MemberExpression)
+                if let Expression::MemberExpression {
+                    object,
+                    property,
+                    computed,
+                    ..
+                } = callee.as_ref()
+                {
+                    // Method call: obj.method(args) - need to bind 'this' to obj
+                    // Stack should be: [obj, method, arg1, arg2, ...]
+                    self.visit_expression(object)?;
 
-                // Push arguments (they go on top of callee)
-                for arg in arguments {
-                    self.visit_expression(arg)?;
+                    // Duplicate object so we have it for both property access and 'this'
+                    self.chunk.emit(Opcode::Dup);
+
+                    // Get the method
+                    if *computed {
+                        self.visit_expression(property)?;
+                        self.chunk.emit(Opcode::GetIndex);
+                    } else if let Expression::Identifier { name, .. } = property.as_ref() {
+                        self.chunk.emit(Opcode::LoadProperty(name.clone()));
+                    }
+
+                    // Push arguments
+                    for arg in arguments {
+                        self.visit_expression(arg)?;
+                    }
+
+                    // CallMethod expects stack: [obj (this), method, arg1, arg2, ...]
+                    // argc includes the arguments only (not 'this' or method)
+                    self.chunk.emit(Opcode::CallMethod(arguments.len() as u8));
+                } else {
+                    // Regular function call
+                    // Push callee first (it goes underneath the arguments on stack)
+                    self.visit_expression(callee)?;
+
+                    // Push arguments (they go on top of callee)
+                    for arg in arguments {
+                        self.visit_expression(arg)?;
+                    }
+
+                    // Call - dispatcher expects stack: [callee, arg1, arg2, ...]
+                    self.chunk.emit(Opcode::Call(arguments.len() as u8));
                 }
-
-                // Call - dispatcher expects stack: [callee, arg1, arg2, ...]
-                self.chunk.emit(Opcode::Call(arguments.len() as u8));
             }
 
             Expression::MemberExpression {
-                object, property, ..
+                object,
+                property,
+                computed,
+                ..
             } => {
                 self.visit_expression(object)?;
 
-                if let Expression::Identifier { name, .. } = property.as_ref() {
-                    self.chunk.emit(Opcode::LoadProperty(name.clone()));
+                if *computed {
+                    // Computed access: obj[expr] - use GetIndex
+                    self.visit_expression(property)?;
+                    self.chunk.emit(Opcode::GetIndex);
+                } else {
+                    // Static access: obj.prop - use LoadProperty
+                    if let Expression::Identifier { name, .. } = property.as_ref() {
+                        self.chunk.emit(Opcode::LoadProperty(name.clone()));
+                    }
                 }
             }
 
             Expression::NewExpression {
                 callee, arguments, ..
             } => {
-                // Simplified new - just call
-                // Push callee first (it goes underneath the arguments on stack)
+                // Push constructor first (it goes underneath the arguments on stack)
                 self.visit_expression(callee)?;
                 for arg in arguments {
                     self.visit_expression(arg)?;
                 }
-                self.chunk.emit(Opcode::Call(arguments.len() as u8));
+                // Use CallNew to properly create new instance
+                self.chunk.emit(Opcode::CallNew(arguments.len() as u8));
             }
 
             Expression::ArrayExpression { elements, .. } => {
-                self.chunk.emit(Opcode::CreateObject); // Simplified
+                // Push all elements onto the stack first
+                let mut element_count = 0;
                 for elem in elements {
                     if let Some(el) = elem {
                         match el {
                             ArrayElement::Expression(e) => {
                                 self.visit_expression(e)?;
+                                element_count += 1;
                             }
                             ArrayElement::Spread(e) => {
+                                // For spread, we push the array to be spread
+                                // The VM should handle expanding it
                                 self.visit_expression(e)?;
+                                element_count += 1;
                             }
                         }
+                    } else {
+                        // Hole in array - push undefined
+                        self.chunk.emit(Opcode::LoadUndefined);
+                        element_count += 1;
                     }
                 }
+                // Create the array with the specified number of elements
+                self.chunk.emit(Opcode::CreateArray(element_count));
             }
 
             Expression::ObjectExpression { properties, .. } => {
@@ -1317,5 +1530,1197 @@ mod tests {
         // After taking, nested_functions should be empty
         assert_eq!(gen.nested_functions().len(), 0);
     }
+
+    #[test]
+    fn test_array_literal_generates_create_array() {
+        let mut gen = BytecodeGenerator::new();
+        let ast = ASTNode::Program(vec![Statement::ExpressionStatement {
+            expression: Expression::ArrayExpression {
+                elements: vec![
+                    Some(ArrayElement::Expression(Expression::Literal {
+                        value: Literal::Number(1.0),
+                        position: None,
+                    })),
+                    Some(ArrayElement::Expression(Expression::Literal {
+                        value: Literal::Number(2.0),
+                        position: None,
+                    })),
+                    Some(ArrayElement::Expression(Expression::Literal {
+                        value: Literal::Number(3.0),
+                        position: None,
+                    })),
+                ],
+                position: None,
+            },
+            position: None,
+        }]);
+
+        let chunk = gen.generate(&ast).unwrap();
+
+        // Should have CreateArray(3) opcode
+        let has_create_array = chunk.instructions.iter().any(|i| {
+            matches!(i.opcode, Opcode::CreateArray(3))
+        });
+        assert!(has_create_array, "Expected CreateArray(3) opcode for array literal [1, 2, 3]");
+    }
+
+    #[test]
+    fn test_empty_array_generates_create_array_zero() {
+        let mut gen = BytecodeGenerator::new();
+        let ast = ASTNode::Program(vec![Statement::ExpressionStatement {
+            expression: Expression::ArrayExpression {
+                elements: vec![],
+                position: None,
+            },
+            position: None,
+        }]);
+
+        let chunk = gen.generate(&ast).unwrap();
+
+        let has_create_array = chunk.instructions.iter().any(|i| {
+            matches!(i.opcode, Opcode::CreateArray(0))
+        });
+        assert!(has_create_array, "Expected CreateArray(0) for empty array");
+    }
+
+    #[test]
+    fn test_array_with_holes_generates_create_array() {
+        let mut gen = BytecodeGenerator::new();
+        let ast = ASTNode::Program(vec![Statement::ExpressionStatement {
+            expression: Expression::ArrayExpression {
+                elements: vec![
+                    Some(ArrayElement::Expression(Expression::Literal {
+                        value: Literal::Number(1.0),
+                        position: None,
+                    })),
+                    None, // hole
+                    Some(ArrayElement::Expression(Expression::Literal {
+                        value: Literal::Number(3.0),
+                        position: None,
+                    })),
+                ],
+                position: None,
+            },
+            position: None,
+        }]);
+
+        let chunk = gen.generate(&ast).unwrap();
+
+        // Should have LoadUndefined for the hole
+        let has_load_undefined = chunk.instructions.iter().any(|i| {
+            matches!(i.opcode, Opcode::LoadUndefined)
+        });
+        assert!(has_load_undefined, "Expected LoadUndefined for array hole");
+
+        // Should have CreateArray(3)
+        let has_create_array = chunk.instructions.iter().any(|i| {
+            matches!(i.opcode, Opcode::CreateArray(3))
+        });
+        assert!(has_create_array, "Expected CreateArray(3) for array with hole");
+    }
+
+    #[test]
+    fn test_computed_member_access_generates_get_index() {
+        let mut gen = BytecodeGenerator::new();
+        // arr[0]
+        let ast = ASTNode::Program(vec![Statement::ExpressionStatement {
+            expression: Expression::MemberExpression {
+                object: Box::new(Expression::Identifier {
+                    name: "arr".to_string(),
+                    position: None,
+                }),
+                property: Box::new(Expression::Literal {
+                    value: Literal::Number(0.0),
+                    position: None,
+                }),
+                computed: true,
+                optional: false,
+                position: None,
+            },
+            position: None,
+        }]);
+
+        let chunk = gen.generate(&ast).unwrap();
+
+        let has_get_index = chunk.instructions.iter().any(|i| {
+            matches!(i.opcode, Opcode::GetIndex)
+        });
+        assert!(has_get_index, "Expected GetIndex opcode for arr[0]");
+    }
+
+    #[test]
+    fn test_computed_member_access_with_string_key() {
+        let mut gen = BytecodeGenerator::new();
+        // obj["key"]
+        let ast = ASTNode::Program(vec![Statement::ExpressionStatement {
+            expression: Expression::MemberExpression {
+                object: Box::new(Expression::Identifier {
+                    name: "obj".to_string(),
+                    position: None,
+                }),
+                property: Box::new(Expression::Literal {
+                    value: Literal::String("key".to_string()),
+                    position: None,
+                }),
+                computed: true,
+                optional: false,
+                position: None,
+            },
+            position: None,
+        }]);
+
+        let chunk = gen.generate(&ast).unwrap();
+
+        let has_get_index = chunk.instructions.iter().any(|i| {
+            matches!(i.opcode, Opcode::GetIndex)
+        });
+        assert!(has_get_index, "Expected GetIndex opcode for obj[\"key\"]");
+    }
+
+    #[test]
+    fn test_static_member_access_generates_load_property() {
+        let mut gen = BytecodeGenerator::new();
+        // obj.prop
+        let ast = ASTNode::Program(vec![Statement::ExpressionStatement {
+            expression: Expression::MemberExpression {
+                object: Box::new(Expression::Identifier {
+                    name: "obj".to_string(),
+                    position: None,
+                }),
+                property: Box::new(Expression::Identifier {
+                    name: "prop".to_string(),
+                    position: None,
+                }),
+                computed: false,
+                optional: false,
+                position: None,
+            },
+            position: None,
+        }]);
+
+        let chunk = gen.generate(&ast).unwrap();
+
+        let has_load_property = chunk.instructions.iter().any(|i| {
+            matches!(i.opcode, Opcode::LoadProperty(ref s) if s == "prop")
+        });
+        assert!(has_load_property, "Expected LoadProperty(\"prop\") for obj.prop");
+    }
+
+    #[test]
+    fn test_computed_assignment_generates_set_index() {
+        let mut gen = BytecodeGenerator::new();
+        // arr[0] = value
+        let ast = ASTNode::Program(vec![Statement::ExpressionStatement {
+            expression: Expression::AssignmentExpression {
+                left: AssignmentTarget::Member(Box::new(Expression::MemberExpression {
+                    object: Box::new(Expression::Identifier {
+                        name: "arr".to_string(),
+                        position: None,
+                    }),
+                    property: Box::new(Expression::Literal {
+                        value: Literal::Number(0.0),
+                        position: None,
+                    }),
+                    computed: true,
+                    optional: false,
+                    position: None,
+                })),
+                operator: AssignmentOperator::Assign,
+                right: Box::new(Expression::Literal {
+                    value: Literal::Number(42.0),
+                    position: None,
+                }),
+                position: None,
+            },
+            position: None,
+        }]);
+
+        let chunk = gen.generate(&ast).unwrap();
+
+        let has_set_index = chunk.instructions.iter().any(|i| {
+            matches!(i.opcode, Opcode::SetIndex)
+        });
+        assert!(has_set_index, "Expected SetIndex opcode for arr[0] = value");
+    }
+
+    #[test]
+    fn test_computed_string_assignment_generates_set_index() {
+        let mut gen = BytecodeGenerator::new();
+        // obj["key"] = value
+        let ast = ASTNode::Program(vec![Statement::ExpressionStatement {
+            expression: Expression::AssignmentExpression {
+                left: AssignmentTarget::Member(Box::new(Expression::MemberExpression {
+                    object: Box::new(Expression::Identifier {
+                        name: "obj".to_string(),
+                        position: None,
+                    }),
+                    property: Box::new(Expression::Literal {
+                        value: Literal::String("key".to_string()),
+                        position: None,
+                    }),
+                    computed: true,
+                    optional: false,
+                    position: None,
+                })),
+                operator: AssignmentOperator::Assign,
+                right: Box::new(Expression::Literal {
+                    value: Literal::String("value".to_string()),
+                    position: None,
+                }),
+                position: None,
+            },
+            position: None,
+        }]);
+
+        let chunk = gen.generate(&ast).unwrap();
+
+        let has_set_index = chunk.instructions.iter().any(|i| {
+            matches!(i.opcode, Opcode::SetIndex)
+        });
+        assert!(has_set_index, "Expected SetIndex opcode for obj[\"key\"] = value");
+    }
+
+    #[test]
+    fn test_method_call_generates_call_method() {
+        let mut gen = BytecodeGenerator::new();
+        // obj.method(arg1, arg2)
+        let ast = ASTNode::Program(vec![Statement::ExpressionStatement {
+            expression: Expression::CallExpression {
+                callee: Box::new(Expression::MemberExpression {
+                    object: Box::new(Expression::Identifier {
+                        name: "obj".to_string(),
+                        position: None,
+                    }),
+                    property: Box::new(Expression::Identifier {
+                        name: "method".to_string(),
+                        position: None,
+                    }),
+                    computed: false,
+                    optional: false,
+                    position: None,
+                }),
+                arguments: vec![
+                    Expression::Literal {
+                        value: Literal::Number(1.0),
+                        position: None,
+                    },
+                    Expression::Literal {
+                        value: Literal::Number(2.0),
+                        position: None,
+                    },
+                ],
+                optional: false,
+                position: None,
+            },
+            position: None,
+        }]);
+
+        let chunk = gen.generate(&ast).unwrap();
+
+        // Should have Dup (to preserve 'this')
+        let has_dup = chunk.instructions.iter().any(|i| {
+            matches!(i.opcode, Opcode::Dup)
+        });
+        assert!(has_dup, "Expected Dup opcode for method call (preserve 'this')");
+
+        // Should have CallMethod(2)
+        let has_call_method = chunk.instructions.iter().any(|i| {
+            matches!(i.opcode, Opcode::CallMethod(2))
+        });
+        assert!(has_call_method, "Expected CallMethod(2) opcode for obj.method(arg1, arg2)");
+    }
+
+    #[test]
+    fn test_method_call_no_args_generates_call_method() {
+        let mut gen = BytecodeGenerator::new();
+        // obj.method()
+        let ast = ASTNode::Program(vec![Statement::ExpressionStatement {
+            expression: Expression::CallExpression {
+                callee: Box::new(Expression::MemberExpression {
+                    object: Box::new(Expression::Identifier {
+                        name: "obj".to_string(),
+                        position: None,
+                    }),
+                    property: Box::new(Expression::Identifier {
+                        name: "method".to_string(),
+                        position: None,
+                    }),
+                    computed: false,
+                    optional: false,
+                    position: None,
+                }),
+                arguments: vec![],
+                optional: false,
+                position: None,
+            },
+            position: None,
+        }]);
+
+        let chunk = gen.generate(&ast).unwrap();
+
+        let has_call_method = chunk.instructions.iter().any(|i| {
+            matches!(i.opcode, Opcode::CallMethod(0))
+        });
+        assert!(has_call_method, "Expected CallMethod(0) opcode for obj.method()");
+    }
+
+    #[test]
+    fn test_computed_method_call_generates_call_method() {
+        let mut gen = BytecodeGenerator::new();
+        // obj["method"](arg)
+        let ast = ASTNode::Program(vec![Statement::ExpressionStatement {
+            expression: Expression::CallExpression {
+                callee: Box::new(Expression::MemberExpression {
+                    object: Box::new(Expression::Identifier {
+                        name: "obj".to_string(),
+                        position: None,
+                    }),
+                    property: Box::new(Expression::Literal {
+                        value: Literal::String("method".to_string()),
+                        position: None,
+                    }),
+                    computed: true,
+                    optional: false,
+                    position: None,
+                }),
+                arguments: vec![Expression::Literal {
+                    value: Literal::Number(42.0),
+                    position: None,
+                }],
+                optional: false,
+                position: None,
+            },
+            position: None,
+        }]);
+
+        let chunk = gen.generate(&ast).unwrap();
+
+        // Should use GetIndex for computed property access
+        let has_get_index = chunk.instructions.iter().any(|i| {
+            matches!(i.opcode, Opcode::GetIndex)
+        });
+        assert!(has_get_index, "Expected GetIndex for computed method access");
+
+        let has_call_method = chunk.instructions.iter().any(|i| {
+            matches!(i.opcode, Opcode::CallMethod(1))
+        });
+        assert!(has_call_method, "Expected CallMethod(1) for obj[\"method\"](arg)");
+    }
+
+    #[test]
+    fn test_regular_function_call_generates_call() {
+        let mut gen = BytecodeGenerator::new();
+        // func(arg1, arg2)
+        let ast = ASTNode::Program(vec![Statement::ExpressionStatement {
+            expression: Expression::CallExpression {
+                callee: Box::new(Expression::Identifier {
+                    name: "func".to_string(),
+                    position: None,
+                }),
+                arguments: vec![
+                    Expression::Literal {
+                        value: Literal::Number(1.0),
+                        position: None,
+                    },
+                    Expression::Literal {
+                        value: Literal::Number(2.0),
+                        position: None,
+                    },
+                ],
+                optional: false,
+                position: None,
+            },
+            position: None,
+        }]);
+
+        let chunk = gen.generate(&ast).unwrap();
+
+        // Should NOT have CallMethod
+        let has_call_method = chunk.instructions.iter().any(|i| {
+            matches!(i.opcode, Opcode::CallMethod(_))
+        });
+        assert!(!has_call_method, "Regular function call should NOT use CallMethod");
+
+        // Should have Call(2)
+        let has_call = chunk.instructions.iter().any(|i| {
+            matches!(i.opcode, Opcode::Call(2))
+        });
+        assert!(has_call, "Expected Call(2) opcode for func(arg1, arg2)");
+    }
+
+    #[test]
+    fn test_constructor_call_generates_call_new() {
+        let mut gen = BytecodeGenerator::new();
+        // new Foo(arg1, arg2)
+        let ast = ASTNode::Program(vec![Statement::ExpressionStatement {
+            expression: Expression::NewExpression {
+                callee: Box::new(Expression::Identifier {
+                    name: "Foo".to_string(),
+                    position: None,
+                }),
+                arguments: vec![
+                    Expression::Literal {
+                        value: Literal::Number(1.0),
+                        position: None,
+                    },
+                    Expression::Literal {
+                        value: Literal::Number(2.0),
+                        position: None,
+                    },
+                ],
+                position: None,
+            },
+            position: None,
+        }]);
+
+        let chunk = gen.generate(&ast).unwrap();
+
+        let has_call_new = chunk.instructions.iter().any(|i| {
+            matches!(i.opcode, Opcode::CallNew(2))
+        });
+        assert!(has_call_new, "Expected CallNew(2) opcode for new Foo(arg1, arg2)");
+    }
+
+    #[test]
+    fn test_constructor_call_no_args_generates_call_new() {
+        let mut gen = BytecodeGenerator::new();
+        // new Foo()
+        let ast = ASTNode::Program(vec![Statement::ExpressionStatement {
+            expression: Expression::NewExpression {
+                callee: Box::new(Expression::Identifier {
+                    name: "Foo".to_string(),
+                    position: None,
+                }),
+                arguments: vec![],
+                position: None,
+            },
+            position: None,
+        }]);
+
+        let chunk = gen.generate(&ast).unwrap();
+
+        let has_call_new = chunk.instructions.iter().any(|i| {
+            matches!(i.opcode, Opcode::CallNew(0))
+        });
+        assert!(has_call_new, "Expected CallNew(0) opcode for new Foo()");
+    }
+
+    #[test]
+    fn test_constructor_call_does_not_use_regular_call() {
+        let mut gen = BytecodeGenerator::new();
+        // new Foo()
+        let ast = ASTNode::Program(vec![Statement::ExpressionStatement {
+            expression: Expression::NewExpression {
+                callee: Box::new(Expression::Identifier {
+                    name: "Foo".to_string(),
+                    position: None,
+                }),
+                arguments: vec![],
+                position: None,
+            },
+            position: None,
+        }]);
+
+        let chunk = gen.generate(&ast).unwrap();
+
+        // Should NOT have regular Call
+        let has_regular_call = chunk.instructions.iter().any(|i| {
+            matches!(i.opcode, Opcode::Call(_))
+        });
+        assert!(!has_regular_call, "Constructor call should NOT use regular Call opcode");
+    }
+
+    #[test]
+    fn test_postfix_increment_stores_new_value() {
+        let mut gen = BytecodeGenerator::new();
+        // let i = 0; i++;
+        let ast = ASTNode::Program(vec![
+            Statement::VariableDeclaration {
+                kind: VariableKind::Let,
+                declarations: vec![VariableDeclarator {
+                    id: Pattern::Identifier("i".to_string()),
+                    init: Some(Expression::Literal {
+                        value: Literal::Number(0.0),
+                        position: None,
+                    }),
+                }],
+                position: None,
+            },
+            Statement::ExpressionStatement {
+                expression: Expression::UpdateExpression {
+                    operator: UpdateOperator::Increment,
+                    argument: Box::new(Expression::Identifier {
+                        name: "i".to_string(),
+                        position: None,
+                    }),
+                    prefix: false,
+                    position: None,
+                },
+                position: None,
+            },
+        ]);
+
+        let chunk = gen.generate(&ast).unwrap();
+
+        // Count StoreLocal operations - there should be at least 2:
+        // 1. Initial variable assignment (i = 0)
+        // 2. Storing incremented value back (i = i + 1)
+        let store_count = chunk
+            .instructions
+            .iter()
+            .filter(|i| matches!(i.opcode, Opcode::StoreLocal(_)))
+            .count();
+
+        // Should have at least 2 StoreLocal operations
+        assert!(
+            store_count >= 2,
+            "Expected at least 2 StoreLocal operations (init + increment), got {}",
+            store_count
+        );
+
+        // Should have Add operation for increment
+        let has_add = chunk
+            .instructions
+            .iter()
+            .any(|i| matches!(i.opcode, Opcode::Add));
+        assert!(has_add, "Expected Add opcode for increment");
+
+        // Check that we have Load operations before Add (to compute i + 1)
+        let has_load_constant = chunk
+            .instructions
+            .iter()
+            .any(|i| matches!(i.opcode, Opcode::LoadConstant(_)));
+        assert!(has_load_constant, "Expected LoadConstant(1) for increment");
+    }
+
+    #[test]
+    fn test_for_loop_bytecode_structure() {
+        let mut gen = BytecodeGenerator::new();
+        // for (let i = 0; i < 3; i++) { }
+        let ast = ASTNode::Program(vec![Statement::ForStatement {
+            init: Some(ForInit::VariableDeclaration {
+                kind: VariableKind::Let,
+                declarations: vec![VariableDeclarator {
+                    id: Pattern::Identifier("i".to_string()),
+                    init: Some(Expression::Literal {
+                        value: Literal::Number(0.0),
+                        position: None,
+                    }),
+                }],
+            }),
+            test: Some(Expression::BinaryExpression {
+                left: Box::new(Expression::Identifier {
+                    name: "i".to_string(),
+                    position: None,
+                }),
+                operator: BinaryOperator::Lt,
+                right: Box::new(Expression::Literal {
+                    value: Literal::Number(3.0),
+                    position: None,
+                }),
+                position: None,
+            }),
+            update: Some(Expression::UpdateExpression {
+                operator: UpdateOperator::Increment,
+                argument: Box::new(Expression::Identifier {
+                    name: "i".to_string(),
+                    position: None,
+                }),
+                prefix: false,
+                position: None,
+            }),
+            body: Box::new(Statement::BlockStatement {
+                body: vec![],
+                position: None,
+            }),
+            position: None,
+        }]);
+
+        let chunk = gen.generate(&ast).unwrap();
+
+        // For loop must have:
+        // 1. StoreLocal for init (i = 0)
+        // 2. LoadLocal + LoadConstant + LessThan for test (i < 3)
+        // 3. JumpIfFalse to exit
+        // 4. Body (empty)
+        // 5. LoadLocal + LoadConstant + Add + StoreLocal for update (i++)
+        // 6. Jump back to test
+
+        // Check for Jump (loop back)
+        let jump_count = chunk
+            .instructions
+            .iter()
+            .filter(|i| matches!(i.opcode, Opcode::Jump(_)))
+            .count();
+        assert!(jump_count >= 1, "For loop must have at least one Jump (loop back)");
+
+        // Check for JumpIfFalse (exit condition)
+        let has_jump_if_false = chunk
+            .instructions
+            .iter()
+            .any(|i| matches!(i.opcode, Opcode::JumpIfFalse(_)));
+        assert!(has_jump_if_false, "For loop must have JumpIfFalse for exit condition");
+
+        // Check for LessThan (test condition)
+        let has_less_than = chunk
+            .instructions
+            .iter()
+            .any(|i| matches!(i.opcode, Opcode::LessThan));
+        assert!(has_less_than, "For loop test should have LessThan comparison");
+
+        // Check for Add (increment)
+        let has_add = chunk
+            .instructions
+            .iter()
+            .any(|i| matches!(i.opcode, Opcode::Add));
+        assert!(has_add, "For loop update (i++) should have Add operation");
+
+        // CRITICAL: Check that StoreLocal appears AFTER Add for the increment
+        // This ensures the new value is stored back, not the old value
+        let mut add_idx = None;
+        let mut store_after_add = false;
+
+        for (idx, inst) in chunk.instructions.iter().enumerate() {
+            if matches!(inst.opcode, Opcode::Add) {
+                add_idx = Some(idx);
+            }
+            if let Some(ai) = add_idx {
+                if idx > ai && matches!(inst.opcode, Opcode::StoreLocal(_)) {
+                    store_after_add = true;
+                    break;
+                }
+            }
+        }
+
+        assert!(
+            store_after_add,
+            "CRITICAL: StoreLocal must appear AFTER Add to store incremented value. This is the root cause of infinite loops!"
+        );
+    }
+
+    #[test]
+    fn test_prefix_increment_stores_new_value() {
+        let mut gen = BytecodeGenerator::new();
+        // let i = 0; ++i;
+        let ast = ASTNode::Program(vec![
+            Statement::VariableDeclaration {
+                kind: VariableKind::Let,
+                declarations: vec![VariableDeclarator {
+                    id: Pattern::Identifier("i".to_string()),
+                    init: Some(Expression::Literal {
+                        value: Literal::Number(0.0),
+                        position: None,
+                    }),
+                }],
+                position: None,
+            },
+            Statement::ExpressionStatement {
+                expression: Expression::UpdateExpression {
+                    operator: UpdateOperator::Increment,
+                    argument: Box::new(Expression::Identifier {
+                        name: "i".to_string(),
+                        position: None,
+                    }),
+                    prefix: true,
+                    position: None,
+                },
+                position: None,
+            },
+        ]);
+
+        let chunk = gen.generate(&ast).unwrap();
+
+        // For prefix increment (++i):
+        // 1. Load i
+        // 2. Load 1
+        // 3. Add
+        // 4. Store back to i (new value)
+        // Result on stack: new value
+
+        let store_count = chunk
+            .instructions
+            .iter()
+            .filter(|i| matches!(i.opcode, Opcode::StoreLocal(_)))
+            .count();
+
+        assert!(
+            store_count >= 2,
+            "Expected at least 2 StoreLocal (init + increment), got {}",
+            store_count
+        );
+
+        // Check Add appears before StoreLocal (for the increment, not init)
+        let mut saw_add = false;
+        let mut store_after_add = false;
+        for inst in &chunk.instructions {
+            if matches!(inst.opcode, Opcode::Add) {
+                saw_add = true;
+            }
+            if saw_add && matches!(inst.opcode, Opcode::StoreLocal(_)) {
+                store_after_add = true;
+                break;
+            }
+        }
+        assert!(store_after_add, "Prefix increment must Store after Add");
+    }
+
+    #[test]
+    fn debug_postfix_increment_bytecode() {
+        let mut gen = BytecodeGenerator::new();
+        // let i = 0; i++;
+        let ast = ASTNode::Program(vec![
+            Statement::VariableDeclaration {
+                kind: VariableKind::Let,
+                declarations: vec![VariableDeclarator {
+                    id: Pattern::Identifier("i".to_string()),
+                    init: Some(Expression::Literal {
+                        value: Literal::Number(0.0),
+                        position: None,
+                    }),
+                }],
+                position: None,
+            },
+            Statement::ExpressionStatement {
+                expression: Expression::UpdateExpression {
+                    operator: UpdateOperator::Increment,
+                    argument: Box::new(Expression::Identifier {
+                        name: "i".to_string(),
+                        position: None,
+                    }),
+                    prefix: false,
+                    position: None,
+                },
+                position: None,
+            },
+        ]);
+
+        let chunk = gen.generate(&ast).unwrap();
+
+        println!("\nBYTECODE FOR 'let i = 0; i++':");
+        for (idx, inst) in chunk.instructions.iter().enumerate() {
+            println!("{:3}: {:?}", idx, inst.opcode);
+        }
+        println!();
+
+        // Verify: The correct sequence should be:
+        // 0: LoadConstant(0) - load 0.0
+        // 1: StoreLocal(r0) - i = 0
+        // 2: LoadLocal(r0) - load i (old value)
+        // 3: LoadConstant(1) - load 1.0
+        // 4: Add - compute i + 1
+        // 5: LoadLocal(r0) - WRONG! This loads old value again
+        // 6: StoreLocal(r0) - stores old value back, NOT the result!
+        // 7: Return
+
+        // The bug: after computing i + 1, it loads i again and stores THAT
+        // The incremented value is never stored back!
+    }
+
+    #[test]
+    fn test_class_declaration_with_constructor() {
+        let mut gen = BytecodeGenerator::new();
+        // class Counter { constructor(start) { this.count = start; } }
+        let ast = ASTNode::Program(vec![Statement::ClassDeclaration {
+            name: "Counter".to_string(),
+            super_class: None,
+            body: vec![ClassElement::MethodDefinition {
+                key: "constructor".to_string(),
+                kind: MethodKind::Constructor,
+                value: Expression::FunctionExpression {
+                    name: None,
+                    params: vec![Pattern::Identifier("start".to_string())],
+                    body: vec![Statement::ExpressionStatement {
+                        expression: Expression::AssignmentExpression {
+                            left: AssignmentTarget::Member(Box::new(Expression::MemberExpression {
+                                object: Box::new(Expression::ThisExpression { position: None }),
+                                property: Box::new(Expression::Identifier {
+                                    name: "count".to_string(),
+                                    position: None,
+                                }),
+                                computed: false,
+                                optional: false,
+                                position: None,
+                            })),
+                            operator: AssignmentOperator::Assign,
+                            right: Box::new(Expression::Identifier {
+                                name: "start".to_string(),
+                                position: None,
+                            }),
+                            position: None,
+                        },
+                        position: None,
+                    }],
+                    is_async: false,
+                    is_generator: false,
+                    position: None,
+                },
+                is_static: false,
+            }],
+            position: None,
+        }]);
+
+        let chunk = gen.generate(&ast).unwrap();
+
+        // Should have CreateClosure (for the constructor)
+        let has_create_closure = chunk
+            .instructions
+            .iter()
+            .any(|i| matches!(i.opcode, Opcode::CreateClosure(_, _)));
+        assert!(
+            has_create_closure,
+            "Class declaration should create a closure for the constructor"
+        );
+
+        // Should have StoreGlobal("Counter") to bind the class name
+        let has_store_global = chunk
+            .instructions
+            .iter()
+            .any(|i| matches!(i.opcode, Opcode::StoreGlobal(ref s) if s == "Counter"));
+        assert!(
+            has_store_global,
+            "Class declaration should store constructor as global with class name"
+        );
+
+        // Should have exactly one nested function (the constructor)
+        let nested = gen.nested_functions();
+        assert_eq!(
+            nested.len(),
+            1,
+            "Expected 1 nested function (the constructor)"
+        );
+
+        // The nested function (constructor) should have bytecode
+        assert!(
+            !nested[0].instructions.is_empty(),
+            "Constructor should have bytecode"
+        );
+    }
+
+    #[test]
+    fn test_class_declaration_without_constructor() {
+        let mut gen = BytecodeGenerator::new();
+        // class Empty { }
+        let ast = ASTNode::Program(vec![Statement::ClassDeclaration {
+            name: "Empty".to_string(),
+            super_class: None,
+            body: vec![],
+            position: None,
+        }]);
+
+        let chunk = gen.generate(&ast).unwrap();
+
+        // Should still have CreateClosure (for default constructor)
+        let has_create_closure = chunk
+            .instructions
+            .iter()
+            .any(|i| matches!(i.opcode, Opcode::CreateClosure(_, _)));
+        assert!(
+            has_create_closure,
+            "Class without constructor should create default constructor"
+        );
+
+        // Should have StoreGlobal("Empty")
+        let has_store_global = chunk
+            .instructions
+            .iter()
+            .any(|i| matches!(i.opcode, Opcode::StoreGlobal(ref s) if s == "Empty"));
+        assert!(
+            has_store_global,
+            "Class without constructor should still bind class name globally"
+        );
+
+        // Should have exactly one nested function (default constructor)
+        let nested = gen.nested_functions();
+        assert_eq!(
+            nested.len(),
+            1,
+            "Expected 1 nested function (default constructor)"
+        );
+    }
+
+    #[test]
+    fn test_class_instantiation_generates_call_new() {
+        let mut gen = BytecodeGenerator::new();
+        // class Foo { constructor(x) { this.x = x; } }
+        // let f = new Foo(5);
+        let ast = ASTNode::Program(vec![
+            Statement::ClassDeclaration {
+                name: "Foo".to_string(),
+                super_class: None,
+                body: vec![ClassElement::MethodDefinition {
+                    key: "constructor".to_string(),
+                    kind: MethodKind::Constructor,
+                    value: Expression::FunctionExpression {
+                        name: None,
+                        params: vec![Pattern::Identifier("x".to_string())],
+                        body: vec![Statement::ExpressionStatement {
+                            expression: Expression::AssignmentExpression {
+                                left: AssignmentTarget::Member(Box::new(
+                                    Expression::MemberExpression {
+                                        object: Box::new(Expression::ThisExpression {
+                                            position: None,
+                                        }),
+                                        property: Box::new(Expression::Identifier {
+                                            name: "x".to_string(),
+                                            position: None,
+                                        }),
+                                        computed: false,
+                                        optional: false,
+                                        position: None,
+                                    },
+                                )),
+                                operator: AssignmentOperator::Assign,
+                                right: Box::new(Expression::Identifier {
+                                    name: "x".to_string(),
+                                    position: None,
+                                }),
+                                position: None,
+                            },
+                            position: None,
+                        }],
+                        is_async: false,
+                        is_generator: false,
+                        position: None,
+                    },
+                    is_static: false,
+                }],
+                position: None,
+            },
+            Statement::VariableDeclaration {
+                kind: VariableKind::Let,
+                declarations: vec![VariableDeclarator {
+                    id: Pattern::Identifier("f".to_string()),
+                    init: Some(Expression::NewExpression {
+                        callee: Box::new(Expression::Identifier {
+                            name: "Foo".to_string(),
+                            position: None,
+                        }),
+                        arguments: vec![Expression::Literal {
+                            value: Literal::Number(5.0),
+                            position: None,
+                        }],
+                        position: None,
+                    }),
+                }],
+                position: None,
+            },
+        ]);
+
+        let chunk = gen.generate(&ast).unwrap();
+
+        // Should have LoadGlobal("Foo") to load the constructor
+        let has_load_global = chunk
+            .instructions
+            .iter()
+            .any(|i| matches!(i.opcode, Opcode::LoadGlobal(ref s) if s == "Foo"));
+        assert!(
+            has_load_global,
+            "new Foo() should LoadGlobal to get the constructor"
+        );
+
+        // Should have CallNew(1) to call constructor with 1 argument
+        let has_call_new = chunk
+            .instructions
+            .iter()
+            .any(|i| matches!(i.opcode, Opcode::CallNew(1)));
+        assert!(has_call_new, "new Foo(5) should use CallNew(1)");
+
+        // The sequence should be:
+        // 1. CreateClosure (constructor)
+        // 2. StoreGlobal("Foo")
+        // 3. LoadGlobal("Foo")
+        // 4. LoadConstant(5)
+        // 5. CallNew(1)
+        // 6. StoreLocal (for 'f')
+    }
+
+    #[test]
+    fn test_class_constructor_bytecode_has_parameter() {
+        let mut gen = BytecodeGenerator::new();
+        // class Foo { constructor(x) { this.x = x; } }
+        let ast = ASTNode::Program(vec![Statement::ClassDeclaration {
+            name: "Foo".to_string(),
+            super_class: None,
+            body: vec![ClassElement::MethodDefinition {
+                key: "constructor".to_string(),
+                kind: MethodKind::Constructor,
+                value: Expression::FunctionExpression {
+                    name: None,
+                    params: vec![Pattern::Identifier("x".to_string())],
+                    body: vec![Statement::ExpressionStatement {
+                        expression: Expression::AssignmentExpression {
+                            left: AssignmentTarget::Member(Box::new(Expression::MemberExpression {
+                                object: Box::new(Expression::ThisExpression { position: None }),
+                                property: Box::new(Expression::Identifier {
+                                    name: "x".to_string(),
+                                    position: None,
+                                }),
+                                computed: false,
+                                optional: false,
+                                position: None,
+                            })),
+                            operator: AssignmentOperator::Assign,
+                            right: Box::new(Expression::Identifier {
+                                name: "x".to_string(),
+                                position: None,
+                            }),
+                            position: None,
+                        },
+                        position: None,
+                    }],
+                    is_async: false,
+                    is_generator: false,
+                    position: None,
+                },
+                is_static: false,
+            }],
+            position: None,
+        }]);
+
+        let _chunk = gen.generate(&ast).unwrap();
+        let nested = gen.nested_functions();
+        assert_eq!(nested.len(), 1);
+
+        // The constructor should have at least 1 register (for parameter 'x')
+        assert!(
+            nested[0].register_count >= 1,
+            "Constructor should have at least 1 register for parameter"
+        );
+
+        // Constructor bytecode should contain operations for 'this.x = x'
+        // This includes: LoadGlobal("this"), LoadLocal (for x), StoreProperty("x")
+        let has_load_global_this = nested[0]
+            .instructions
+            .iter()
+            .any(|i| matches!(i.opcode, Opcode::LoadGlobal(ref s) if s == "this"));
+        assert!(
+            has_load_global_this,
+            "Constructor body should reference 'this'"
+        );
+
+        let has_store_property = nested[0]
+            .instructions
+            .iter()
+            .any(|i| matches!(i.opcode, Opcode::StoreProperty(ref s) if s == "x"));
+        assert!(
+            has_store_property,
+            "Constructor should store property 'x' on this"
+        );
+    }
+
+    #[test]
+    fn debug_class_declaration_bytecode() {
+        let mut gen = BytecodeGenerator::new();
+        // class Foo { constructor(x) { this.x = x; } }
+        let ast = ASTNode::Program(vec![Statement::ClassDeclaration {
+            name: "Foo".to_string(),
+            super_class: None,
+            body: vec![ClassElement::MethodDefinition {
+                key: "constructor".to_string(),
+                kind: MethodKind::Constructor,
+                value: Expression::FunctionExpression {
+                    name: None,
+                    params: vec![Pattern::Identifier("x".to_string())],
+                    body: vec![Statement::ExpressionStatement {
+                        expression: Expression::AssignmentExpression {
+                            left: AssignmentTarget::Member(Box::new(Expression::MemberExpression {
+                                object: Box::new(Expression::ThisExpression { position: None }),
+                                property: Box::new(Expression::Identifier {
+                                    name: "x".to_string(),
+                                    position: None,
+                                }),
+                                computed: false,
+                                optional: false,
+                                position: None,
+                            })),
+                            operator: AssignmentOperator::Assign,
+                            right: Box::new(Expression::Identifier {
+                                name: "x".to_string(),
+                                position: None,
+                            }),
+                            position: None,
+                        },
+                        position: None,
+                    }],
+                    is_async: false,
+                    is_generator: false,
+                    position: None,
+                },
+                is_static: false,
+            }],
+            position: None,
+        }]);
+
+        let chunk = gen.generate(&ast).unwrap();
+
+        println!("\nBYTECODE FOR 'class Foo {{ constructor(x) {{ this.x = x; }} }}':");
+        println!("Main bytecode:");
+        for (idx, inst) in chunk.instructions.iter().enumerate() {
+            println!("{:3}: {:?}", idx, inst.opcode);
+        }
+
+        let nested = gen.nested_functions();
+        println!("\nConstructor bytecode ({} nested functions):", nested.len());
+        if !nested.is_empty() {
+            for (idx, inst) in nested[0].instructions.iter().enumerate() {
+                println!("{:3}: {:?}", idx, inst.opcode);
+            }
+        }
+        println!();
+
+        // Verify the fix: main bytecode should have CreateClosure + StoreGlobal("Foo")
+        assert!(chunk.instructions.iter().any(|i| matches!(i.opcode, Opcode::CreateClosure(_, _))));
+        assert!(chunk.instructions.iter().any(|i| matches!(i.opcode, Opcode::StoreGlobal(ref s) if s == "Foo")));
+    }
+
+    #[test]
+    fn test_parsed_new_expression_uses_call_new() {
+        // This test verifies the fix for the bug where `new Foo(5)` was generating
+        // Call opcode instead of CallNew. The issue was that parse_new_expression()
+        // was parsing the callee with parse_left_hand_side_expression(), which would
+        // consume the (5) as a CallExpression instead of leaving it for NewExpression.
+        use crate::Parser;
+
+        let source = "new Foo(5);";
+        let mut parser = Parser::new(source);
+        let ast = parser.parse().expect("Failed to parse 'new Foo(5)'");
+
+        let mut gen = BytecodeGenerator::new();
+        let chunk = gen.generate(&ast).expect("Failed to generate bytecode");
+
+        // Must have CallNew(1) for the constructor call
+        let has_call_new = chunk
+            .instructions
+            .iter()
+            .any(|i| matches!(i.opcode, Opcode::CallNew(1)));
+        assert!(
+            has_call_new,
+            "new Foo(5) should generate CallNew(1), not Call(1)"
+        );
+
+        // Must NOT have regular Call for this expression
+        let has_regular_call = chunk
+            .instructions
+            .iter()
+            .any(|i| matches!(i.opcode, Opcode::Call(1)));
+        assert!(
+            !has_regular_call,
+            "new Foo(5) should not generate Call(1)"
+        );
+
+        // Verify the sequence: LoadGlobal("Foo"), LoadConstant, CallNew(1)
+        let has_load_global = chunk
+            .instructions
+            .iter()
+            .any(|i| matches!(i.opcode, Opcode::LoadGlobal(ref s) if s == "Foo"));
+        assert!(
+            has_load_global,
+            "Should LoadGlobal('Foo') to get constructor"
+        );
+    }
 }
+
+
+
+
 

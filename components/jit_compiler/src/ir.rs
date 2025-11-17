@@ -107,6 +107,20 @@ pub enum IROpcode {
     Await,
     /// Create async function
     CreateAsyncFunction(usize),
+
+    // Array and method operations
+    /// Get array element by index (stack: [array, index] -> [value])
+    GetIndex,
+    /// Set array element by index (stack: [array, index, value] -> [])
+    SetIndex,
+    /// Create array with given number of elements from stack
+    CreateArray(usize),
+    /// Call method on object (stack: [object, method_name, args...] -> [result])
+    CallMethod(u8),
+    /// Call constructor with new (stack: [constructor, args...] -> [instance])
+    CallNew(u8),
+    /// Deoptimize - fall back to interpreter
+    Deoptimize,
 }
 
 /// Single IR instruction
@@ -204,6 +218,12 @@ impl IRFunction {
                 // Async operations
                 Opcode::Await => IROpcode::Await,
                 Opcode::CreateAsyncFunction(idx, _) => IROpcode::CreateAsyncFunction(*idx),
+                // Array and method operations
+                Opcode::GetIndex => IROpcode::GetIndex,
+                Opcode::SetIndex => IROpcode::SetIndex,
+                Opcode::CreateArray(size) => IROpcode::CreateArray(*size),
+                Opcode::CallMethod(argc) => IROpcode::CallMethod(*argc),
+                Opcode::CallNew(argc) => IROpcode::CallNew(*argc),
             };
 
             ir_func.instructions.push(IRInstruction::new(ir_op, offset));
