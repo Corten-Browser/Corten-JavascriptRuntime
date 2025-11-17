@@ -1,5 +1,5 @@
 {
-  "version": "1.0.0",
+  "version": "1.1.0",
   "installer_version": "1.0.0",
   "installed_at": "2025-11-16T22:04:54+01:00",
   "max_parallel_agents": 7,
@@ -7,6 +7,14 @@
     "gate_enforcement",
     "state_tracking",
     "checkpointing",
-    "resume_capability"
-  ]
+    "resume_capability",
+    "anti_stopping_enforcement",
+    "spec_completeness_verification",
+    "stub_detection",
+    "session_continuation",
+    "progress_preservation",
+    "completion_gate"
+  ],
+  "upgraded_from": "1.0.0",
+  "last_upgraded": "2025-11-17T21:37:17.272100"
 }

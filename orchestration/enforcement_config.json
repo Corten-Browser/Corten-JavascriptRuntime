@@ -1,0 +1,11 @@
+{
+  "blocking_mode": true,
+  "block_rationalization": true,
+  "block_stubs": true,
+  "require_queue_empty_for_commit": true,
+  "require_verification_for_commit": true,
+  "auto_init_queue": true,
+  "auto_run_verification": true,
+  "stall_threshold_minutes": 60,
+  "auto_sync_enabled": true
+}
