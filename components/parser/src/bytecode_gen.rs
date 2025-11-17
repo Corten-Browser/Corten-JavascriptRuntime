@@ -2672,7 +2672,54 @@ mod tests {
         assert!(chunk.instructions.iter().any(|i| matches!(i.opcode, Opcode::CreateClosure(_, _))));
         assert!(chunk.instructions.iter().any(|i| matches!(i.opcode, Opcode::StoreGlobal(ref s) if s == "Foo")));
     }
+
+    #[test]
+    fn test_parsed_new_expression_uses_call_new() {
+        // This test verifies the fix for the bug where `new Foo(5)` was generating
+        // Call opcode instead of CallNew. The issue was that parse_new_expression()
+        // was parsing the callee with parse_left_hand_side_expression(), which would
+        // consume the (5) as a CallExpression instead of leaving it for NewExpression.
+        use crate::Parser;
+
+        let source = "new Foo(5);";
+        let mut parser = Parser::new(source);
+        let ast = parser.parse().expect("Failed to parse 'new Foo(5)'");
+
+        let mut gen = BytecodeGenerator::new();
+        let chunk = gen.generate(&ast).expect("Failed to generate bytecode");
+
+        // Must have CallNew(1) for the constructor call
+        let has_call_new = chunk
+            .instructions
+            .iter()
+            .any(|i| matches!(i.opcode, Opcode::CallNew(1)));
+        assert!(
+            has_call_new,
+            "new Foo(5) should generate CallNew(1), not Call(1)"
+        );
+
+        // Must NOT have regular Call for this expression
+        let has_regular_call = chunk
+            .instructions
+            .iter()
+            .any(|i| matches!(i.opcode, Opcode::Call(1)));
+        assert!(
+            !has_regular_call,
+            "new Foo(5) should not generate Call(1)"
+        );
+
+        // Verify the sequence: LoadGlobal("Foo"), LoadConstant, CallNew(1)
+        let has_load_global = chunk
+            .instructions
+            .iter()
+            .any(|i| matches!(i.opcode, Opcode::LoadGlobal(ref s) if s == "Foo"));
+        assert!(
+            has_load_global,
+            "Should LoadGlobal('Foo') to get constructor"
+        );
+    }
 }
+
 
 
 
