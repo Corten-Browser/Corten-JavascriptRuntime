@@ -74,3 +74,8 @@ target/doc/
 
 # Rust IDE support
 rust-project.json
+# Orchestration state (local only)
+orchestration/monitoring/activity_log.json
+orchestration/monitoring/alerts.json
+orchestration/verification/state/*
+!orchestration/verification/state/.gitkeep

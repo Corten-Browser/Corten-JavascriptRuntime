@@ -1,438 +1,316 @@
 #!/usr/bin/env python3
 """
-Contract Validator
+Contract Validator - Pre-Integration Gate
 
-Validates API contracts (OpenAPI, gRPC, AsyncAPI, Data Contracts) for the
-Claude Code Orchestration System.
+Validates that all components implement their contracts exactly before
+integration testing. Catches API mismatches early in the development cycle.
+
+This tool prevents the "Music Analyzer Catastrophe" where components had
+wrong method names (scan vs get_audio_files) that passed unit tests with
+mocks but failed catastrophically in integration.
 
 Usage:
-    python orchestration/contract_validator.py validate contracts/my-api.yaml
-    python orchestration/contract_validator.py validate-all
-    python orchestration/contract_validator.py check-variables contracts/my-api.yaml
+    python orchestration/contract_validator.py --all          # Validate all components
+    python orchestration/contract_validator.py auth-service   # Validate specific component
+    python orchestration/contract_validator.py --verbose      # Show detailed output
 """
 
+import subprocess
 import sys
-import json
-import yaml
-import re
+import os
 from pathlib import Path
-from typing import Dict, List, Optional, Set, Tuple
-from dataclasses import dataclass
-from enum import Enum
-
-
-class ContractType(Enum):
-    """Types of contracts supported"""
-    OPENAPI = "openapi"
-    GRPC = "grpc"
-    ASYNCAPI = "asyncapi"
-    DATA = "data"
-    UNKNOWN = "unknown"
-
-
-@dataclass
-class ValidationResult:
-    """Result of contract validation"""
-    valid: bool
-    contract_type: ContractType
-    errors: List[str]
-    warnings: List[str]
-    info: List[str]
+from typing import List, Tuple, Dict
+import argparse
+import json
 
 
 class ContractValidator:
-    """Validates various types of API contracts"""
+    """Validates component contract compliance before integration testing."""
 
-    def __init__(self):
-        self.strict_mode = False
+    def __init__(self, project_root: Path = None, verbose: bool = False):
+        self.project_root = project_root or Path.cwd()
+        self.components_dir = self.project_root / "components"
+        self.verbose = verbose
+        self.results: Dict[str, dict] = {}
 
-    def detect_contract_type(self, content: str, file_path: Path) -> ContractType:
+    def discover_components(self) -> List[str]:
+        """Discover all components with contract tests."""
+        if not self.components_dir.exists():
+            return []
+
+        components = []
+        for component_path in self.components_dir.iterdir():
+            if component_path.is_dir() and not component_path.name.startswith('.'):
+                # Check if component has contract tests
+                contract_tests = component_path / "tests" / "contracts"
+                if contract_tests.exists() and any(contract_tests.glob("test_*.py")):
+                    components.append(component_path.name)
+
+        return sorted(components)
+
+    def validate_component(self, component_name: str) -> Tuple[bool, dict]:
         """
-        Detect the type of contract based on content and file extension.
-
-        Args:
-            content: Contract file content
-            file_path: Path to contract file
+        Validate a single component's contract compliance.
 
         Returns:
-            Detected contract type
+            Tuple of (success: bool, results: dict)
         """
-        # Check file extension
-        suffix = file_path.suffix.lower()
-        if suffix == '.proto':
-            return ContractType.GRPC
+        component_path = self.components_dir / component_name
+        contract_tests_path = component_path / "tests" / "contracts"
 
-        # Try parsing as YAML
+        if not component_path.exists():
+            return False, {
+                "status": "error",
+                "message": f"Component directory not found: {component_path}",
+                "passed": 0,
+                "failed": 0,
+                "total": 0
+            }
+
+        if not contract_tests_path.exists():
+            return False, {
+                "status": "error",
+                "message": f"Contract tests directory not found: {contract_tests_path}",
+                "passed": 0,
+                "failed": 0,
+                "total": 0
+            }
+
+        # Count contract test files
+        test_files = list(contract_tests_path.glob("test_*.py"))
+        if not test_files:
+            return False, {
+                "status": "error",
+                "message": "No contract test files found",
+                "passed": 0,
+                "failed": 0,
+                "total": 0
+            }
+
+        # Run pytest on contract tests
         try:
-            data = yaml.safe_load(content)
-        except yaml.YAMLError:
-            return ContractType.UNKNOWN
+            cmd = [
+                "pytest",
+                str(contract_tests_path),
+                "-v",
+                "--tb=short",
+                "--no-header",
+                "-q"
+            ]
 
-        if not isinstance(data, dict):
-            return ContractType.UNKNOWN
+            if self.verbose:
+                print(f"Running: {' '.join(cmd)}")
 
-        # Check for OpenAPI markers
-        if 'openapi' in data:
-            return ContractType.OPENAPI
-
-        # Check for AsyncAPI markers
-        if 'asyncapi' in data:
-            return ContractType.ASYNCAPI
-
-        # Check for data contract markers
-        if 'database' in data or 'quality' in data:
-            return ContractType.DATA
-
-        return ContractType.UNKNOWN
-
-    def validate_contract(self, file_path: Path) -> ValidationResult:
-        """
-        Validate a contract file.
-
-        Args:
-            file_path: Path to contract file
-
-        Returns:
-            ValidationResult with errors, warnings, and info
-        """
-        errors = []
-        warnings = []
-        info = []
-
-        # Check file exists
-        if not file_path.exists():
-            return ValidationResult(
-                valid=False,
-                contract_type=ContractType.UNKNOWN,
-                errors=[f"File not found: {file_path}"],
-                warnings=[],
-                info=[]
+            result = subprocess.run(
+                cmd,
+                cwd=component_path,
+                capture_output=True,
+                text=True,
+                timeout=60
             )
 
-        # Read content
-        try:
-            content = file_path.read_text()
+            # Parse pytest output
+            output = result.stdout + result.stderr
+            passed, failed, total = self._parse_pytest_output(output)
+
+            success = (result.returncode == 0 and failed == 0)
+
+            return success, {
+                "status": "pass" if success else "fail",
+                "message": output if not success or self.verbose else "All contract tests passed",
+                "passed": passed,
+                "failed": failed,
+                "total": total,
+                "returncode": result.returncode
+            }
+
+        except subprocess.TimeoutExpired:
+            return False, {
+                "status": "error",
+                "message": "Contract tests timed out (>60s)",
+                "passed": 0,
+                "failed": 0,
+                "total": 0
+            }
         except Exception as e:
-            return ValidationResult(
-                valid=False,
-                contract_type=ContractType.UNKNOWN,
-                errors=[f"Error reading file: {e}"],
-                warnings=[],
-                info=[]
-            )
+            return False, {
+                "status": "error",
+                "message": f"Failed to run contract tests: {str(e)}",
+                "passed": 0,
+                "failed": 0,
+                "total": 0
+            }
 
-        # Detect contract type
-        contract_type = self.detect_contract_type(content, file_path)
-        info.append(f"Detected contract type: {contract_type.value}")
-
-        # Validate based on type
-        if contract_type == ContractType.OPENAPI:
-            errors.extend(self._validate_openapi(content))
-        elif contract_type == ContractType.GRPC:
-            errors.extend(self._validate_grpc(content))
-        elif contract_type == ContractType.ASYNCAPI:
-            errors.extend(self._validate_asyncapi(content))
-        elif contract_type == ContractType.DATA:
-            errors.extend(self._validate_data_contract(content))
-        else:
-            errors.append("Unknown contract type")
-
-        # Check for unreplaced variables
-        unreplaced = self._find_unreplaced_variables(content)
-        if unreplaced:
-            warnings.append(f"Found {len(unreplaced)} unreplaced variables: {', '.join(list(unreplaced)[:5])}")
-            if len(unreplaced) > 5:
-                warnings.append(f"  ... and {len(unreplaced) - 5} more")
-
-        return ValidationResult(
-            valid=len(errors) == 0,
-            contract_type=contract_type,
-            errors=errors,
-            warnings=warnings,
-            info=info
-        )
-
-    def _validate_openapi(self, content: str) -> List[str]:
-        """Validate OpenAPI contract"""
-        errors = []
-
-        try:
-            data = yaml.safe_load(content)
-        except yaml.YAMLError as e:
-            return [f"Invalid YAML: {e}"]
-
-        # Check required top-level fields
-        required_fields = ['openapi', 'info', 'paths']
-        for field in required_fields:
-            if field not in data:
-                errors.append(f"Missing required field: {field}")
-
-        # Check OpenAPI version
-        if 'openapi' in data:
-            version = data['openapi']
-            if not isinstance(version, str) or not version.startswith('3.'):
-                errors.append(f"Unsupported OpenAPI version: {version} (expected 3.x)")
-
-        # Check info section
-        if 'info' in data:
-            info = data['info']
-            if 'title' not in info:
-                errors.append("Missing info.title")
-            if 'version' not in info:
-                errors.append("Missing info.version")
-
-        # Check paths
-        if 'paths' in data:
-            paths = data['paths']
-            if not isinstance(paths, dict) or len(paths) == 0:
-                errors.append("No paths defined")
-
-            # Check for health endpoint
-            if '/health' not in paths and '/health/ready' not in paths:
-                if self.strict_mode:
-                    errors.append("No health check endpoint defined")
-
-        return errors
-
-    def _validate_grpc(self, content: str) -> List[str]:
-        """Validate gRPC protobuf contract"""
-        errors = []
-
-        # Check syntax declaration
-        if not re.search(r'syntax\s*=\s*"proto3";', content):
-            errors.append("Missing or invalid syntax declaration (expected proto3)")
-
-        # Check package declaration
-        if not re.search(r'package\s+[\w.]+;', content):
-            errors.append("Missing package declaration")
-
-        # Check service definition
-        if not re.search(r'service\s+\w+\s*{', content):
-            errors.append("No service definition found")
-
-        # Check for at least one RPC method
-        if not re.search(r'rpc\s+\w+', content):
-            errors.append("No RPC methods defined")
-
-        # Check for message definitions
-        if not re.search(r'message\s+\w+\s*{', content):
-            errors.append("No message definitions found")
-
-        return errors
-
-    def _validate_asyncapi(self, content: str) -> List[str]:
-        """Validate AsyncAPI contract"""
-        errors = []
-
-        try:
-            data = yaml.safe_load(content)
-        except yaml.YAMLError as e:
-            return [f"Invalid YAML: {e}"]
-
-        # Check required fields
-        required_fields = ['asyncapi', 'info', 'channels']
-        for field in required_fields:
-            if field not in data:
-                errors.append(f"Missing required field: {field}")
-
-        # Check AsyncAPI version
-        if 'asyncapi' in data:
-            version = data['asyncapi']
-            if not isinstance(version, str) or not version.startswith('2.'):
-                errors.append(f"Unsupported AsyncAPI version: {version} (expected 2.x)")
-
-        # Check channels
-        if 'channels' in data:
-            channels = data['channels']
-            if not isinstance(channels, dict) or len(channels) == 0:
-                errors.append("No channels defined")
-
-        return errors
-
-    def _validate_data_contract(self, content: str) -> List[str]:
-        """Validate data contract"""
-        errors = []
-
-        try:
-            data = yaml.safe_load(content)
-        except yaml.YAMLError as e:
-            return [f"Invalid YAML: {e}"]
-
-        # Check metadata
-        if 'metadata' not in data:
-            errors.append("Missing metadata section")
-        else:
-            metadata = data['metadata']
-            required_meta = ['name', 'version', 'owner']
-            for field in required_meta:
-                if field not in metadata:
-                    errors.append(f"Missing metadata.{field}")
-
-        # Check database section
-        if 'database' in data:
-            db = data['database']
-            if 'type' not in db:
-                errors.append("Missing database.type")
-            if 'tables' not in db or not isinstance(db['tables'], list):
-                errors.append("Missing or invalid database.tables")
-
-        return errors
-
-    def _find_unreplaced_variables(self, content: str) -> Set[str]:
-        """Find unreplaced template variables"""
-        pattern = r'\{\{([^}]+)\}\}'
-        matches = re.findall(pattern, content)
-        return set(matches)
-
-    def validate_all_contracts(self, contracts_dir: Path) -> Dict[str, ValidationResult]:
+    def _parse_pytest_output(self, output: str) -> Tuple[int, int, int]:
         """
-        Validate all contracts in a directory.
-
-        Args:
-            contracts_dir: Directory containing contracts
+        Parse pytest output to extract test counts.
 
         Returns:
-            Dictionary mapping file names to validation results
+            Tuple of (passed, failed, total)
         """
-        results = {}
+        passed = 0
+        failed = 0
 
-        if not contracts_dir.exists():
-            print(f"Contracts directory not found: {contracts_dir}")
-            return results
+        # Look for pytest summary line (e.g., "10 passed, 2 failed in 1.23s")
+        for line in output.split('\n'):
+            if 'passed' in line or 'failed' in line:
+                if 'passed' in line:
+                    try:
+                        passed = int(line.split('passed')[0].strip().split()[-1])
+                    except (ValueError, IndexError):
+                        pass
+                if 'failed' in line:
+                    try:
+                        failed = int(line.split('failed')[0].strip().split()[-1])
+                    except (ValueError, IndexError):
+                        pass
 
-        # Find all contract files
-        patterns = ['*.yaml', '*.yml', '*.proto']
-        for pattern in patterns:
-            for file_path in contracts_dir.glob(pattern):
-                # Skip template files
-                if 'template' in file_path.name:
-                    continue
+        total = passed + failed
+        return passed, failed, total
 
-                result = self.validate_contract(file_path)
-                results[file_path.name] = result
-
-        return results
-
-    def check_variables(self, file_path: Path) -> Set[str]:
+    def validate_all(self, components: List[str] = None) -> bool:
         """
-        Check for unreplaced variables in a contract file.
-
-        Args:
-            file_path: Path to contract file
+        Validate all components or specified list.
 
         Returns:
-            Set of unreplaced variable names
+            True if all components pass, False otherwise
         """
-        if not file_path.exists():
-            return set()
+        if components is None:
+            components = self.discover_components()
 
-        content = file_path.read_text()
-        return self._find_unreplaced_variables(content)
+        if not components:
+            print("⚠️  No components with contract tests found")
+            return False
 
+        print(f"\n🔍 Contract Validation - Pre-Integration Gate")
+        print(f"   Validating {len(components)} component(s)\n")
 
-def print_validation_result(file_name: str, result: ValidationResult):
-    """Print formatted validation result"""
-    print(f"\n{'='*80}")
-    print(f"File: {file_name}")
-    print(f"Type: {result.contract_type.value}")
-    print(f"Valid: {'✓' if result.valid else '✗'}")
+        all_passed = True
 
-    if result.info:
-        print("\nInfo:")
-        for msg in result.info:
-            print(f"  ℹ {msg}")
+        for component_name in components:
+            success, results = self.validate_component(component_name)
+            self.results[component_name] = results
 
-    if result.warnings:
-        print("\nWarnings:")
-        for msg in result.warnings:
-            print(f"  ⚠ {msg}")
+            status_icon = "✅" if success else "❌"
+            status_text = f"{results['passed']}/{results['total']} pass" if results['total'] > 0 else "No tests"
 
-    if result.errors:
-        print("\nErrors:")
-        for msg in result.errors:
-            print(f"  ✗ {msg}")
+            print(f"{status_icon} {component_name}: {status_text}")
 
-    print('='*80)
+            if not success:
+                all_passed = False
+                if self.verbose or results['status'] == 'error':
+                    print(f"   {results['message']}\n")
+                elif results['failed'] > 0:
+                    print(f"   ⚠️  {results['failed']} contract test(s) failed")
+                    print(f"   🛑 CRITICAL: Fix component API to match contract\n")
+
+        print()
+
+        if all_passed:
+            print("✅ ALL COMPONENTS PASS CONTRACT VALIDATION")
+            print("   Proceeding to integration testing is safe\n")
+            return True
+        else:
+            print("❌ CONTRACT VALIDATION FAILED")
+            print("   🛑 STOP - Do NOT proceed to integration testing")
+            print("   📝 Fix component implementations (NOT contracts)")
+            print("   🔄 Re-run contract validation until 100% pass\n")
+            return False
+
+    def print_summary(self):
+        """Print detailed summary of validation results."""
+        print("\n" + "=" * 70)
+        print("CONTRACT VALIDATION SUMMARY")
+        print("=" * 70 + "\n")
+
+        total_components = len(self.results)
+        passed_components = sum(1 for r in self.results.values() if r['status'] == 'pass')
+        failed_components = total_components - passed_components
+
+        total_tests = sum(r['total'] for r in self.results.values())
+        passed_tests = sum(r['passed'] for r in self.results.values())
+        failed_tests = sum(r['failed'] for r in self.results.values())
+
+        print(f"Components: {passed_components}/{total_components} pass")
+        print(f"Tests:      {passed_tests}/{total_tests} pass\n")
+
+        if failed_components > 0:
+            print("Failed Components:")
+            for component, results in self.results.items():
+                if results['status'] != 'pass':
+                    print(f"  ❌ {component}: {results['failed']} test(s) failed")
+
+        print()
 
 
 def main():
-    """Main CLI interface"""
-    import argparse
-
     parser = argparse.ArgumentParser(
-        description="Validate API contracts for Claude Code Orchestration System"
-    )
-    subparsers = parser.add_subparsers(dest='command', help='Command to execute')
+        description="Validate component contract compliance before integration testing",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Validate all components
+  python orchestration/contract_validator.py --all
 
-    # Validate command
-    validate_parser = subparsers.add_parser('validate', help='Validate a single contract')
-    validate_parser.add_argument('file', type=Path, help='Path to contract file')
-    validate_parser.add_argument('--strict', action='store_true', help='Enable strict mode')
+  # Validate specific component
+  python orchestration/contract_validator.py auth-service
 
-    # Validate all command
-    validate_all_parser = subparsers.add_parser('validate-all', help='Validate all contracts')
-    validate_all_parser.add_argument(
-        '--dir',
-        type=Path,
-        default=Path('contracts'),
-        help='Contracts directory (default: contracts/)'
-    )
-    validate_all_parser.add_argument('--strict', action='store_true', help='Enable strict mode')
+  # Validate multiple components
+  python orchestration/contract_validator.py auth-service user-service
 
-    # Check variables command
-    check_vars_parser = subparsers.add_parser(
-        'check-variables',
-        help='Check for unreplaced template variables'
+  # Verbose output
+  python orchestration/contract_validator.py --all --verbose
+
+Exit Codes:
+  0 - All contract tests passed (100%)
+  1 - One or more contract tests failed
+  2 - Error running validation
+        """
     )
-    check_vars_parser.add_argument('file', type=Path, help='Path to contract file')
+
+    parser.add_argument(
+        'components',
+        nargs='*',
+        help='Component names to validate (omit to use --all)'
+    )
+    parser.add_argument(
+        '--all',
+        action='store_true',
+        help='Validate all components with contract tests'
+    )
+    parser.add_argument(
+        '--verbose', '-v',
+        action='store_true',
+        help='Show detailed output including test output'
+    )
+    parser.add_argument(
+        '--summary',
+        action='store_true',
+        help='Print detailed summary at end'
+    )
 
     args = parser.parse_args()
 
-    if not args.command:
-        parser.print_help()
-        return 1
+    # Validation
+    if not args.all and not args.components:
+        parser.error("Must specify component names or use --all")
 
-    validator = ContractValidator()
+    # Initialize validator
+    validator = ContractValidator(verbose=args.verbose)
 
-    if args.command == 'validate':
-        validator.strict_mode = getattr(args, 'strict', False)
-        result = validator.validate_contract(args.file)
-        print_validation_result(str(args.file), result)
-        return 0 if result.valid else 1
+    # Validate
+    if args.all:
+        success = validator.validate_all()
+    else:
+        success = validator.validate_all(components=args.components)
 
-    elif args.command == 'validate-all':
-        validator.strict_mode = getattr(args, 'strict', False)
-        results = validator.validate_all_contracts(args.dir)
+    # Print summary if requested
+    if args.summary:
+        validator.print_summary()
 
-        if not results:
-            print(f"No contracts found in {args.dir}")
-            return 1
-
-        valid_count = sum(1 for r in results.values() if r.valid)
-        total_count = len(results)
-
-        for file_name, result in results.items():
-            print_validation_result(file_name, result)
-
-        print(f"\n{'='*80}")
-        print(f"Summary: {valid_count}/{total_count} contracts valid")
-        print('='*80)
-
-        return 0 if valid_count == total_count else 1
-
-    elif args.command == 'check-variables':
-        variables = validator.check_variables(args.file)
-        if variables:
-            print(f"\nFound {len(variables)} unreplaced variables in {args.file}:")
-            for var in sorted(variables):
-                print(f"  {{{{{{var}}}}}}")
-            return 1
-        else:
-            print(f"\n✓ No unreplaced variables in {args.file}")
-            return 0
-
-    return 0
+    # Exit with appropriate code
+    sys.exit(0 if success else 1)
 
 
-if __name__ == '__main__':
-    sys.exit(main())
+if __name__ == "__main__":
+    main()

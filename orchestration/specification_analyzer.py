@@ -1,742 +1,721 @@
+#!/usr/bin/env python3
 """
-Specification Analyzer
+Specification Completeness Analyzer
 
-Analyzes project specifications to detect architecture patterns and component structure.
+Analyzes specifications for ambiguities, missing requirements,
+and generates clarification needs BEFORE coding begins.
 
-This tool helps the orchestration system understand the intended architecture
-from specification documents, preventing misinterpretation like enforcing
-microservices isolation when a monolithic architecture is specified.
-
-Classes:
-    ArchitecturePattern: Detected architecture characteristics
-    ComponentSuggestion: Suggested component from specification
-    SpecificationAnalyzer: Main analyzer class
-
-Functions:
-    analyze_specification: Analyze a specification file or directory
-
-Usage:
-    analyzer = SpecificationAnalyzer()
-    result = analyzer.analyze_specification("project-spec.md")
-
-    print(f"Architecture: {result.architecture_type}")
-    print(f"Components: {len(result.suggested_components)}")
-    for component in result.suggested_components:
-        print(f"  - {component.name} ({component.type})")
+Part of v0.4.0 quality enhancement system.
 """
 
-from dataclasses import dataclass, field
-from typing import List, Dict, Set, Optional, Tuple
 from pathlib import Path
+from typing import List, Dict, Optional, Set
+from dataclasses import dataclass, field
 import re
-from enum import Enum
-
-
-class ArchitectureType(Enum):
-    """Types of architecture patterns."""
-    MONOLITHIC = "monolithic"
-    MICROSERVICES = "microservices"
-    MODULAR_MONOLITH = "modular_monolith"
-    MIXED = "mixed"
-    UNKNOWN = "unknown"
-
-
-class ComponentType(Enum):
-    """Component type levels."""
-    BASE = "base"
-    CORE = "core"
-    FEATURE = "feature"
-    INTEGRATION = "integration"
-    APPLICATION = "application"
-    UNKNOWN = "unknown"
+import yaml
+from datetime import datetime
 
 
 @dataclass
-class ComponentSuggestion:
-    """Suggested component from specification analysis."""
-    name: str
-    type: ComponentType
-    responsibility: str
-    dependencies: List[str] = field(default_factory=list)
-    tech_stack: List[str] = field(default_factory=list)
-    confidence: float = 0.0  # 0.0-1.0
+class Ambiguity:
+    """An ambiguous term or requirement."""
+    location: str  # Line number or section
+    term: str
+    context: str
+    reason: str
+    suggested_clarification: str
+    severity: str = "warning"  # "critical", "warning", "info"
 
 
 @dataclass
-class ArchitecturePattern:
-    """Detected architecture characteristics."""
-    architecture_type: ArchitectureType
-    confidence: float  # 0.0-1.0
-    reasoning: List[str]
-    indicators: Dict[str, int]  # What patterns were detected
+class MissingScenario:
+    """A missing error or edge case scenario."""
+    operation: str
+    scenario_type: str  # "error", "edge_case", "validation"
+    description: str
+    suggested_handling: str
 
-    # Architecture characteristics
-    is_integrated: bool = False  # Components import each other directly
-    is_isolated: bool = False    # Components communicate via APIs only
-    is_layered: bool = False     # Clear layer separation
-    is_modular: bool = False     # Modular but integrated
 
-    # Communication patterns
-    uses_direct_imports: bool = False
-    uses_rest_apis: bool = False
-    uses_message_queues: bool = False
-    uses_shared_libraries: bool = False
+@dataclass
+class MissingValidation:
+    """A missing input validation requirement."""
+    field: str
+    context: str
+    validation_type: str
+    suggested_rule: str
 
 
 @dataclass
 class SpecificationAnalysis:
     """Complete specification analysis result."""
-    architecture: ArchitecturePattern
-    suggested_components: List[ComponentSuggestion]
-    dependencies_detected: List[Tuple[str, str]]  # (from, to)
-    tech_stack: Set[str]
-    integration_style: str
-    warnings: List[str]
-    metadata: Dict
+    has_critical_gaps: bool
+    ambiguities: List[Ambiguity]
+    missing_scenarios: List[MissingScenario]
+    missing_validations: List[MissingValidation]
+    completeness_score: float  # 0-100
+    spec_source: str = "user_input"
+
+    def generate_clarification_document(self) -> str:
+        """Generate SPEC_CLARIFICATIONS.md content."""
+        doc_lines = [
+            "# Specification Clarifications Needed",
+            "",
+            f"**Analysis Date**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+            f"**Source**: {self.spec_source}",
+            f"**Completeness Score**: {self.completeness_score:.1f}/100",
+            "",
+            "## Summary",
+            "",
+            f"- **Critical Gaps**: {'Yes - MUST address before coding' if self.has_critical_gaps else 'No'}",
+            f"- **Ambiguities Found**: {len(self.ambiguities)}",
+            f"- **Missing Error Scenarios**: {len(self.missing_scenarios)}",
+            f"- **Missing Validations**: {len(self.missing_validations)}",
+            ""
+        ]
+
+        # Ambiguities section
+        if self.ambiguities:
+            doc_lines.extend([
+                "## Ambiguous Terms and Requirements",
+                "",
+                "The following terms are vague and need specific, measurable definitions:",
+                ""
+            ])
+
+            # Group by severity
+            critical = [a for a in self.ambiguities if a.severity == "critical"]
+            warnings = [a for a in self.ambiguities if a.severity == "warning"]
+            info = [a for a in self.ambiguities if a.severity == "info"]
+
+            if critical:
+                doc_lines.extend([
+                    "### Critical (MUST Fix)",
+                    ""
+                ])
+                for amb in critical:
+                    doc_lines.extend(self._format_ambiguity(amb))
+
+            if warnings:
+                doc_lines.extend([
+                    "### Warnings (Should Fix)",
+                    ""
+                ])
+                for amb in warnings:
+                    doc_lines.extend(self._format_ambiguity(amb))
+
+            if info:
+                doc_lines.extend([
+                    "### Informational (Consider Fixing)",
+                    ""
+                ])
+                for amb in info:
+                    doc_lines.extend(self._format_ambiguity(amb))
+
+        # Missing scenarios section
+        if self.missing_scenarios:
+            doc_lines.extend([
+                "## Missing Error and Edge Case Scenarios",
+                "",
+                "The following error scenarios need to be specified:",
+                ""
+            ])
+
+            # Group by type
+            errors = [s for s in self.missing_scenarios if s.scenario_type == "error"]
+            edge_cases = [s for s in self.missing_scenarios if s.scenario_type == "edge_case"]
+            validations = [s for s in self.missing_scenarios if s.scenario_type == "validation"]
+
+            if errors:
+                doc_lines.extend([
+                    "### Error Handling",
+                    ""
+                ])
+                for scenario in errors:
+                    doc_lines.extend(self._format_scenario(scenario))
+
+            if edge_cases:
+                doc_lines.extend([
+                    "### Edge Cases",
+                    ""
+                ])
+                for scenario in edge_cases:
+                    doc_lines.extend(self._format_scenario(scenario))
+
+            if validations:
+                doc_lines.extend([
+                    "### Input Validation",
+                    ""
+                ])
+                for scenario in validations:
+                    doc_lines.extend(self._format_scenario(scenario))
+
+        # Missing validations section
+        if self.missing_validations:
+            doc_lines.extend([
+                "## Missing Input Validation Requirements",
+                "",
+                "The following fields need validation specifications:",
+                ""
+            ])
+
+            for validation in self.missing_validations:
+                doc_lines.extend(self._format_validation(validation))
+
+        # Recommendations section
+        doc_lines.extend([
+            "## Recommendations",
+            "",
+            "To improve this specification:",
+            ""
+        ])
+
+        if self.completeness_score < 50:
+            doc_lines.append("1. **Start with a template**: Use an API specification template (e.g., OpenAPI) to ensure completeness")
+        if len(self.ambiguities) > 5:
+            doc_lines.append("1. **Replace vague terms**: Convert all subjective terms to specific, measurable requirements")
+        if len(self.missing_scenarios) > 5:
+            doc_lines.append("1. **Add error scenarios**: Document handling for network failures, timeouts, validation errors, and concurrent access")
+        if len(self.missing_validations) > 5:
+            doc_lines.append("1. **Define input constraints**: Specify format, length, range, and required/optional for all inputs")
+
+        doc_lines.extend([
+            "",
+            "## Next Steps",
+            "",
+            "1. Address all **Critical** items before starting implementation",
+            "2. Clarify **Warning** items to avoid rework during development",
+            "3. Consider **Informational** items for improved specification quality",
+            "4. Re-run specification analyzer after updates to verify improvements",
+            ""
+        ])
+
+        return "\n".join(doc_lines)
+
+    def _format_ambiguity(self, amb: Ambiguity) -> List[str]:
+        """Format a single ambiguity for markdown."""
+        return [
+            f"#### {amb.term}",
+            "",
+            f"**Location**: {amb.location}",
+            f"**Context**: {amb.context}",
+            "",
+            f"**Problem**: {amb.reason}",
+            "",
+            f"**Suggested Clarification**:",
+            f"> {amb.suggested_clarification}",
+            ""
+        ]
+
+    def _format_scenario(self, scenario: MissingScenario) -> List[str]:
+        """Format a single missing scenario for markdown."""
+        return [
+            f"#### {scenario.operation}: {scenario.description}",
+            "",
+            f"**Suggested Handling**:",
+            f"> {scenario.suggested_handling}",
+            ""
+        ]
+
+    def _format_validation(self, validation: MissingValidation) -> List[str]:
+        """Format a single missing validation for markdown."""
+        return [
+            f"#### Field: `{validation.field}`",
+            "",
+            f"**Context**: {validation.context}",
+            f"**Missing**: {validation.validation_type}",
+            "",
+            f"**Suggested Rule**:",
+            f"> {validation.suggested_rule}",
+            ""
+        ]
 
 
 class SpecificationAnalyzer:
-    """
-    Analyze project specifications to detect architecture and component structure.
+    """Analyzes specifications for completeness."""
 
-    This analyzer prevents architectural mismatches by understanding what the
-    specification actually describes, not imposing a predetermined pattern.
-    """
+    def __init__(self, patterns_file: Optional[Path] = None):
+        self.patterns_file = patterns_file or Path(__file__).parent / "specification_patterns.yaml"
+        self.patterns = self._load_patterns()
 
-    # Keywords indicating architectural patterns
-    MONOLITHIC_INDICATORS = [
-        "monolith", "single application", "integrated system",
-        "import from", "shared codebase", "single deployment",
-        "directly call", "shared modules", "single executable"
-    ]
+    def _load_patterns(self) -> dict:
+        """Load ambiguity patterns from YAML."""
+        if not self.patterns_file.exists():
+            # Return minimal defaults if file doesn't exist
+            return {
+                "ambiguity_patterns": {},
+                "error_scenario_categories": {},
+                "validation_requirements": {},
+                "operations_requiring_error_scenarios": []
+            }
 
-    MICROSERVICES_INDICATORS = [
-        "microservice", "service", "api gateway", "rest api",
-        "independent deployment", "service mesh", "container",
-        "kubernetes", "docker", "separate deployment"
-    ]
+        with open(self.patterns_file, 'r', encoding='utf-8') as f:
+            return yaml.safe_load(f)
 
-    MODULAR_MONOLITH_INDICATORS = [
-        "modular", "modules", "libraries", "packages",
-        "components", "layered", "bounded context",
-        "internal modules", "library dependencies"
-    ]
-
-    INTEGRATION_PATTERNS = {
-        "direct_imports": [
-            "import from", "use library", "link to",
-            "include module", "shared library", "static linking"
-        ],
-        "rest_apis": [
-            "rest api", "http endpoint", "api call",
-            "web service", "rest interface", "http request"
-        ],
-        "message_queue": [
-            "message queue", "event bus", "pub/sub",
-            "kafka", "rabbitmq", "message broker"
-        ]
-    }
-
-    # Component type indicators
-    COMPONENT_TYPE_KEYWORDS = {
-        ComponentType.BASE: [
-            "data type", "model", "utility", "helper",
-            "protocol", "interface", "shared type"
-        ],
-        ComponentType.CORE: [
-            "core logic", "business logic", "domain",
-            "service layer", "business rule"
-        ],
-        ComponentType.FEATURE: [
-            "feature", "endpoint", "handler",
-            "controller", "api", "workflow"
-        ],
-        ComponentType.INTEGRATION: [
-            "orchestrator", "coordinator", "integration",
-            "workflow manager", "main logic", "ties together"
-        ],
-        ComponentType.APPLICATION: [
-            "cli", "main entry", "application", "server",
-            "frontend", "gui", "entry point"
-        ]
-    }
-
-    def __init__(self):
-        """Initialize the specification analyzer."""
-        self.architecture_indicators = {
-            "monolithic": 0,
-            "microservices": 0,
-            "modular_monolith": 0
-        }
-        self.integration_patterns = {
-            "direct_imports": 0,
-            "rest_apis": 0,
-            "message_queue": 0
-        }
-
-    def analyze_specification(self, spec_path: Path) -> SpecificationAnalysis:
+    def analyze_specification(self, spec_text: str, spec_source: str = "user_input") -> SpecificationAnalysis:
         """
-        Analyze specification file(s) to detect architecture.
-
-        Args:
-            spec_path: Path to specification file or directory
-
-        Returns:
-            SpecificationAnalysis with detected patterns
+        Comprehensive specification analysis.
+        Returns analysis with all detected issues.
         """
-        spec_path = Path(spec_path)
+        if not spec_text or not spec_text.strip():
+            return SpecificationAnalysis(
+                has_critical_gaps=True,
+                ambiguities=[],
+                missing_scenarios=[],
+                missing_validations=[],
+                completeness_score=0.0,
+                spec_source=spec_source
+            )
 
-        # Read specification content
-        content = self._read_specification(spec_path)
+        ambiguities = self.detect_ambiguous_terms(spec_text)
+        missing_scenarios = self.detect_missing_error_scenarios(spec_text)
+        missing_validations = self.detect_missing_validations(spec_text)
 
-        # Detect architecture pattern
-        architecture = self._detect_architecture(content)
+        # Has critical gaps if there are critical ambiguities (vague core requirements)
+        # Missing scenarios are less critical since we can't enumerate all possibilities
+        has_critical = (
+            len([a for a in ambiguities if a.severity == "critical"]) > 0
+        )
 
-        # Extract component suggestions
-        components = self._extract_components(content, architecture)
-
-        # Detect dependencies
-        dependencies = self._detect_dependencies(content, components)
-
-        # Extract tech stack
-        tech_stack = self._extract_tech_stack(content)
-
-        # Determine integration style
-        integration_style = self._determine_integration_style(architecture)
-
-        # Generate warnings for potential issues
-        warnings = self._generate_warnings(architecture, components)
-
-        # Metadata
-        metadata = {
-            "spec_path": str(spec_path),
-            "total_components": len(components),
-            "architecture_confidence": architecture.confidence
-        }
+        completeness_score = self._calculate_completeness_score(
+            ambiguities, missing_scenarios, missing_validations
+        )
 
         return SpecificationAnalysis(
-            architecture=architecture,
-            suggested_components=components,
-            dependencies_detected=dependencies,
-            tech_stack=tech_stack,
-            integration_style=integration_style,
-            warnings=warnings,
-            metadata=metadata
+            has_critical_gaps=has_critical,
+            ambiguities=ambiguities,
+            missing_scenarios=missing_scenarios,
+            missing_validations=missing_validations,
+            completeness_score=completeness_score,
+            spec_source=spec_source
         )
 
-    def _read_specification(self, spec_path: Path) -> str:
-        """Read specification content from file or directory."""
-        content = []
+    def detect_ambiguous_terms(self, spec_text: str) -> List[Ambiguity]:
+        """
+        Find vague terms like:
+        - "should handle errors appropriately"
+        - "reasonable performance"
+        - "user-friendly interface"
+        - "scalable"
+        - "fast"
+        """
+        ambiguities = []
+        lines = spec_text.split('\n')
 
-        if spec_path.is_file():
-            with open(spec_path, 'r', encoding='utf-8') as f:
-                content.append(f.read())
-        elif spec_path.is_dir():
-            # Read all markdown and text files
-            for file_path in spec_path.glob("**/*.md"):
-                with open(file_path, 'r', encoding='utf-8') as f:
-                    content.append(f.read())
-            for file_path in spec_path.glob("**/*.txt"):
-                with open(file_path, 'r', encoding='utf-8') as f:
-                    content.append(f.read())
+        ambiguity_patterns = self.patterns.get("ambiguity_patterns", {})
 
-        return "\n\n".join(content)
+        for pattern_name, pattern_config in ambiguity_patterns.items():
+            patterns = pattern_config.get("patterns", [])
+            clarification = pattern_config.get("clarification_template", "Please specify more details")
+            severity = pattern_config.get("severity", "warning")
 
-    def _detect_architecture(self, content: str) -> ArchitecturePattern:
-        """Detect architecture pattern from specification content."""
-        content_lower = content.lower()
+            for pattern in patterns:
+                # Case-insensitive search for pattern
+                regex = re.compile(r'\b' + re.escape(pattern) + r'\b', re.IGNORECASE)
 
-        # Count indicators for each architecture type
-        monolithic_score = sum(
-            content_lower.count(indicator)
-            for indicator in self.MONOLITHIC_INDICATORS
-        )
+                for line_num, line in enumerate(lines, 1):
+                    # Skip lines that are likely section headers
+                    stripped = line.strip()
+                    if (stripped.endswith(':') and len(stripped) < 40) or \
+                       stripped.startswith('#'):
+                        continue
 
-        microservices_score = sum(
-            content_lower.count(indicator)
-            for indicator in self.MICROSERVICES_INDICATORS
-        )
+                    matches = regex.finditer(line)
+                    for match in matches:
+                        # Extract context around the match
+                        start = max(0, match.start() - 20)
+                        end = min(len(line), match.end() + 20)
+                        context = line[start:end].strip()
+                        if start > 0:
+                            context = "..." + context
+                        if end < len(line):
+                            context = context + "..."
 
-        modular_monolith_score = sum(
-            content_lower.count(indicator)
-            for indicator in self.MODULAR_MONOLITH_INDICATORS
-        )
+                        ambiguities.append(Ambiguity(
+                            location=f"Line {line_num}",
+                            term=match.group(),
+                            context=context,
+                            reason=f"Vague term in {pattern_name.replace('_', ' ')}",
+                            suggested_clarification=clarification,
+                            severity=severity
+                        ))
 
-        # Count integration patterns
-        direct_imports_score = sum(
-            content_lower.count(pattern)
-            for pattern in self.INTEGRATION_PATTERNS["direct_imports"]
-        )
+        return ambiguities
 
-        rest_apis_score = sum(
-            content_lower.count(pattern)
-            for pattern in self.INTEGRATION_PATTERNS["rest_apis"]
-        )
+    def detect_missing_error_scenarios(self, spec_text: str) -> List[MissingScenario]:
+        """
+        For each operation, ensure error cases defined:
+        - Network failures
+        - Invalid inputs
+        - Timeout scenarios
+        - Concurrent access issues
+        - Database failures
+        """
+        missing = []
 
-        message_queue_score = sum(
-            content_lower.count(pattern)
-            for pattern in self.INTEGRATION_PATTERNS["message_queue"]
-        )
+        # Identify operations mentioned in spec
+        operations = self._identify_operations(spec_text)
 
-        # Determine architecture type
-        scores = {
-            ArchitectureType.MONOLITHIC: monolithic_score,
-            ArchitectureType.MICROSERVICES: microservices_score,
-            ArchitectureType.MODULAR_MONOLITH: modular_monolith_score
-        }
+        error_categories = self.patterns.get("error_scenario_categories", {})
 
-        # Check for mixed architecture
-        high_scores = [arch for arch, score in scores.items() if score > 5]
-        if len(high_scores) > 1:
-            arch_type = ArchitectureType.MIXED
-            confidence = 0.7
-        else:
-            # Use highest score
-            if max(scores.values()) == 0:
-                arch_type = ArchitectureType.UNKNOWN
-                confidence = 0.0
+        for operation in operations:
+            # Check which error scenarios are missing for this operation
+            for category_name, category_config in error_categories.items():
+                scenarios = category_config.get("scenarios", [])
+                must_specify = category_config.get("must_specify", [])
+
+                for scenario in scenarios:
+                    # Check if this scenario is addressed in spec
+                    if not self._is_scenario_addressed(spec_text, scenario, operation):
+                        missing.append(MissingScenario(
+                            operation=operation,
+                            scenario_type="error",
+                            description=f"{scenario}",
+                            suggested_handling=f"Specify: {', '.join(must_specify)}"
+                        ))
+
+        return missing
+
+    def detect_missing_validations(self, spec_text: str) -> List[MissingValidation]:
+        """
+        For each input, ensure validation specified:
+        - Format requirements
+        - Bounds/limits
+        - Required vs optional
+        - Allowed values
+        """
+        missing = []
+
+        # Identify input fields mentioned in spec
+        fields = self._identify_input_fields(spec_text)
+
+        validation_requirements = self.patterns.get("validation_requirements", {})
+
+        for field_name, field_type in fields.items():
+            # Determine expected field type
+            field_category = self._categorize_field(field_name, field_type)
+
+            if field_category in validation_requirements:
+                requirements = validation_requirements[field_category]
+                must_specify = requirements.get("must_specify", [])
+
+                # Handle both list of dicts and dict formats
+                if isinstance(must_specify, list):
+                    # List of single-key dicts
+                    for item in must_specify:
+                        if isinstance(item, dict):
+                            for req_name, req_description in item.items():
+                                # Check if this validation is specified
+                                if not self._is_validation_specified(spec_text, field_name, req_name):
+                                    missing.append(MissingValidation(
+                                        field=field_name,
+                                        context=f"Field type: {field_type}",
+                                        validation_type=req_name.replace('_', ' '),
+                                        suggested_rule=req_description
+                                    ))
+                elif isinstance(must_specify, dict):
+                    # Dict format
+                    for req_name, req_description in must_specify.items():
+                        # Check if this validation is specified
+                        if not self._is_validation_specified(spec_text, field_name, req_name):
+                            missing.append(MissingValidation(
+                                field=field_name,
+                                context=f"Field type: {field_type}",
+                                validation_type=req_name.replace('_', ' '),
+                                suggested_rule=req_description
+                            ))
+
+        return missing
+
+    def _calculate_completeness_score(self,
+                                      ambiguities: List[Ambiguity],
+                                      scenarios: List[MissingScenario],
+                                      validations: List[MissingValidation]) -> float:
+        """Calculate 0-100 completeness score."""
+        # Start at 100, deduct for issues
+        score = 100.0
+
+        # Critical ambiguities cost more
+        critical_ambiguities = len([a for a in ambiguities if a.severity == "critical"])
+        warning_ambiguities = len([a for a in ambiguities if a.severity == "warning"])
+        info_ambiguities = len([a for a in ambiguities if a.severity == "info"])
+
+        # Critical ambiguities are severe - they indicate fundamental unclear requirements
+        score -= critical_ambiguities * 20
+        score -= warning_ambiguities * 8
+        score -= info_ambiguities * 2
+
+        # Missing scenarios - but cap the penalty to avoid over-penalizing
+        # (Some missing scenarios are expected since we can't cover everything)
+        scenario_penalty = min(len(scenarios) * 0.4, 12.0)  # Max 12 points for scenarios
+        score -= scenario_penalty
+
+        # Missing validations - also capped
+        validation_penalty = min(len(validations) * 0.4, 8.0)  # Max 8 points for validations
+        score -= validation_penalty
+
+        return max(0.0, score)
+
+    def _identify_operations(self, spec_text: str) -> List[str]:
+        """Identify operations mentioned in specification."""
+        operations = []
+        spec_lower = spec_text.lower()
+
+        operation_keywords = self.patterns.get("operations_requiring_error_scenarios", [])
+
+        for keyword in operation_keywords:
+            # Split multi-word keywords and check if all words appear
+            words = keyword.lower().split()
+
+            # For multi-word keywords, check if all words appear (in any order)
+            if len(words) > 1:
+                if all(word in spec_lower for word in words):
+                    operations.append(keyword)
             else:
-                arch_type = max(scores, key=scores.get)
-                total_score = sum(scores.values())
-                confidence = scores[arch_type] / max(total_score, 1)
+                # Single word - use word boundary matching
+                pattern = re.compile(r'\b' + re.escape(keyword) + r'\b', re.IGNORECASE)
+                if pattern.search(spec_text):
+                    operations.append(keyword)
 
-        # Determine characteristics
-        is_integrated = (
-            direct_imports_score > 3 or
-            modular_monolith_score > 5 or
-            monolithic_score > 5
-        )
+        # Also look for API endpoints
+        endpoint_pattern = re.compile(r'(GET|POST|PUT|DELETE|PATCH)\s+(/[\w/\-{}]+)', re.IGNORECASE)
+        for match in endpoint_pattern.finditer(spec_text):
+            operations.append(f"{match.group(1)} {match.group(2)}")
 
-        is_isolated = (
-            microservices_score > 5 or
-            rest_apis_score > 5
-        )
+        # Look for function/method definitions
+        function_pattern = re.compile(r'(def|function|async)\s+(\w+)', re.IGNORECASE)
+        for match in function_pattern.finditer(spec_text):
+            operations.append(match.group(2))
 
-        is_layered = any(
-            keyword in content_lower
-            for keyword in ["layer", "tier", "level", "hierarchy"]
-        )
+        # Look for action verbs that indicate operations
+        action_patterns = [
+            r'\b(call|query|update|delete|insert|create|process|send|receive|fetch|store|retrieve)\b\s+\w+',
+        ]
+        for pattern_str in action_patterns:
+            pattern = re.compile(pattern_str, re.IGNORECASE)
+            for match in pattern.finditer(spec_text):
+                operations.append(match.group(0))
 
-        is_modular = (
-            modular_monolith_score > 3 or
-            any(keyword in content_lower for keyword in ["module", "component", "package"])
-        )
+        return operations
 
-        # Build reasoning
-        reasoning = []
-        if monolithic_score > 0:
-            reasoning.append(f"Monolithic indicators found: {monolithic_score}")
-        if microservices_score > 0:
-            reasoning.append(f"Microservices indicators found: {microservices_score}")
-        if modular_monolith_score > 0:
-            reasoning.append(f"Modular monolith indicators found: {modular_monolith_score}")
-        if direct_imports_score > 0:
-            reasoning.append(f"Direct import patterns found: {direct_imports_score}")
-        if rest_apis_score > 0:
-            reasoning.append(f"REST API patterns found: {rest_apis_score}")
+    def _is_scenario_addressed(self, spec_text: str, scenario: str, operation: str) -> bool:
+        """Check if an error scenario is addressed in the specification."""
+        # Look for keywords related to the scenario
+        scenario_keywords = scenario.lower().split()
 
-        return ArchitecturePattern(
-            architecture_type=arch_type,
-            confidence=confidence,
-            reasoning=reasoning,
-            indicators={
-                "monolithic": monolithic_score,
-                "microservices": microservices_score,
-                "modular_monolith": modular_monolith_score,
-                "direct_imports": direct_imports_score,
-                "rest_apis": rest_apis_score,
-                "message_queue": message_queue_score
-            },
-            is_integrated=is_integrated,
-            is_isolated=is_isolated,
-            is_layered=is_layered,
-            is_modular=is_modular,
-            uses_direct_imports=(direct_imports_score > 2),
-            uses_rest_apis=(rest_apis_score > 2),
-            uses_message_queues=(message_queue_score > 2),
-            uses_shared_libraries=(direct_imports_score > 2 or modular_monolith_score > 3)
-        )
+        # Check if spec contains discussion of this scenario
+        spec_lower = spec_text.lower()
 
-    def _extract_components(
-        self,
-        content: str,
-        architecture: ArchitecturePattern
-    ) -> List[ComponentSuggestion]:
-        """Extract suggested components from specification."""
-        components = []
+        # Check for explicit error handling sections
+        has_error_section = any(section in spec_lower for section in [
+            'error scenario',
+            'error handling',
+            'failure handling',
+            'error cases',
+            'exception handling'
+        ])
 
-        # Look for component/module/service definitions
-        patterns = [
-            r"(?:component|module|service|library):\s+([a-zA-Z0-9_-]+)",
-            r"##\s+([A-Z][a-zA-Z0-9\s]+)(?:Component|Module|Service)",
-            r"-\s+([a-zA-Z0-9_-]+)(?:\s+component|\s+module|\s+service)",
+        # More strict heuristic: require multiple keywords or specific error handling phrases
+        keyword_matches = sum(1 for keyword in scenario_keywords if keyword in spec_lower)
+
+        # HTTP status codes indicate error handling
+        status_code_pattern = re.compile(r'\b(400|401|403|404|409|500|502|503|504)\b')
+        has_status_codes = bool(status_code_pattern.search(spec_text))
+
+        # Specific error handling actions
+        error_handling_actions = [
+            'retry',
+            'fallback',
+            'return error',
+            'throw',
+            'raise',
+            'timeout',
+            'unavailable',
+            'invalid',
+            'duplicate',
+            'conflict',
+            'failed',
+            'failure'
         ]
 
-        found_components = set()
+        has_error_actions = any(action in spec_lower for action in error_handling_actions)
 
-        for pattern in patterns:
-            matches = re.finditer(pattern, content, re.IGNORECASE)
+        # If there's an error scenarios section and the scenario keywords match
+        if has_error_section and keyword_matches >= min(2, len(scenario_keywords)):
+            return True
+
+        # If status codes are present and scenario keywords match
+        if has_status_codes and keyword_matches >= min(2, len(scenario_keywords)):
+            return True
+
+        # If explicit error handling actions mentioned with scenario keywords
+        if has_error_actions and keyword_matches >= min(2, len(scenario_keywords)):
+            return True
+
+        return False
+
+    def _identify_input_fields(self, spec_text: str) -> Dict[str, str]:
+        """Identify input fields mentioned in specification."""
+        fields = {}
+
+        # Look for common field patterns
+        field_patterns = [
+            r'(\w+):\s*(required|optional)',  # "email: required"
+            r'field[s]?:\s*(\w+)',  # "field: username"
+            r'input[s]?:\s*(\w+)',  # "input: email"
+            r'parameter[s]?:\s*(\w+)',  # "parameter: userId"
+            r'(\w+)\s+field',  # "email field"
+            r'accept\s+(?:user\s+)?(\w+)',  # "accept email", "accept user email"
+            r'(\w+)\s+from\s+user',  # "email from user"
+            r'-\s+(\w+):',  # "- email:"
+        ]
+
+        for pattern in field_patterns:
+            matches = re.finditer(pattern, spec_text, re.IGNORECASE)
             for match in matches:
-                component_name = match.group(1).strip()
-                component_name = re.sub(r'\s+', '-', component_name.lower())
-                found_components.add(component_name)
+                field_name = match.group(1)
+                # Skip common non-field words
+                if field_name.lower() in ['user', 'fields', 'field', 'input', 'inputs', 'parameter', 'parameters']:
+                    continue
+                # Infer type from name
+                field_type = self._infer_field_type(field_name)
+                fields[field_name] = field_type
 
-        # Classify each component
-        for name in found_components:
-            comp_type = self._classify_component(name, content)
-            responsibility = self._extract_responsibility(name, content)
-            dependencies = self._extract_component_dependencies(name, content)
-            tech_stack = self._extract_component_tech_stack(name, content)
+        return fields
 
-            components.append(ComponentSuggestion(
-                name=name,
-                type=comp_type,
-                responsibility=responsibility,
-                dependencies=dependencies,
-                tech_stack=tech_stack,
-                confidence=0.8
-            ))
+    def _infer_field_type(self, field_name: str) -> str:
+        """Infer field type from field name."""
+        field_lower = field_name.lower()
 
-        return components
+        if 'email' in field_lower:
+            return 'email'
+        elif 'phone' in field_lower or 'tel' in field_lower:
+            return 'phone'
+        elif 'age' in field_lower or 'count' in field_lower or 'num' in field_lower:
+            return 'numeric'
+        elif 'date' in field_lower or 'time' in field_lower:
+            return 'datetime'
+        elif 'name' in field_lower or 'title' in field_lower or 'description' in field_lower:
+            return 'string'
+        elif 'status' in field_lower or 'type' in field_lower or 'role' in field_lower:
+            return 'enum'
+        elif 'file' in field_lower or 'upload' in field_lower or 'image' in field_lower:
+            return 'file'
+        elif 'list' in field_lower or 'array' in field_lower or field_lower.endswith('s'):
+            return 'array'
+        else:
+            return 'string'
 
-    def _classify_component(self, name: str, content: str) -> ComponentType:
-        """Classify component type based on name and context."""
-        name_lower = name.lower()
-
-        # Search for component in context
-        pattern = rf"(?:^|\n).*{re.escape(name)}.*?(?:\n|$)"
-        matches = re.finditer(pattern, content, re.IGNORECASE | re.MULTILINE)
-        context = " ".join(match.group(0) for match in matches).lower()
-
-        # Score each type
-        type_scores = {}
-        for comp_type, keywords in self.COMPONENT_TYPE_KEYWORDS.items():
-            score = sum(
-                context.count(keyword) + name_lower.count(keyword)
-                for keyword in keywords
-            )
-            type_scores[comp_type] = score
-
-        # Return highest scoring type
-        if max(type_scores.values()) > 0:
-            return max(type_scores, key=type_scores.get)
-
-        # Default based on name patterns
-        if any(word in name_lower for word in ["type", "model", "util", "helper"]):
-            return ComponentType.BASE
-        elif any(word in name_lower for word in ["core", "service", "logic"]):
-            return ComponentType.CORE
-        elif any(word in name_lower for word in ["api", "handler", "controller", "feature"]):
-            return ComponentType.FEATURE
-        elif any(word in name_lower for word in ["orchestrator", "coordinator", "manager", "main"]):
-            return ComponentType.INTEGRATION
-        elif any(word in name_lower for word in ["cli", "app", "server", "frontend"]):
-            return ComponentType.APPLICATION
-
-        return ComponentType.UNKNOWN
-
-    def _extract_responsibility(self, component_name: str, content: str) -> str:
-        """Extract component responsibility from context."""
-        # Look for responsibility near component name
-        pattern = rf"{re.escape(component_name)}[:\s]+([^.\n]+)"
-        match = re.search(pattern, content, re.IGNORECASE)
-        if match:
-            return match.group(1).strip()
-
-        return "Component responsibility not specified"
-
-    def _extract_component_dependencies(
-        self,
-        component_name: str,
-        content: str
-    ) -> List[str]:
-        """Extract dependencies for a specific component."""
-        dependencies = []
-
-        # Look for dependency patterns near component name
-        patterns = [
-            rf"{re.escape(component_name)}.*?(?:depends on|uses|requires|imports).*?([a-zA-Z0-9_-]+)",
-            rf"([a-zA-Z0-9_-]+).*?(?:used by|required by).*?{re.escape(component_name)}"
-        ]
-
-        for pattern in patterns:
-            matches = re.finditer(pattern, content, re.IGNORECASE)
-            for match in matches:
-                dep_name = match.group(1).strip()
-                if dep_name != component_name:
-                    dependencies.append(dep_name)
-
-        return list(set(dependencies))
-
-    def _extract_component_tech_stack(
-        self,
-        component_name: str,
-        content: str
-    ) -> List[str]:
-        """Extract tech stack for a specific component."""
-        # Common technologies
-        technologies = [
-            "python", "rust", "javascript", "typescript", "go",
-            "fastapi", "flask", "django", "react", "vue", "angular",
-            "postgresql", "mysql", "mongodb", "redis",
-            "docker", "kubernetes"
-        ]
-
-        tech_stack = []
-
-        # Search near component name
-        pattern = rf"(?:^|\n).*{re.escape(component_name)}.*?(?:\n|$)"
-        matches = re.finditer(pattern, content, re.IGNORECASE | re.MULTILINE)
-        context = " ".join(match.group(0) for match in matches).lower()
-
-        for tech in technologies:
-            if tech in context:
-                tech_stack.append(tech)
-
-        return tech_stack
-
-    def _detect_dependencies(
-        self,
-        content: str,
-        components: List[ComponentSuggestion]
-    ) -> List[Tuple[str, str]]:
-        """Detect dependencies between components."""
-        dependencies = []
-
-        for component in components:
-            for dep_name in component.dependencies:
-                # Check if dependency is in our component list
-                if any(c.name == dep_name for c in components):
-                    dependencies.append((component.name, dep_name))
-
-        return dependencies
-
-    def _extract_tech_stack(self, content: str) -> Set[str]:
-        """Extract overall tech stack from specification."""
-        content_lower = content.lower()
-
-        technologies = {
-            "python", "rust", "javascript", "typescript", "go", "java",
-            "c++", "c#", "ruby", "php", "swift", "kotlin",
-            "fastapi", "flask", "django", "express", "spring",
-            "react", "vue", "angular", "svelte",
-            "postgresql", "mysql", "mongodb", "redis", "elasticsearch",
-            "docker", "kubernetes", "aws", "azure", "gcp"
+    def _categorize_field(self, field_name: str, field_type: str) -> str:
+        """Categorize field to match validation requirements."""
+        type_mapping = {
+            'email': 'email_field',
+            'phone': 'string_field',
+            'numeric': 'numeric_field',
+            'datetime': 'datetime_field',
+            'string': 'string_field',
+            'enum': 'enum_field',
+            'file': 'file_upload_field',
+            'array': 'array_field'
         }
 
-        found_tech = set()
-        for tech in technologies:
-            if tech in content_lower:
-                found_tech.add(tech)
+        return type_mapping.get(field_type, 'string_field')
 
-        return found_tech
+    def _is_validation_specified(self, spec_text: str, field_name: str, validation_type: str) -> bool:
+        """Check if a specific validation is specified for a field."""
+        # Look for field name and validation keywords nearby
+        spec_lower = spec_text.lower()
+        field_lower = field_name.lower()
 
-    def _determine_integration_style(
-        self,
-        architecture: ArchitecturePattern
-    ) -> str:
-        """Determine recommended integration style."""
-        if architecture.uses_direct_imports and architecture.is_integrated:
-            return "library_imports"
-        elif architecture.uses_rest_apis and architecture.is_isolated:
-            return "rest_apis"
-        elif architecture.uses_message_queues:
-            return "message_queue"
-        elif architecture.is_modular:
-            return "modular_library"
-        else:
-            return "unknown"
+        # Validation keywords to look for
+        validation_keywords = {
+            'format_validation': ['format', 'regex', 'pattern', 'rfc'],
+            'max_length': ['max', 'maximum'],
+            'min_length': ['min', 'minimum'],
+            'min_max_values': ['min', 'max', 'range', 'between'],
+            'required_optional': ['required', 'optional'],
+            'allowed_values': ['enum', 'allowed', 'values', 'one of'],
+            'precision': ['decimal', 'precision', 'places'],
+            'timezone_handling': ['timezone', 'utc', 'tz'],
+            'max_file_size': ['size', 'mb', 'gb', 'kb'],
+            'allowed_mime_types': ['mime', 'type', 'jpeg', 'png', 'pdf'],
+            'data_type': ['integer', 'decimal', 'float', 'string', 'number'],
+            'min_max_dates': ['after', 'before', 'range'],
+            'duplicates_allowed': ['unique', 'duplicate'],
+            'min_items': ['min', 'minimum'],
+            'max_items': ['max', 'maximum'],
+            'item_type': ['type', 'string', 'integer']
+        }
 
-    def _generate_warnings(
-        self,
-        architecture: ArchitecturePattern,
-        components: List[ComponentSuggestion]
-    ) -> List[str]:
-        """Generate warnings for potential architectural issues."""
-        warnings = []
+        keywords = validation_keywords.get(validation_type, [])
 
-        # Low confidence warning
-        if architecture.confidence < 0.5:
-            warnings.append(
-                f"⚠️ Low confidence ({architecture.confidence:.0%}) in architecture detection. "
-                "Specification may need clarification."
-            )
+        # Check if field and validation keywords appear together
+        field_pattern = re.compile(rf'\b{re.escape(field_lower)}\b')
+        field_matches = list(field_pattern.finditer(spec_lower))
 
-        # Mixed patterns warning
-        if architecture.architecture_type == ArchitectureType.MIXED:
-            warnings.append(
-                "⚠️ Mixed architecture detected. Ensure component boundaries are clear."
-            )
+        if not field_matches:
+            # Field not mentioned, so validation can't be specified
+            return False
 
-        # No components found
-        if len(components) == 0:
-            warnings.append(
-                "⚠️ No components detected in specification. "
-                "Consider adding explicit component definitions."
-            )
+        for field_match in field_matches:
+            # Look for validation keywords within 200 characters
+            start = max(0, field_match.start() - 100)
+            end = min(len(spec_lower), field_match.end() + 100)
+            context = spec_lower[start:end]
 
-        # Integration style unclear
-        if not architecture.uses_direct_imports and not architecture.uses_rest_apis:
-            warnings.append(
-                "⚠️ Integration style unclear. "
-                "Specify how components should communicate (imports, APIs, etc.)."
-            )
+            # Need to find at least one keyword
+            matches = sum(1 for keyword in keywords if keyword in context)
+            if matches > 0:
+                return True
 
-        return warnings
-
-
-def analyze_specification(spec_path: Path) -> SpecificationAnalysis:
-    """
-    Convenience function to analyze a specification.
-
-    Args:
-        spec_path: Path to specification file or directory
-
-    Returns:
-        SpecificationAnalysis result
-    """
-    analyzer = SpecificationAnalyzer()
-    return analyzer.analyze_specification(spec_path)
+        return False
 
 
 def main():
-    """CLI entry point for specification analyzer."""
+    """CLI interface."""
     import sys
-    import argparse
-    import json
 
-    parser = argparse.ArgumentParser(
-        description="Analyze project specifications to detect architecture"
-    )
-    parser.add_argument(
-        'spec_path',
-        type=Path,
-        help='Path to specification file or directory'
-    )
-    parser.add_argument(
-        '--json',
-        action='store_true',
-        help='Output as JSON'
-    )
-    parser.add_argument(
-        '--verbose',
-        action='store_true',
-        help='Verbose output'
-    )
+    if len(sys.argv) < 2:
+        print("Usage: specification_analyzer.py <spec_file>")
+        print("       specification_analyzer.py --stdin")
+        sys.exit(1)
 
-    args = parser.parse_args()
-
-    if not args.spec_path.exists():
-        print(f"Error: Specification path not found: {args.spec_path}")
-        return 1
-
-    # Analyze specification
-    analyzer = SpecificationAnalyzer()
-    result = analyzer.analyze_specification(args.spec_path)
-
-    if args.json:
-        # JSON output
-        output = {
-            "architecture": {
-                "type": result.architecture.architecture_type.value,
-                "confidence": result.architecture.confidence,
-                "characteristics": {
-                    "integrated": result.architecture.is_integrated,
-                    "isolated": result.architecture.is_isolated,
-                    "layered": result.architecture.is_layered,
-                    "modular": result.architecture.is_modular
-                },
-                "patterns": {
-                    "direct_imports": result.architecture.uses_direct_imports,
-                    "rest_apis": result.architecture.uses_rest_apis,
-                    "message_queues": result.architecture.uses_message_queues
-                }
-            },
-            "components": [
-                {
-                    "name": comp.name,
-                    "type": comp.type.value,
-                    "responsibility": comp.responsibility,
-                    "dependencies": comp.dependencies,
-                    "tech_stack": comp.tech_stack,
-                    "confidence": comp.confidence
-                }
-                for comp in result.suggested_components
-            ],
-            "dependencies": [
-                {"from": from_comp, "to": to_comp}
-                for from_comp, to_comp in result.dependencies_detected
-            ],
-            "tech_stack": list(result.tech_stack),
-            "integration_style": result.integration_style,
-            "warnings": result.warnings
-        }
-        print(json.dumps(output, indent=2))
+    if sys.argv[1] == "--stdin":
+        spec_text = sys.stdin.read()
+        spec_source = "stdin"
     else:
-        # Human-readable output
-        print("=" * 70)
-        print("SPECIFICATION ANALYSIS")
-        print("=" * 70)
-        print()
+        spec_file = Path(sys.argv[1])
+        if not spec_file.exists():
+            print(f"Error: File not found: {spec_file}")
+            sys.exit(1)
+        spec_text = spec_file.read_text(encoding='utf-8')
+        spec_source = str(spec_file)
 
-        print("Architecture:")
-        print(f"  Type: {result.architecture.architecture_type.value}")
-        print(f"  Confidence: {result.architecture.confidence:.0%}")
-        print(f"  Integration Style: {result.integration_style}")
-        print()
+    analyzer = SpecificationAnalyzer()
+    analysis = analyzer.analyze_specification(spec_text, spec_source)
 
-        print("Characteristics:")
-        print(f"  Integrated: {'Yes' if result.architecture.is_integrated else 'No'}")
-        print(f"  Isolated: {'Yes' if result.architecture.is_isolated else 'No'}")
-        print(f"  Layered: {'Yes' if result.architecture.is_layered else 'No'}")
-        print(f"  Modular: {'Yes' if result.architecture.is_modular else 'No'}")
-        print()
+    print(f"Completeness Score: {analysis.completeness_score:.1f}/100")
+    print(f"Critical Gaps: {'Yes' if analysis.has_critical_gaps else 'No'}")
+    print(f"Ambiguities: {len(analysis.ambiguities)}")
+    print(f"  - Critical: {len([a for a in analysis.ambiguities if a.severity == 'critical'])}")
+    print(f"  - Warning: {len([a for a in analysis.ambiguities if a.severity == 'warning'])}")
+    print(f"  - Info: {len([a for a in analysis.ambiguities if a.severity == 'info'])}")
+    print(f"Missing Scenarios: {len(analysis.missing_scenarios)}")
+    print(f"Missing Validations: {len(analysis.missing_validations)}")
 
-        if args.verbose:
-            print("Reasoning:")
-            for reason in result.architecture.reasoning:
-                print(f"  - {reason}")
-            print()
+    if analysis.has_critical_gaps or len(analysis.ambiguities) > 0 or len(analysis.missing_scenarios) > 0:
+        clarification_doc = analysis.generate_clarification_document()
 
-        print(f"Components Found: {len(result.suggested_components)}")
-        if result.suggested_components:
-            for comp in result.suggested_components:
-                print(f"  - {comp.name} ({comp.type.value})")
-                if args.verbose and comp.responsibility:
-                    print(f"      {comp.responsibility}")
-                if args.verbose and comp.dependencies:
-                    print(f"      Dependencies: {', '.join(comp.dependencies)}")
-        print()
+        if sys.argv[1] == "--stdin":
+            output_file = Path("SPEC_CLARIFICATIONS.md")
+        else:
+            spec_file = Path(sys.argv[1])
+            output_file = spec_file.parent / "SPEC_CLARIFICATIONS.md"
 
-        if result.tech_stack:
-            print(f"Tech Stack: {', '.join(sorted(result.tech_stack))}")
-            print()
+        output_file.write_text(clarification_doc, encoding='utf-8')
+        print(f"\nGenerated: {output_file}")
 
-        if result.warnings:
-            print("Warnings:")
-            for warning in result.warnings:
-                print(f"  {warning}")
-            print()
-
-        print("=" * 70)
-
-        # Recommendations
-        print("\nRecommendations:")
-        if result.architecture.is_integrated:
-            print("  ✅ Use library-style components with direct imports")
-            print("  ✅ Components can import from each other's public APIs")
-            print("  ✅ Focus on clear public/private boundaries")
-        if result.architecture.is_isolated:
-            print("  ✅ Use service-style components with API contracts")
-            print("  ✅ Define REST/gRPC contracts between components")
-            print("  ✅ Focus on API versioning and compatibility")
-        if result.architecture.is_layered:
-            print("  ✅ Enforce layer hierarchy (base → core → feature → integration → application)")
-            print("  ✅ Lower layers should not depend on higher layers")
-
-    return 0
+    sys.exit(0 if not analysis.has_critical_gaps else 1)
 
 
 if __name__ == '__main__':
-    import sys
-    sys.exit(main())
+    main()

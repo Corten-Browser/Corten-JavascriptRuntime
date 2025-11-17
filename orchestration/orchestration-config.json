@@ -60,7 +60,8 @@
     "auto_split_enabled": true,
     "claude_md_required": true,
     "readme_required": true,
-    "initial_token_budget": 70000
+    "initial_token_budget": 70000,
+    "local_git_required": true
   },
   "git_settings": {
     "repository_mode": "single",
@@ -69,5 +70,80 @@
     "commit_prefix_required": true,
     "commit_prefix_format": "[{component}]",
     "_comment": "Single repository with retry wrapper for concurrent commits"
+  },
+  "verification": {
+    "readme_accuracy_testing": {
+      "enabled": true,
+      "blocking": true,
+      "extract_from_sections": [
+        "Quick Start",
+        "Installation",
+        "Usage",
+        "Examples",
+        "API"
+      ],
+      "shell_code_blocks": [
+        "bash",
+        "shell",
+        "console",
+        "sh"
+      ],
+      "python_code_blocks": [
+        "python",
+        "py"
+      ],
+      "test_doctest": true,
+      "timeout_seconds": 10,
+      "max_examples_per_type": 10,
+      "skip_markers": [
+        "<!-- skip-test -->",
+        "<!-- no-test -->",
+        "# doctest: +SKIP",
+        "# pragma: no readme test"
+      ]
+    },
+    "feature_coverage_testing": {
+      "enabled": true,
+      "blocking": true,
+      "manifest_version": "2.0",
+      "require_features_for_types": [
+        "cli_application",
+        "library",
+        "web_server",
+        "gui_application"
+      ],
+      "smoke_test_timeout_seconds": 10,
+      "test_scenario_timeout_seconds": 30,
+      "_comment": "v0.13.0: Tests ALL declared features from component.yaml user_facing_features"
+    },
+    "phase_gate_enforcement": {
+      "enabled": true,
+      "blocking": true,
+      "gates": {
+        "phase_5": {
+          "name": "Integration",
+          "script": "orchestration/phase_gates/phase_5_integration.py",
+          "required": true,
+          "enforces": "100% integration test pass rate",
+          "blocks_on": [
+            "any failing tests",
+            "pass rate < 100%"
+          ]
+        },
+        "phase_6": {
+          "name": "Verification",
+          "script": "orchestration/phase_gates/phase_6_verification.py",
+          "required": true,
+          "enforces": "All verification checks passing",
+          "blocks_on": [
+            "completion_verifier not 13/13",
+            "blocking issues"
+          ]
+        }
+      },
+      "state_file": "orchestration/orchestration-state.json",
+      "timeout_seconds": 600,
+      "_comment": "v0.14.0: Programmatic enforcement to prevent premature stopping"
+    }
   }
 }
