@@ -280,7 +280,14 @@ impl BytecodeGenerator {
                 self.nested_functions.push(func_bytecode);
 
                 // Also include any nested functions from the inner function
-                self.nested_functions.extend(inner_nested);
+                // IMPORTANT: We need to adjust indices in these nested functions too!
+                // Their closure indices were relative to their parent's nested_functions list,
+                // but now they need to be relative to our nested_functions list.
+                let mut adjusted_inner_nested = inner_nested;
+                for nested_chunk in &mut adjusted_inner_nested {
+                    Self::adjust_closure_indices(nested_chunk, inner_base_idx);
+                }
+                self.nested_functions.extend(adjusted_inner_nested);
 
                 // Create closure with upvalue descriptors (func_idx is now a proper function registry index)
                 self.chunk.emit(Opcode::CreateClosure(func_idx, upvalues));
@@ -623,9 +630,8 @@ impl BytecodeGenerator {
                         self.chunk.emit(Opcode::Neg);
                     }
                     UnaryOperator::Not => {
-                        // Logical NOT - simplified
-                        self.chunk.emit(Opcode::LoadFalse);
-                        self.chunk.emit(Opcode::Equal);
+                        // Logical NOT - invert truthiness
+                        self.chunk.emit(Opcode::Not);
                     }
                     _ => {}
                 }
@@ -894,7 +900,12 @@ impl BytecodeGenerator {
                 self.nested_functions.push(func_bytecode);
 
                 // Also include any nested functions from the inner function
-                self.nested_functions.extend(inner_nested);
+                // Adjust indices in these nested functions too
+                let mut adjusted_inner_nested = inner_nested;
+                for nested_chunk in &mut adjusted_inner_nested {
+                    Self::adjust_closure_indices(nested_chunk, inner_base_idx);
+                }
+                self.nested_functions.extend(adjusted_inner_nested);
 
                 self.chunk.emit(Opcode::CreateClosure(func_idx, upvalues));
             }
@@ -956,7 +967,12 @@ impl BytecodeGenerator {
                 self.nested_functions.push(func_bytecode);
 
                 // Also include any nested functions from the inner function
-                self.nested_functions.extend(inner_nested);
+                // Adjust indices in these nested functions too
+                let mut adjusted_inner_nested = inner_nested;
+                for nested_chunk in &mut adjusted_inner_nested {
+                    Self::adjust_closure_indices(nested_chunk, inner_base_idx);
+                }
+                self.nested_functions.extend(adjusted_inner_nested);
 
                 self.chunk.emit(Opcode::CreateClosure(func_idx, upvalues));
             }

@@ -66,11 +66,12 @@ fn assert_float(result: Value, expected: f64, tolerance: f64, message: &str) {
     }
 }
 
-/// Helper function to check if result is a string (HeapObject)
-/// Note: Strings are stored as HeapObjects in the current implementation
+/// Helper function to check if result is a string (HeapObject or String)
+/// Note: Strings can be stored as HeapObjects or Value::String
 fn assert_is_heap_object(result: Value, message: &str) {
     match result {
         Value::HeapObject(_) => {} // Strings are heap objects
+        Value::String(_) => {}     // Or direct String values
         _ => panic!("{}: Expected HeapObject (string), got {:?}", message, result),
     }
 }

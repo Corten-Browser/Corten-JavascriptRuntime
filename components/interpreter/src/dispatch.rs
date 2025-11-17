@@ -200,10 +200,7 @@ impl Dispatcher {
                     Value::Double(*n)
                 }
             }
-            bytecode_system::Value::String(_) => {
-                // Strings would need to be heap-allocated, for now return undefined
-                Value::Undefined
-            }
+            bytecode_system::Value::String(s) => Value::String(s.clone()),
             bytecode_system::Value::Closure(closure_data) => {
                 // Create a HeapObject reference for the closure
                 Value::HeapObject(closure_data.function_index)
@@ -325,6 +322,12 @@ impl Dispatcher {
                 Opcode::Neg => {
                     let a = self.stack.pop().unwrap_or(Value::Undefined);
                     let result = self.neg(a)?;
+                    self.stack.push(result);
+                }
+                Opcode::Not => {
+                    let a = self.stack.pop().unwrap_or(Value::Undefined);
+                    // Logical NOT - invert truthiness
+                    let result = Value::Boolean(!a.is_truthy());
                     self.stack.push(result);
                 }
                 Opcode::Equal => {
@@ -835,6 +838,7 @@ impl Dispatcher {
             Value::Smi(n) => BuiltinValue::number(*n as f64),
             Value::Double(n) => BuiltinValue::number(*n),
             Value::HeapObject(_) => BuiltinValue::object(),
+            Value::String(s) => BuiltinValue::string(s.clone()),
             Value::NativeObject(_) => BuiltinValue::object(),
             Value::NativeFunction(name) => BuiltinValue::string(format!("function {}() {{ [native code] }}", name)),
         }
@@ -915,6 +919,7 @@ impl Dispatcher {
 
         // Save current upvalues and set closure's upvalues if this is a closure call
         let saved_upvalues = std::mem::take(&mut self.current_upvalues);
+        let saved_open_upvalues = std::mem::take(&mut self.open_upvalues);
         if let Some(upvalues) = closure_upvalues {
             self.current_upvalues = upvalues;
         }
@@ -925,6 +930,7 @@ impl Dispatcher {
 
         // Restore previous upvalues
         self.current_upvalues = saved_upvalues;
+        self.open_upvalues = saved_open_upvalues;
 
         // Decrement call depth counter
         CALL_DEPTH.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
@@ -945,12 +951,39 @@ impl Dispatcher {
     // Arithmetic operations
 
     fn add(&self, a: Value, b: Value) -> Result<Value, JsError> {
-        match (a, b) {
-            (Value::Smi(x), Value::Smi(y)) => Ok(Value::Smi(x.wrapping_add(y))),
-            (Value::Double(x), Value::Double(y)) => Ok(Value::Double(x + y)),
-            (Value::Smi(x), Value::Double(y)) => Ok(Value::Double(x as f64 + y)),
-            (Value::Double(x), Value::Smi(y)) => Ok(Value::Double(x + y as f64)),
+        match (&a, &b) {
+            // String concatenation has priority
+            (Value::String(s1), Value::String(s2)) => {
+                Ok(Value::String(format!("{}{}", s1, s2)))
+            }
+            (Value::String(s), _) => {
+                let b_str = self.to_string_value(&b);
+                Ok(Value::String(format!("{}{}", s, b_str)))
+            }
+            (_, Value::String(s)) => {
+                let a_str = self.to_string_value(&a);
+                Ok(Value::String(format!("{}{}", a_str, s)))
+            }
+            // Numeric addition
+            (Value::Smi(x), Value::Smi(y)) => Ok(Value::Smi(x.wrapping_add(*y))),
+            (Value::Double(x), Value::Double(y)) => Ok(Value::Double(*x + *y)),
+            (Value::Smi(x), Value::Double(y)) => Ok(Value::Double(*x as f64 + *y)),
+            (Value::Double(x), Value::Smi(y)) => Ok(Value::Double(*x + *y as f64)),
             _ => Ok(Value::Double(f64::NAN)),
+        }
+    }
+
+    fn to_string_value(&self, value: &Value) -> String {
+        match value {
+            Value::Undefined => "undefined".to_string(),
+            Value::Null => "null".to_string(),
+            Value::Boolean(b) => b.to_string(),
+            Value::Smi(n) => n.to_string(),
+            Value::Double(n) => n.to_string(),
+            Value::String(s) => s.clone(),
+            Value::HeapObject(id) => format!("[object Object {}]", id),
+            Value::NativeObject(_) => "[object Object]".to_string(),
+            Value::NativeFunction(name) => format!("function {}() {{ [native code] }}", name),
         }
     }
 
@@ -1019,6 +1052,7 @@ impl Dispatcher {
             }
             Value::Undefined => f64::NAN,
             Value::Null => 0.0,
+            Value::String(s) => s.parse::<f64>().unwrap_or(f64::NAN),
             Value::HeapObject(_) => f64::NAN,
             Value::NativeObject(_) => f64::NAN,
             Value::NativeFunction(_) => f64::NAN,

@@ -73,6 +73,7 @@ impl ProfileData {
             Value::Boolean(_) => TypeInfo::Boolean,
             Value::Undefined => TypeInfo::Undefined,
             Value::Null => TypeInfo::Null,
+            Value::String(_) => TypeInfo::String,
             Value::HeapObject(_) | Value::NativeObject(_) => TypeInfo::Object,
             Value::NativeFunction(_) => TypeInfo::Object,
         };

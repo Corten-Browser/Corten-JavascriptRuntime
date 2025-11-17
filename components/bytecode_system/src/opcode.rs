@@ -68,6 +68,8 @@ pub enum Opcode {
     Mod,
     /// Negate top value
     Neg,
+    /// Logical NOT (invert truthiness)
+    Not,
 
     // Comparison operations
     /// Loose equality (==)

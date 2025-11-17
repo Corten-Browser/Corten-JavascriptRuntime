@@ -35,6 +35,8 @@ pub enum IROpcode {
     Mod(Option<TypeInfo>),
     /// Negate value
     Neg(Option<TypeInfo>),
+    /// Logical NOT
+    Not,
     /// Equality check
     Equal,
     /// Strict equality check
@@ -170,6 +172,7 @@ impl IRFunction {
                 Opcode::Div => IROpcode::Div(None),
                 Opcode::Mod => IROpcode::Mod(None),
                 Opcode::Neg => IROpcode::Neg(None),
+                Opcode::Not => IROpcode::Not,
                 Opcode::Equal => IROpcode::Equal,
                 Opcode::StrictEqual => IROpcode::StrictEqual,
                 Opcode::NotEqual => IROpcode::NotEqual,

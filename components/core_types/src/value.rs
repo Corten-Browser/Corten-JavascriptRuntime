@@ -49,10 +49,12 @@ pub enum Value {
     HeapObject(usize),
     /// IEEE 754 double-precision floating point
     Double(f64),
+    /// JavaScript string value
+    String(std::string::String),
     /// Native object (console, Math, etc.)
     NativeObject(Rc<RefCell<dyn Any>>),
     /// Native function reference by name
-    NativeFunction(String),
+    NativeFunction(std::string::String),
 }
 
 impl fmt::Debug for Value {
@@ -64,6 +66,7 @@ impl fmt::Debug for Value {
             Value::Smi(n) => f.debug_tuple("Smi").field(n).finish(),
             Value::HeapObject(id) => f.debug_tuple("HeapObject").field(id).finish(),
             Value::Double(n) => f.debug_tuple("Double").field(n).finish(),
+            Value::String(s) => f.debug_tuple("String").field(s).finish(),
             Value::NativeObject(_) => write!(f, "NativeObject(...)"),
             Value::NativeFunction(name) => f.debug_tuple("NativeFunction").field(name).finish(),
         }
@@ -79,6 +82,7 @@ impl PartialEq for Value {
             (Value::Smi(a), Value::Smi(b)) => a == b,
             (Value::HeapObject(a), Value::HeapObject(b)) => a == b,
             (Value::Double(a), Value::Double(b)) => a == b,
+            (Value::String(a), Value::String(b)) => a == b,
             (Value::NativeObject(a), Value::NativeObject(b)) => Rc::ptr_eq(a, b),
             (Value::NativeFunction(a), Value::NativeFunction(b)) => a == b,
             _ => false,
@@ -122,6 +126,7 @@ impl Value {
             Value::Smi(n) => *n != 0,
             Value::Double(n) => !n.is_nan() && *n != 0.0,
             Value::HeapObject(_) => true, // All objects are truthy
+            Value::String(s) => !s.is_empty(), // Empty string is falsy
             Value::NativeObject(_) => true, // Native objects are truthy
             Value::NativeFunction(_) => true, // Functions are truthy
         }
@@ -157,6 +162,7 @@ impl Value {
             Value::Smi(_) => "number".to_string(),
             Value::Double(_) => "number".to_string(),
             Value::HeapObject(_) => "object".to_string(),
+            Value::String(_) => "string".to_string(),
             Value::NativeObject(_) => "object".to_string(),
             Value::NativeFunction(_) => "function".to_string(),
         }
@@ -241,6 +247,7 @@ impl fmt::Display for Value {
                 }
             }
             Value::HeapObject(_) => write!(f, "[object Object]"),
+            Value::String(s) => write!(f, "{}", s),
             Value::NativeObject(_) => write!(f, "[object Object]"),
             Value::NativeFunction(name) => write!(f, "function {}() {{ [native code] }}", name),
         }
