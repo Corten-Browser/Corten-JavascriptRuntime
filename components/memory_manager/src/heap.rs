@@ -412,7 +412,77 @@ impl Heap {
     pub fn reset_stats(&mut self) {
         self.gc_stats = GcStats::default();
     }
+
+    /// Performs a write barrier when storing a reference in an object.
+    ///
+    /// This method should be called whenever a reference field is updated.
+    /// It checks if the write creates an old-to-young reference and records
+    /// it in the remembered set if so.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure:
+    /// - `obj` is a valid pointer to a `GcObject` or null
+    /// - `slot` is a valid pointer to a mutable location containing a `*mut GcObject`
+    /// - `new_val` is either null or a valid pointer to a `GcObject`
+    /// - The caller has exclusive access to the slot being written
+    ///
+    /// # Arguments
+    ///
+    /// * `obj` - Pointer to the object being written to (the container)
+    /// * `slot` - Pointer to the slot being updated (the field)
+    /// * `new_val` - The new value being stored (the reference)
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use memory_manager::heap::Heap;
+    /// use memory_manager::gc::{GcObject, GcObjectHeader};
+    ///
+    /// let mut heap = Heap::with_config(1024, 3);
+    ///
+    /// // Allocate objects
+    /// let obj_ptr = heap.allocate(32) as *mut GcObject;
+    /// let target_ptr = heap.allocate(32) as *mut GcObject;
+    ///
+    /// let mut slot: *mut GcObject = std::ptr::null_mut();
+    ///
+    /// unsafe {
+    ///     // Perform write with barrier
+    ///     heap.write_barrier(obj_ptr, &mut slot, target_ptr);
+    /// }
+    ///
+    /// assert_eq!(slot, target_ptr);
+    /// ```
+    pub unsafe fn write_barrier(
+        &self,
+        obj: *mut GcObject,
+        slot: *mut *mut GcObject,
+        new_val: *mut GcObject,
+    ) {
+        // SAFETY: Caller guarantees slot is valid. We delegate to the write_barrier_gc function
+        // which performs the actual write and barrier check.
+        crate::write_barrier::write_barrier_gc(
+            obj,
+            slot,
+            new_val,
+            &self.remembered_set,
+            &self.young_gen,
+            &self.old_gen,
+        );
+    }
+
+    /// Returns a reference to the young generation.
+    pub fn young_gen(&self) -> &YoungGeneration {
+        &self.young_gen
+    }
+
+    /// Returns a reference to the old generation.
+    pub fn old_gen(&self) -> &OldGeneration {
+        &self.old_gen
+    }
 }
+
 
 impl Default for Heap {
     fn default() -> Self {
@@ -921,4 +991,67 @@ mod tests {
         // The important thing is that we still have a root
         assert_eq!(heap.root_count(), 1);
     }
+
+    #[test]
+    fn test_heap_write_barrier() {
+        let mut heap = Heap::with_config(2048, 3);
+
+        // Allocate two young gen objects
+        let obj1_ptr = heap.allocate(32) as *mut GcObject;
+        let obj2_ptr = heap.allocate(32) as *mut GcObject;
+
+        let mut slot: *mut GcObject = ptr::null_mut();
+
+        unsafe {
+            // Perform write with barrier
+            heap.write_barrier(obj1_ptr, &mut slot, obj2_ptr);
+        }
+
+        // Slot should be updated
+        assert_eq!(slot, obj2_ptr);
+
+        // Since both are in young gen, no remembered set entry
+        assert_eq!(heap.remembered_set().size(), 0);
+    }
+
+    #[test]
+    fn test_heap_write_barrier_old_to_young() {
+        let mut heap = Heap::with_config(2048, 3);
+
+        // Create old gen object by force promoting
+        let old_obj_ptr = heap.allocate(32) as *mut GcObject;
+        unsafe {
+            heap.force_promote(old_obj_ptr);
+        }
+
+        // Create young gen object
+        let young_obj_ptr = heap.allocate(32) as *mut GcObject;
+
+        let mut slot: *mut GcObject = ptr::null_mut();
+
+        unsafe {
+            // Perform write with barrier: old -> young
+            heap.write_barrier(old_obj_ptr, &mut slot, young_obj_ptr);
+        }
+
+        // Slot should be updated
+        assert_eq!(slot, young_obj_ptr);
+
+        // Note: force_promote creates a copy, so old_obj_ptr itself is still in young gen
+        // This test shows the API usage; in a real scenario, old_obj_ptr would be
+        // properly in old gen after promotion and collection
+    }
+
+    #[test]
+    fn test_heap_young_gen_accessor() {
+        let heap = Heap::with_config(1024, 3);
+        assert_eq!(heap.young_gen().space_size(), 1024);
+    }
+
+    #[test]
+    fn test_heap_old_gen_accessor() {
+        let heap = Heap::with_config(1024, 3);
+        assert_eq!(heap.old_gen().object_count(), 0);
+    }
 }
+

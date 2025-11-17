@@ -243,6 +243,74 @@ impl CardTable {
     pub fn card_size(&self) -> usize {
         self.card_size
     }
+
+    /// Returns indices of all dirty cards (alias for dirty_cards).
+    pub fn get_dirty_cards(&self) -> Vec<usize> {
+        self.dirty_cards()
+    }
+
+    /// Clears all dirty bits (alias for clear_all).
+    pub fn clear(&mut self) {
+        self.clear_all()
+    }
+}
+
+/// Write barrier implementation for generational garbage collection.
+///
+/// This function should be called whenever a reference field is updated.
+/// It checks if the write creates an old-to-young reference and records
+/// it in the remembered set if so.
+///
+/// # Safety
+///
+/// The caller must ensure:
+/// - `obj` is a valid pointer to a `GcObject` or null
+/// - `slot` is a valid pointer to a mutable location containing a `*mut GcObject`
+/// - `new_val` is either null or a valid pointer to a `GcObject`
+/// - All references (remembered_set, young_gen, old_gen) are valid
+/// - The caller has exclusive access to the slot being written
+///
+/// # Arguments
+///
+/// * `obj` - Pointer to the object being written to (the container)
+/// * `slot` - Pointer to the slot being updated (the field)
+/// * `new_val` - The new value being stored (the reference)
+/// * `remembered_set` - The remembered set for tracking old-to-young references
+/// * `young_gen` - Reference to the young generation
+/// * `old_gen` - Reference to the old generation
+pub unsafe fn write_barrier_gc(
+    obj: *mut GcObject,
+    slot: *mut *mut GcObject,
+    new_val: *mut GcObject,
+    remembered_set: &RememberedSet,
+    young_gen: &YoungGeneration,
+    old_gen: &OldGeneration,
+) {
+    // SAFETY: Caller guarantees slot is a valid pointer to writable memory.
+    // We perform the write operation first.
+    *slot = new_val;
+
+    // Skip if the container object is null
+    if obj.is_null() {
+        return;
+    }
+
+    // Skip if the new value is null (no reference to track)
+    if new_val.is_null() {
+        return;
+    }
+
+    // Check if this is an old-to-young reference:
+    // Container object is in old generation AND new value is in young generation
+    let obj_in_old = old_gen.contains(obj);
+    let new_val_in_young = young_gen.is_in_from_space(new_val as *const u8);
+
+    if obj_in_old && new_val_in_young {
+        // Old generation object now references young generation object.
+        // Add to remembered set so this old object is treated as a root
+        // during young generation collection.
+        remembered_set.add(obj);
+    }
 }
 
 /// Write barrier for maintaining the remembered set
@@ -478,4 +546,285 @@ mod tests {
         }
         assert_eq!(count, 2);
     }
+
+    #[test]
+    fn test_remembered_set_size() {
+        let rs = RememberedSet::new();
+        assert_eq!(rs.size(), 0);
+
+        rs.add(0x1000 as *mut GcObject);
+        assert_eq!(rs.size(), 1);
+
+        rs.add(0x2000 as *mut GcObject);
+        assert_eq!(rs.size(), 2);
+    }
+
+    #[test]
+    fn test_remembered_set_get_roots() {
+        let rs = RememberedSet::new();
+        let ptr1 = 0x1000 as *mut GcObject;
+        let ptr2 = 0x2000 as *mut GcObject;
+
+        rs.add(ptr1);
+        rs.add(ptr2);
+
+        let roots = rs.get_roots();
+        assert_eq!(roots.len(), 2);
+        assert!(roots.contains(&ptr1));
+        assert!(roots.contains(&ptr2));
+    }
+
+    #[test]
+    fn test_remembered_set_thread_safety() {
+        use std::sync::Arc;
+        use std::thread;
+
+        let rs = Arc::new(RememberedSet::new());
+        let mut handles = vec![];
+
+        // Spawn multiple threads adding to remembered set
+        for i in 0..4 {
+            let rs_clone = Arc::clone(&rs);
+            let handle = thread::spawn(move || {
+                let ptr = (0x1000 + i * 0x100) as *mut GcObject;
+                rs_clone.add(ptr);
+            });
+            handles.push(handle);
+        }
+
+        for handle in handles {
+            handle.join().unwrap();
+        }
+
+        assert_eq!(rs.size(), 4);
+    }
+
+    #[test]
+    fn test_card_table_get_dirty_cards() {
+        let mut ct = CardTable::new(0x1000, 4096, 512);
+
+        ct.mark_dirty(0x1000); // Card 0
+        ct.mark_dirty(0x1400); // Card 2
+
+        let dirty = ct.get_dirty_cards();
+        assert_eq!(dirty.len(), 2);
+        assert!(dirty.contains(&0));
+        assert!(dirty.contains(&2));
+    }
+
+    #[test]
+    fn test_card_table_clear() {
+        let mut ct = CardTable::new(0x1000, 4096, 512);
+
+        ct.mark_dirty(0x1000);
+        ct.mark_dirty(0x1200);
+        assert_eq!(ct.num_dirty_cards(), 2);
+
+        ct.clear();
+        assert_eq!(ct.num_dirty_cards(), 0);
+    }
+
+    #[test]
+    fn test_write_barrier_gc_null_object() {
+        use crate::gc::{GcObjectHeader, OldGeneration, YoungGeneration};
+        use std::ptr;
+
+        let rs = RememberedSet::new();
+        let young_gen = YoungGeneration::new(1024);
+        let old_gen = OldGeneration::new();
+
+        let mut slot: *mut GcObject = ptr::null_mut();
+        let new_val = 0x2000 as *mut GcObject;
+
+        unsafe {
+            write_barrier_gc(ptr::null_mut(), &mut slot, new_val, &rs, &young_gen, &old_gen);
+        }
+
+        // Slot should be updated
+        assert_eq!(slot, new_val);
+        // But nothing added to remembered set (obj is null)
+        assert_eq!(rs.size(), 0);
+    }
+
+    #[test]
+    fn test_write_barrier_gc_null_value() {
+        use crate::gc::{GcObjectHeader, OldGeneration, YoungGeneration};
+        use std::ptr;
+
+        let rs = RememberedSet::new();
+        let young_gen = YoungGeneration::new(1024);
+        let mut old_gen = OldGeneration::new();
+
+        let old_obj = Box::into_raw(Box::new(crate::gc::GcObject {
+            header: GcObjectHeader::new(64),
+        }));
+
+        unsafe {
+            old_gen.add_object(old_obj);
+        }
+
+        let mut slot: *mut GcObject = 0x2000 as *mut GcObject;
+
+        unsafe {
+            write_barrier_gc(old_obj, &mut slot, ptr::null_mut(), &rs, &young_gen, &old_gen);
+        }
+
+        // Slot should be updated to null
+        assert!(slot.is_null());
+        // Nothing added to remembered set (new_val is null)
+        assert_eq!(rs.size(), 0);
+
+        // Clean up
+        old_gen.collect(&[]);
+    }
+
+    #[test]
+    fn test_write_barrier_gc_detects_old_to_young() {
+        use crate::gc::{GcObjectHeader, OldGeneration, YoungGeneration};
+
+        let rs = RememberedSet::new();
+        let mut young_gen = YoungGeneration::new(1024);
+        let mut old_gen = OldGeneration::new();
+
+        // Create old generation object
+        let old_obj = Box::into_raw(Box::new(crate::gc::GcObject {
+            header: GcObjectHeader::new(64),
+        }));
+        unsafe {
+            old_gen.add_object(old_obj);
+        }
+
+        // Create young generation object
+        let young_obj_ptr = young_gen.allocate(32).unwrap() as *mut GcObject;
+        unsafe {
+            (*young_obj_ptr).header = GcObjectHeader::new(32);
+        }
+
+        let mut slot: *mut GcObject = std::ptr::null_mut();
+
+        // Perform write barrier: old object stores reference to young object
+        unsafe {
+            write_barrier_gc(old_obj, &mut slot, young_obj_ptr, &rs, &young_gen, &old_gen);
+        }
+
+        // Should detect old-to-young reference
+        assert_eq!(rs.size(), 1);
+        assert!(rs.contains(old_obj));
+
+        old_gen.collect(&[]);
+    }
+
+    #[test]
+    fn test_write_barrier_gc_no_old_to_old() {
+        use crate::gc::{GcObjectHeader, OldGeneration, YoungGeneration};
+
+        let rs = RememberedSet::new();
+        let young_gen = YoungGeneration::new(1024);
+        let mut old_gen = OldGeneration::new();
+
+        // Both objects in old generation
+        let old_obj1 = Box::into_raw(Box::new(crate::gc::GcObject {
+            header: GcObjectHeader::new(64),
+        }));
+        let old_obj2 = Box::into_raw(Box::new(crate::gc::GcObject {
+            header: GcObjectHeader::new(32),
+        }));
+        unsafe {
+            old_gen.add_object(old_obj1);
+            old_gen.add_object(old_obj2);
+        }
+
+        let mut slot: *mut GcObject = std::ptr::null_mut();
+
+        unsafe {
+            write_barrier_gc(old_obj1, &mut slot, old_obj2, &rs, &young_gen, &old_gen);
+        }
+
+        // Old-to-old reference: should NOT be in remembered set
+        assert_eq!(rs.size(), 0);
+
+        old_gen.collect(&[]);
+    }
+
+    #[test]
+    fn test_write_barrier_gc_integration_with_young_gc() {
+        use crate::gc::{GcObjectHeader, OldGeneration, YoungGeneration};
+
+        let rs = RememberedSet::new();
+        let mut young_gen = YoungGeneration::new(2048);
+        let mut old_gen = OldGeneration::new();
+
+        // Create old object that will reference young object
+        let old_obj = Box::into_raw(Box::new(crate::gc::GcObject {
+            header: GcObjectHeader::new(64),
+        }));
+        unsafe {
+            old_gen.add_object(old_obj);
+        }
+
+        // Create young object
+        let young_obj_ptr = young_gen.allocate(32).unwrap() as *mut GcObject;
+        unsafe {
+            (*young_obj_ptr).header = GcObjectHeader::new(32);
+        }
+
+        // Establish old-to-young reference
+        let mut slot: *mut GcObject = std::ptr::null_mut();
+        unsafe {
+            write_barrier_gc(old_obj, &mut slot, young_obj_ptr, &rs, &young_gen, &old_gen);
+        }
+
+        // Get roots from remembered set
+        let remembered_roots = rs.get_roots();
+        assert_eq!(remembered_roots.len(), 1);
+        assert_eq!(remembered_roots[0], old_obj);
+
+        // During young GC, these roots would be used to find young objects
+        // referenced from old generation
+
+        old_gen.collect(&[]);
+    }
+
+    #[test]
+    fn test_write_barrier_gc_clear_after_collection() {
+        use crate::gc::{GcObjectHeader, OldGeneration, YoungGeneration};
+
+        let rs = RememberedSet::new();
+        let mut young_gen = YoungGeneration::new(1024);
+        let mut old_gen = OldGeneration::new();
+
+        let old_obj = Box::into_raw(Box::new(crate::gc::GcObject {
+            header: GcObjectHeader::new(64),
+        }));
+        unsafe {
+            old_gen.add_object(old_obj);
+        }
+
+        let young_obj_ptr = young_gen.allocate(32).unwrap() as *mut GcObject;
+        unsafe {
+            (*young_obj_ptr).header = GcObjectHeader::new(32);
+        }
+
+        let mut slot: *mut GcObject = std::ptr::null_mut();
+
+        unsafe {
+            write_barrier_gc(old_obj, &mut slot, young_obj_ptr, &rs, &young_gen, &old_gen);
+        }
+
+        assert_eq!(rs.size(), 1);
+
+        // Simulate GC completion - clear remembered set
+        rs.clear();
+        assert_eq!(rs.size(), 0);
+
+        old_gen.collect(&[]);
+    }
+
+    #[test]
+    fn test_remembered_set_add_null() {
+        let rs = RememberedSet::new();
+        rs.add(std::ptr::null_mut());
+        assert_eq!(rs.size(), 0);
+    }
 }
+
