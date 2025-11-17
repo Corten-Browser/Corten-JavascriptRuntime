@@ -566,13 +566,9 @@ impl Dispatcher {
                             let result = self.call_native_function(&name, args)?;
                             self.stack.push(result);
                         }
-                        Value::HeapObject(_) => {
-                            // User-defined function - push args back and call
-                            for arg in args.into_iter().rev() {
-                                self.stack.push(arg);
-                            }
-                            self.stack.push(callee);
-                            let result = self.call_function(argc, functions)?;
+                        Value::HeapObject(idx) => {
+                            // User-defined function - call directly with args
+                            let result = self.call_function_with_args(idx, args, functions)?;
                             self.stack.push(result);
                         }
                         _ => {
@@ -844,67 +840,60 @@ impl Dispatcher {
         }
     }
 
-    /// Execute a function call
+    /// Execute a function call with pre-extracted arguments
     ///
-    /// Stack layout before call (bottom to top):
-    /// [..., arg1, arg2, ..., argN, callee]
+    /// # Arguments
+    /// * `func_idx_or_closure` - The function index or closure encoded ID
+    /// * `args` - The function arguments (already in correct order)
+    /// * `functions` - The function registry
     ///
-    /// After call:
-    /// [..., return_value]
-    fn call_function(&mut self, argc: u8, functions: &[BytecodeChunk]) -> Result<Value, JsError> {
-        // Pop the callee (function) from stack
-        let callee = self.stack.pop().unwrap_or(Value::Undefined);
+    /// # Returns
+    /// The return value of the function
+    fn call_function_with_args(
+        &mut self,
+        func_idx_or_closure: usize,
+        args: Vec<Value>,
+        functions: &[BytecodeChunk],
+    ) -> Result<Value, JsError> {
+        // Check for recursion depth to prevent stack overflow
+        static CALL_DEPTH: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let depth = CALL_DEPTH.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if depth > 10000 {
+            CALL_DEPTH.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+            return Err(JsError {
+                kind: ErrorKind::RangeError,
+                message: "Maximum call stack size exceeded".to_string(),
+                stack: vec![],
+                source_position: None,
+            });
+        }
 
-        // Determine the function index from the callee
-        let (fn_idx, closure_upvalues) = match callee {
-            Value::HeapObject(idx) => {
-                // Check if this is a closure (encoded ID >= 1_000_000) or plain function
-                if idx >= 1_000_000 {
-                    // This is a closure - decode and get upvalues from registry
-                    let closure_id = idx - 1_000_000;
-                    match self.closure_registry.get(&closure_id) {
-                        Some((func_idx, upvalues)) => (*func_idx, Some(upvalues.clone())),
-                        None => {
-                            // Invalid closure ID
-                            for _ in 0..argc {
-                                self.stack.pop();
-                            }
-                            return Err(JsError {
-                                kind: ErrorKind::ReferenceError,
-                                message: format!("Invalid closure ID: {}", closure_id),
-                                stack: vec![],
-                                source_position: None,
-                            });
-                        }
-                    }
-                } else {
-                    // Plain function index
-                    (idx, None)
+        // Determine the actual function index and closure upvalues
+        let (fn_idx, closure_upvalues) = if func_idx_or_closure >= 1_000_000 {
+            // This is a closure - decode and get upvalues from registry
+            let closure_id = func_idx_or_closure - 1_000_000;
+            match self.closure_registry.get(&closure_id) {
+                Some((func_idx, upvalues)) => (*func_idx, Some(upvalues.clone())),
+                None => {
+                    CALL_DEPTH.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+                    return Err(JsError {
+                        kind: ErrorKind::ReferenceError,
+                        message: format!("Invalid closure ID: {}", closure_id),
+                        stack: vec![],
+                        source_position: None,
+                    });
                 }
             }
-            _ => {
-                // Not a function - TypeError
-                // Pop arguments to clean up stack
-                for _ in 0..argc {
-                    self.stack.pop();
-                }
-                return Err(JsError {
-                    kind: ErrorKind::TypeError,
-                    message: format!("{:?} is not a function", callee),
-                    stack: vec![],
-                    source_position: None,
-                });
-            }
+        } else {
+            // Plain function index
+            (func_idx_or_closure, None)
         };
 
         // Get the function bytecode
         let fn_bytecode = match functions.get(fn_idx) {
             Some(chunk) => chunk.clone(),
             None => {
-                // Invalid function index
-                for _ in 0..argc {
-                    self.stack.pop();
-                }
+                CALL_DEPTH.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
                 return Err(JsError {
                     kind: ErrorKind::ReferenceError,
                     message: format!("Invalid function index: {}", fn_idx),
@@ -913,13 +902,6 @@ impl Dispatcher {
                 });
             }
         };
-
-        // Pop arguments from stack (in reverse order, so arg1 is first)
-        let mut args = Vec::with_capacity(argc as usize);
-        for _ in 0..argc {
-            args.push(self.stack.pop().unwrap_or(Value::Undefined));
-        }
-        args.reverse(); // Now args[0] is first argument
 
         // Create new execution context for the function
         let mut fn_ctx = ExecutionContext::new(fn_bytecode);
@@ -943,6 +925,9 @@ impl Dispatcher {
 
         // Restore previous upvalues
         self.current_upvalues = saved_upvalues;
+
+        // Decrement call depth counter
+        CALL_DEPTH.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
 
         result
     }

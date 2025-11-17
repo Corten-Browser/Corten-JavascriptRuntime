@@ -58,16 +58,16 @@ fn create_factorial_function() -> BytecodeChunk {
     chunk.emit(Opcode::Return);
 
     // Recursive case: n * factorial(n - 1)
-    // Instruction 6: Load n
+    // Instruction 6: Load n (for multiplication later)
     chunk.emit(Opcode::LoadLocal(RegisterId(0)));
-    // Instruction 7: Load n again for argument
-    chunk.emit(Opcode::LoadLocal(RegisterId(0)));
-    // Instruction 8: Load 1
-    chunk.emit(Opcode::LoadConstant(one_idx));
-    // Instruction 9: n - 1
-    chunk.emit(Opcode::Sub);
-    // Instruction 10: Load factorial function (will be global "factorial")
+    // Instruction 7: Load factorial function FIRST (callee goes under args)
     chunk.emit(Opcode::LoadGlobal("factorial".to_string()));
+    // Instruction 8: Load n for argument
+    chunk.emit(Opcode::LoadLocal(RegisterId(0)));
+    // Instruction 9: Load 1
+    chunk.emit(Opcode::LoadConstant(one_idx));
+    // Instruction 10: n - 1
+    chunk.emit(Opcode::Sub);
     // Instruction 11: Call with 1 argument
     chunk.emit(Opcode::Call(1));
     // Instruction 12: Multiply n * result
@@ -210,20 +210,23 @@ fn test_nested_function_calls() {
     let three = main.add_constant(BcValue::Number(3.0));
     let four = main.add_constant(BcValue::Number(4.0));
 
-    // First inner call: add(1, 2)
+    // Push outer callee first (it goes at the bottom of the stack for this call)
+    main.emit(Opcode::CreateClosure(add_idx, vec![]));
+
+    // First inner call: add(1, 2) - this computes the first argument
     main.emit(Opcode::CreateClosure(add_idx, vec![]));
     main.emit(Opcode::LoadConstant(one));
     main.emit(Opcode::LoadConstant(two));
     main.emit(Opcode::Call(2));
 
-    // Second inner call: add(3, 4)
+    // Second inner call: add(3, 4) - this computes the second argument
     main.emit(Opcode::CreateClosure(add_idx, vec![]));
     main.emit(Opcode::LoadConstant(three));
     main.emit(Opcode::LoadConstant(four));
     main.emit(Opcode::Call(2));
 
     // Outer call: add(result1, result2)
-    main.emit(Opcode::CreateClosure(add_idx, vec![]));
+    // Stack now has: [outer_func, 3, 7]
     main.emit(Opcode::Call(2));
 
     main.emit(Opcode::Return);
@@ -393,13 +396,14 @@ fn test_deeply_nested_calls() {
     let mut main = BytecodeChunk::new();
     let val_idx = main.add_constant(BcValue::Number(42.0));
 
-    main.emit(Opcode::CreateClosure(fn_idx, vec![]));
-    main.emit(Opcode::LoadConstant(val_idx));
-    main.emit(Opcode::Call(1));
-    main.emit(Opcode::CreateClosure(fn_idx, vec![]));
-    main.emit(Opcode::Call(1));
-    main.emit(Opcode::CreateClosure(fn_idx, vec![]));
-    main.emit(Opcode::Call(1));
+    // Push all callees first (outer to inner)
+    main.emit(Opcode::CreateClosure(fn_idx, vec![])); // outer
+    main.emit(Opcode::CreateClosure(fn_idx, vec![])); // middle
+    main.emit(Opcode::CreateClosure(fn_idx, vec![])); // inner
+    main.emit(Opcode::LoadConstant(val_idx)); // arg for innermost
+    main.emit(Opcode::Call(1)); // inner call
+    main.emit(Opcode::Call(1)); // middle call
+    main.emit(Opcode::Call(1)); // outer call
     main.emit(Opcode::Return);
 
     let result = vm.execute(&main).unwrap();
@@ -472,10 +476,10 @@ fn test_function_stored_in_variable() {
     main.emit(Opcode::CreateClosure(fn_idx, vec![]));
     main.emit(Opcode::StoreGlobal("myAdd".to_string()));
 
-    // Load from global and call
+    // Load from global and call (callee first, then args)
+    main.emit(Opcode::LoadGlobal("myAdd".to_string()));
     main.emit(Opcode::LoadConstant(one_idx));
     main.emit(Opcode::LoadConstant(two_idx));
-    main.emit(Opcode::LoadGlobal("myAdd".to_string()));
     main.emit(Opcode::Call(2));
     main.emit(Opcode::Return);
 
