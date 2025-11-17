@@ -731,15 +731,16 @@ impl Dispatcher {
                     }
                 }
                 Opcode::CallNew(argc) => {
-                    // Pop arguments first (in reverse order)
+                    // Pop the constructor first (it's on top of stack after arguments)
+                    // Stack order: [..., arg1, arg2, ..., constructor]
+                    let constructor = self.stack.pop().unwrap_or(Value::Undefined);
+
+                    // Pop arguments (in reverse order from stack)
                     let mut args = Vec::with_capacity(argc as usize);
                     for _ in 0..argc {
                         args.push(self.stack.pop().unwrap_or(Value::Undefined));
                     }
                     args.reverse(); // Now args[0] is first argument
-
-                    // Pop the constructor from stack
-                    let constructor = self.stack.pop().unwrap_or(Value::Undefined);
 
                     match constructor {
                         Value::NativeFunction(name) => {
@@ -1181,13 +1182,15 @@ impl Dispatcher {
         // Create new execution context
         let mut fn_ctx = ExecutionContext::new(fn_bytecode);
 
-        // Set `this` as register 0 (special convention for method calls)
-        fn_ctx.set_register(0, receiver);
-
-        // Set arguments starting from register 1
+        // Set arguments in registers starting from 0 (matching parser's parameter allocation)
         for (i, arg) in args.into_iter().enumerate() {
-            fn_ctx.set_register(i + 1, arg);
+            fn_ctx.set_register(i, arg);
         }
+
+        // Save current globals state and set `this` as a global variable
+        // The parser emits LoadGlobal("this") for `this` expressions
+        let saved_this = self.globals.get("this").cloned();
+        self.globals.insert("this".to_string(), receiver);
 
         // Save and restore upvalues
         let saved_upvalues = std::mem::take(&mut self.current_upvalues);
@@ -1197,6 +1200,13 @@ impl Dispatcher {
         }
 
         let result = self.execute(&mut fn_ctx, functions);
+
+        // Restore previous `this` binding
+        if let Some(prev_this) = saved_this {
+            self.globals.insert("this".to_string(), prev_this);
+        } else {
+            self.globals.remove("this");
+        }
 
         self.current_upvalues = saved_upvalues;
         self.open_upvalues = saved_open_upvalues;
@@ -1279,13 +1289,16 @@ impl Dispatcher {
         // Create new execution context
         let mut fn_ctx = ExecutionContext::new(fn_bytecode);
 
-        // Set `this` (the new instance) as register 0
-        fn_ctx.set_register(0, instance.clone());
-
-        // Set arguments starting from register 1
+        // Set arguments in registers starting from 0 (matching parser's parameter allocation)
+        // Parameters are allocated registers 0, 1, 2... by the parser
         for (i, arg) in args.into_iter().enumerate() {
-            fn_ctx.set_register(i + 1, arg);
+            fn_ctx.set_register(i, arg);
         }
+
+        // Save current globals state and set `this` as a global variable
+        // The parser emits LoadGlobal("this") for `this` expressions
+        let saved_this = self.globals.get("this").cloned();
+        self.globals.insert("this".to_string(), instance.clone());
 
         // Save and restore upvalues
         let saved_upvalues = std::mem::take(&mut self.current_upvalues);
@@ -1295,6 +1308,13 @@ impl Dispatcher {
         }
 
         let result = self.execute(&mut fn_ctx, functions);
+
+        // Restore previous `this` binding
+        if let Some(prev_this) = saved_this {
+            self.globals.insert("this".to_string(), prev_this);
+        } else {
+            self.globals.remove("this");
+        }
 
         self.current_upvalues = saved_upvalues;
         self.open_upvalues = saved_open_upvalues;

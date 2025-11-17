@@ -166,10 +166,10 @@ fn test_method_call_this_binding() {
     let mut vm = VM::new();
 
     // Create the method function
-    // Function takes `this` in register 0, returns this.x
+    // Function accesses `this` via LoadGlobal (as parser generates)
     let mut method_chunk = BytecodeChunk::new();
-    // Load `this` from register 0
-    method_chunk.emit(Opcode::LoadLocal(RegisterId(0)));
+    // Load `this` from global (parser emits LoadGlobal("this") for ThisExpression)
+    method_chunk.emit(Opcode::LoadGlobal("this".to_string()));
     // Load property 'x' from this
     method_chunk.emit(Opcode::LoadProperty("x".to_string()));
     method_chunk.emit(Opcode::Return);
@@ -222,13 +222,13 @@ fn test_method_call_with_arguments() {
     let mut vm = VM::new();
 
     // Create the add method
-    // this in register 0, y in register 1
+    // this is accessed via LoadGlobal, y is in register 0
     let mut method_chunk = BytecodeChunk::new();
-    // Load this.x
-    method_chunk.emit(Opcode::LoadLocal(RegisterId(0)));
+    // Load this.x (parser emits LoadGlobal("this") for ThisExpression)
+    method_chunk.emit(Opcode::LoadGlobal("this".to_string()));
     method_chunk.emit(Opcode::LoadProperty("x".to_string()));
-    // Load y
-    method_chunk.emit(Opcode::LoadLocal(RegisterId(1)));
+    // Load y (first parameter is in register 0)
+    method_chunk.emit(Opcode::LoadLocal(RegisterId(0)));
     // Add
     method_chunk.emit(Opcode::Add);
     method_chunk.emit(Opcode::Return);
@@ -270,10 +270,10 @@ fn test_constructor_call_new_operator() {
     let mut vm = VM::new();
 
     // Create constructor function
-    // this is in register 0
+    // this is accessed via LoadGlobal (as parser generates)
     let mut constructor_chunk = BytecodeChunk::new();
-    // this.x = 1
-    constructor_chunk.emit(Opcode::LoadLocal(RegisterId(0)));
+    // this.x = 1 (parser emits LoadGlobal("this") for ThisExpression)
+    constructor_chunk.emit(Opcode::LoadGlobal("this".to_string()));
     let one_val = constructor_chunk.add_constant(bytecode_system::Value::Number(1.0));
     constructor_chunk.emit(Opcode::LoadConstant(one_val));
     constructor_chunk.emit(Opcode::StoreProperty("x".to_string()));
@@ -285,7 +285,7 @@ fn test_constructor_call_new_operator() {
 
     let mut chunk = BytecodeChunk::new();
 
-    // Load constructor
+    // Load constructor (no arguments, so just push constructor)
     chunk.emit(Opcode::CreateClosure(constructor_idx, vec![]));
     // Call with new
     chunk.emit(Opcode::CallNew(0));
@@ -311,10 +311,12 @@ fn test_constructor_with_arguments() {
     // Test: class Bar { constructor(val) { this.value = val; } }; let b = new Bar(42); b.value should return 42
     let mut vm = VM::new();
 
-    // Create constructor: this in reg 0, val in reg 1
+    // Create constructor: this via LoadGlobal, val in reg 0
     let mut constructor_chunk = BytecodeChunk::new();
+    // this.value = val (parser emits LoadGlobal("this") for ThisExpression)
+    constructor_chunk.emit(Opcode::LoadGlobal("this".to_string()));
+    // val is the first parameter, so it's in register 0
     constructor_chunk.emit(Opcode::LoadLocal(RegisterId(0)));
-    constructor_chunk.emit(Opcode::LoadLocal(RegisterId(1)));
     constructor_chunk.emit(Opcode::StoreProperty("value".to_string()));
     constructor_chunk.emit(Opcode::LoadUndefined);
     constructor_chunk.emit(Opcode::Return);
@@ -323,9 +325,10 @@ fn test_constructor_with_arguments() {
 
     let mut chunk = BytecodeChunk::new();
 
-    chunk.emit(Opcode::CreateClosure(constructor_idx, vec![]));
+    // Stack order matches parser: push arguments first, then constructor
     let arg_val = chunk.add_constant(bytecode_system::Value::Number(42.0));
-    chunk.emit(Opcode::LoadConstant(arg_val));
+    chunk.emit(Opcode::LoadConstant(arg_val)); // Push argument first
+    chunk.emit(Opcode::CreateClosure(constructor_idx, vec![])); // Then constructor
     chunk.emit(Opcode::CallNew(1));
     chunk.emit(Opcode::StoreLocal(RegisterId(0)));
 
@@ -418,5 +421,118 @@ fn test_out_of_bounds_array_access() {
         result.unwrap(),
         Value::Undefined,
         "Out of bounds access should return undefined"
+    );
+}
+
+#[test]
+fn test_parser_generated_class_with_nested_function() {
+    // Test: Simulates parser output for:
+    // class Foo { constructor(x) { this.x = x; } }
+    // let f = new Foo(5);
+    // console.log(f.x);  // Should print 5
+    //
+    // This test verifies that the interpreter correctly handles
+    // the bytecode that the parser generates for class definitions.
+    let mut vm = VM::new();
+
+    // Create constructor bytecode (as parser would generate)
+    // Parser allocates parameters starting from register 0
+    // Parser emits LoadGlobal("this") for ThisExpression
+    let mut constructor_chunk = BytecodeChunk::new();
+    // this.x = x
+    // 1. Load this (parser emits LoadGlobal("this"))
+    constructor_chunk.emit(Opcode::LoadGlobal("this".to_string()));
+    // 2. Load x (first parameter is in register 0)
+    constructor_chunk.emit(Opcode::LoadLocal(RegisterId(0)));
+    // 3. Store as property
+    constructor_chunk.emit(Opcode::StoreProperty("x".to_string()));
+    // Return undefined (constructor returns this implicitly)
+    constructor_chunk.emit(Opcode::LoadUndefined);
+    constructor_chunk.emit(Opcode::Return);
+
+    // Main chunk with nested constructor function
+    let mut chunk = BytecodeChunk::new();
+    // Add nested constructor function (index 0)
+    chunk.add_nested_function(constructor_chunk);
+
+    // Class definition: class Foo { constructor(x) { this.x = x; } }
+    // Parser creates closure and stores as global
+    chunk.emit(Opcode::CreateClosure(0, vec![])); // Create closure from nested function 0
+    chunk.emit(Opcode::StoreGlobal("Foo".to_string())); // Store as global "Foo"
+
+    // Instantiation: let f = new Foo(5);
+    let five_val = chunk.add_constant(bytecode_system::Value::Number(5.0));
+    chunk.emit(Opcode::LoadConstant(five_val)); // Push argument 5
+    chunk.emit(Opcode::LoadGlobal("Foo".to_string())); // Load constructor
+    chunk.emit(Opcode::CallNew(1)); // Call constructor with 1 argument
+    chunk.emit(Opcode::StoreLocal(RegisterId(0))); // Store instance in register 0
+
+    // Access: f.x
+    chunk.emit(Opcode::LoadLocal(RegisterId(0)));
+    chunk.emit(Opcode::LoadProperty("x".to_string()));
+    chunk.emit(Opcode::Return);
+
+    let result = vm.execute(&chunk);
+    assert!(
+        result.is_ok(),
+        "Parser-generated class should work: {:?}",
+        result
+    );
+    assert_eq!(
+        result.unwrap(),
+        Value::Smi(5),
+        "new Foo(5).x should be 5"
+    );
+}
+
+#[test]
+fn test_nested_this_binding() {
+    // Test: Ensure `this` binding is properly saved/restored during nested constructor calls
+    // class Outer { constructor() { this.inner = new Inner(); this.value = 1; } }
+    // class Inner { constructor() { this.value = 2; } }
+    let mut vm = VM::new();
+
+    // Inner constructor
+    let mut inner_constructor = BytecodeChunk::new();
+    inner_constructor.emit(Opcode::LoadGlobal("this".to_string()));
+    let two_val = inner_constructor.add_constant(bytecode_system::Value::Number(2.0));
+    inner_constructor.emit(Opcode::LoadConstant(two_val));
+    inner_constructor.emit(Opcode::StoreProperty("value".to_string()));
+    inner_constructor.emit(Opcode::LoadUndefined);
+    inner_constructor.emit(Opcode::Return);
+    let inner_idx = vm.register_function(inner_constructor);
+
+    // Outer constructor
+    let mut outer_constructor = BytecodeChunk::new();
+    // this.inner = new Inner()
+    outer_constructor.emit(Opcode::LoadGlobal("this".to_string()));
+    outer_constructor.emit(Opcode::CreateClosure(inner_idx, vec![]));
+    outer_constructor.emit(Opcode::CallNew(0));
+    outer_constructor.emit(Opcode::StoreProperty("inner".to_string()));
+    // this.value = 1
+    outer_constructor.emit(Opcode::LoadGlobal("this".to_string()));
+    let one_val = outer_constructor.add_constant(bytecode_system::Value::Number(1.0));
+    outer_constructor.emit(Opcode::LoadConstant(one_val));
+    outer_constructor.emit(Opcode::StoreProperty("value".to_string()));
+    outer_constructor.emit(Opcode::LoadUndefined);
+    outer_constructor.emit(Opcode::Return);
+    let outer_idx = vm.register_function(outer_constructor);
+
+    // Main chunk
+    let mut chunk = BytecodeChunk::new();
+    chunk.emit(Opcode::CreateClosure(outer_idx, vec![]));
+    chunk.emit(Opcode::CallNew(0));
+    chunk.emit(Opcode::StoreLocal(RegisterId(0)));
+    // Check outer.value == 1
+    chunk.emit(Opcode::LoadLocal(RegisterId(0)));
+    chunk.emit(Opcode::LoadProperty("value".to_string()));
+    chunk.emit(Opcode::Return);
+
+    let result = vm.execute(&chunk);
+    assert!(result.is_ok(), "Nested constructors should work: {:?}", result);
+    assert_eq!(
+        result.unwrap(),
+        Value::Smi(1),
+        "outer.value should be 1 (this binding restored after inner constructor)"
     );
 }
