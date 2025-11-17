@@ -2,8 +2,6 @@
 //!
 //! Provides generational heap with young and old generation spaces.
 
-use core_types::Value;
-
 /// Main heap structure for memory allocation
 pub struct Heap {
     // TODO: Implement heap internals

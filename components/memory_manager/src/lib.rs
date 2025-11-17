@@ -18,4 +18,4 @@ pub use gc::*;
 pub use heap::Heap;
 pub use hidden_class::HiddenClass;
 pub use object::JSObject;
-pub use write_barrier::write_barrier;
+pub use write_barrier::{write_barrier, Object};
