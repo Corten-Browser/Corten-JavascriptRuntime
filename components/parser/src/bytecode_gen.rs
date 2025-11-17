@@ -305,10 +305,126 @@ impl BytecodeGenerator {
                 }
             }
 
-            Statement::ClassDeclaration { .. } => {
-                // Simplified class compilation
-                self.chunk.emit(Opcode::CreateObject);
-                // Real implementation would set up prototype chain
+            Statement::ClassDeclaration { name, body, .. } => {
+                // A class declaration creates a constructor function bound to the class name
+                // Find the constructor method in the class body
+                let constructor_method = body.iter().find_map(|element| {
+                    if let ClassElement::MethodDefinition {
+                        kind: MethodKind::Constructor,
+                        value,
+                        ..
+                    } = element
+                    {
+                        Some(value)
+                    } else {
+                        None
+                    }
+                });
+
+                if let Some(constructor_expr) = constructor_method {
+                    // Extract parameters and body from the constructor function expression
+                    if let Expression::FunctionExpression {
+                        params,
+                        body: func_body,
+                        ..
+                    } = constructor_expr
+                    {
+                        // Create function bytecode with enclosing scope for closure support
+                        let current_gen = std::mem::replace(self, BytecodeGenerator::new());
+                        let mut func_gen =
+                            BytecodeGenerator::with_enclosing(Box::new(current_gen));
+
+                        // Set up parameters as locals
+                        for param in params {
+                            if let Pattern::Identifier(param_name) = param {
+                                let reg = func_gen.allocate_register();
+                                func_gen.locals.insert(param_name.clone(), reg);
+                            }
+                        }
+
+                        // Generate constructor body
+                        for stmt in func_body {
+                            func_gen.visit_statement(stmt)?;
+                        }
+
+                        // Ensure return (constructor returns 'this' implicitly, but we handle that in VM)
+                        if func_gen.chunk.instructions.is_empty()
+                            || !matches!(
+                                func_gen.chunk.instructions.last().map(|i| &i.opcode),
+                                Some(Opcode::Return)
+                            )
+                        {
+                            func_gen.chunk.emit(Opcode::LoadUndefined);
+                            func_gen.chunk.emit(Opcode::Return);
+                        }
+
+                        func_gen.chunk.register_count = func_gen.next_register;
+
+                        // Get the upvalues captured by this function
+                        let upvalues = func_gen.get_upvalues();
+
+                        // Get the compiled function bytecode
+                        let mut func_bytecode = func_gen.chunk.clone();
+
+                        // Collect any nested functions from the inner function
+                        let inner_nested = func_gen.take_nested_functions();
+
+                        // Restore the outer generator from the enclosing scope
+                        *self = *func_gen.enclosing.take().unwrap();
+
+                        // Add the compiled function to our nested functions list
+                        let func_idx = self.nested_functions.len();
+
+                        // Adjust indices in the function's bytecode for nested functions
+                        let inner_base_idx = func_idx + 1;
+                        Self::adjust_closure_indices(&mut func_bytecode, inner_base_idx);
+
+                        self.nested_functions.push(func_bytecode);
+
+                        // Also include any nested functions from the inner function
+                        let mut adjusted_inner_nested = inner_nested;
+                        for nested_chunk in &mut adjusted_inner_nested {
+                            Self::adjust_closure_indices(nested_chunk, inner_base_idx);
+                        }
+                        self.nested_functions.extend(adjusted_inner_nested);
+
+                        // Create closure with upvalue descriptors
+                        self.chunk.emit(Opcode::CreateClosure(func_idx, upvalues));
+
+                        // Store the constructor function with the class name as a global
+                        self.chunk.emit(Opcode::StoreGlobal(name.clone()));
+                    } else {
+                        // Constructor is not a function expression (shouldn't happen with valid parsing)
+                        // Fallback: create empty constructor
+                        let current_gen = std::mem::replace(self, BytecodeGenerator::new());
+                        let mut func_gen =
+                            BytecodeGenerator::with_enclosing(Box::new(current_gen));
+                        func_gen.chunk.emit(Opcode::LoadUndefined);
+                        func_gen.chunk.emit(Opcode::Return);
+                        func_gen.chunk.register_count = func_gen.next_register;
+                        let upvalues = func_gen.get_upvalues();
+                        let func_bytecode = func_gen.chunk.clone();
+                        *self = *func_gen.enclosing.take().unwrap();
+                        let func_idx = self.nested_functions.len();
+                        self.nested_functions.push(func_bytecode);
+                        self.chunk.emit(Opcode::CreateClosure(func_idx, upvalues));
+                        self.chunk.emit(Opcode::StoreGlobal(name.clone()));
+                    }
+                } else {
+                    // No explicit constructor - create a default empty constructor
+                    let current_gen = std::mem::replace(self, BytecodeGenerator::new());
+                    let mut func_gen = BytecodeGenerator::with_enclosing(Box::new(current_gen));
+                    func_gen.chunk.emit(Opcode::LoadUndefined);
+                    func_gen.chunk.emit(Opcode::Return);
+                    func_gen.chunk.register_count = func_gen.next_register;
+                    let upvalues = func_gen.get_upvalues();
+                    let func_bytecode = func_gen.chunk.clone();
+                    *self = *func_gen.enclosing.take().unwrap();
+                    let func_idx = self.nested_functions.len();
+                    self.nested_functions.push(func_bytecode);
+                    self.chunk.emit(Opcode::CreateClosure(func_idx, upvalues));
+                    self.chunk.emit(Opcode::StoreGlobal(name.clone()));
+                }
             }
 
             Statement::ExpressionStatement { expression, .. } => {
@@ -2199,7 +2315,365 @@ mod tests {
         // The bug: after computing i + 1, it loads i again and stores THAT
         // The incremented value is never stored back!
     }
+
+    #[test]
+    fn test_class_declaration_with_constructor() {
+        let mut gen = BytecodeGenerator::new();
+        // class Counter { constructor(start) { this.count = start; } }
+        let ast = ASTNode::Program(vec![Statement::ClassDeclaration {
+            name: "Counter".to_string(),
+            super_class: None,
+            body: vec![ClassElement::MethodDefinition {
+                key: "constructor".to_string(),
+                kind: MethodKind::Constructor,
+                value: Expression::FunctionExpression {
+                    name: None,
+                    params: vec![Pattern::Identifier("start".to_string())],
+                    body: vec![Statement::ExpressionStatement {
+                        expression: Expression::AssignmentExpression {
+                            left: AssignmentTarget::Member(Box::new(Expression::MemberExpression {
+                                object: Box::new(Expression::ThisExpression { position: None }),
+                                property: Box::new(Expression::Identifier {
+                                    name: "count".to_string(),
+                                    position: None,
+                                }),
+                                computed: false,
+                                optional: false,
+                                position: None,
+                            })),
+                            operator: AssignmentOperator::Assign,
+                            right: Box::new(Expression::Identifier {
+                                name: "start".to_string(),
+                                position: None,
+                            }),
+                            position: None,
+                        },
+                        position: None,
+                    }],
+                    is_async: false,
+                    is_generator: false,
+                    position: None,
+                },
+                is_static: false,
+            }],
+            position: None,
+        }]);
+
+        let chunk = gen.generate(&ast).unwrap();
+
+        // Should have CreateClosure (for the constructor)
+        let has_create_closure = chunk
+            .instructions
+            .iter()
+            .any(|i| matches!(i.opcode, Opcode::CreateClosure(_, _)));
+        assert!(
+            has_create_closure,
+            "Class declaration should create a closure for the constructor"
+        );
+
+        // Should have StoreGlobal("Counter") to bind the class name
+        let has_store_global = chunk
+            .instructions
+            .iter()
+            .any(|i| matches!(i.opcode, Opcode::StoreGlobal(ref s) if s == "Counter"));
+        assert!(
+            has_store_global,
+            "Class declaration should store constructor as global with class name"
+        );
+
+        // Should have exactly one nested function (the constructor)
+        let nested = gen.nested_functions();
+        assert_eq!(
+            nested.len(),
+            1,
+            "Expected 1 nested function (the constructor)"
+        );
+
+        // The nested function (constructor) should have bytecode
+        assert!(
+            !nested[0].instructions.is_empty(),
+            "Constructor should have bytecode"
+        );
+    }
+
+    #[test]
+    fn test_class_declaration_without_constructor() {
+        let mut gen = BytecodeGenerator::new();
+        // class Empty { }
+        let ast = ASTNode::Program(vec![Statement::ClassDeclaration {
+            name: "Empty".to_string(),
+            super_class: None,
+            body: vec![],
+            position: None,
+        }]);
+
+        let chunk = gen.generate(&ast).unwrap();
+
+        // Should still have CreateClosure (for default constructor)
+        let has_create_closure = chunk
+            .instructions
+            .iter()
+            .any(|i| matches!(i.opcode, Opcode::CreateClosure(_, _)));
+        assert!(
+            has_create_closure,
+            "Class without constructor should create default constructor"
+        );
+
+        // Should have StoreGlobal("Empty")
+        let has_store_global = chunk
+            .instructions
+            .iter()
+            .any(|i| matches!(i.opcode, Opcode::StoreGlobal(ref s) if s == "Empty"));
+        assert!(
+            has_store_global,
+            "Class without constructor should still bind class name globally"
+        );
+
+        // Should have exactly one nested function (default constructor)
+        let nested = gen.nested_functions();
+        assert_eq!(
+            nested.len(),
+            1,
+            "Expected 1 nested function (default constructor)"
+        );
+    }
+
+    #[test]
+    fn test_class_instantiation_generates_call_new() {
+        let mut gen = BytecodeGenerator::new();
+        // class Foo { constructor(x) { this.x = x; } }
+        // let f = new Foo(5);
+        let ast = ASTNode::Program(vec![
+            Statement::ClassDeclaration {
+                name: "Foo".to_string(),
+                super_class: None,
+                body: vec![ClassElement::MethodDefinition {
+                    key: "constructor".to_string(),
+                    kind: MethodKind::Constructor,
+                    value: Expression::FunctionExpression {
+                        name: None,
+                        params: vec![Pattern::Identifier("x".to_string())],
+                        body: vec![Statement::ExpressionStatement {
+                            expression: Expression::AssignmentExpression {
+                                left: AssignmentTarget::Member(Box::new(
+                                    Expression::MemberExpression {
+                                        object: Box::new(Expression::ThisExpression {
+                                            position: None,
+                                        }),
+                                        property: Box::new(Expression::Identifier {
+                                            name: "x".to_string(),
+                                            position: None,
+                                        }),
+                                        computed: false,
+                                        optional: false,
+                                        position: None,
+                                    },
+                                )),
+                                operator: AssignmentOperator::Assign,
+                                right: Box::new(Expression::Identifier {
+                                    name: "x".to_string(),
+                                    position: None,
+                                }),
+                                position: None,
+                            },
+                            position: None,
+                        }],
+                        is_async: false,
+                        is_generator: false,
+                        position: None,
+                    },
+                    is_static: false,
+                }],
+                position: None,
+            },
+            Statement::VariableDeclaration {
+                kind: VariableKind::Let,
+                declarations: vec![VariableDeclarator {
+                    id: Pattern::Identifier("f".to_string()),
+                    init: Some(Expression::NewExpression {
+                        callee: Box::new(Expression::Identifier {
+                            name: "Foo".to_string(),
+                            position: None,
+                        }),
+                        arguments: vec![Expression::Literal {
+                            value: Literal::Number(5.0),
+                            position: None,
+                        }],
+                        position: None,
+                    }),
+                }],
+                position: None,
+            },
+        ]);
+
+        let chunk = gen.generate(&ast).unwrap();
+
+        // Should have LoadGlobal("Foo") to load the constructor
+        let has_load_global = chunk
+            .instructions
+            .iter()
+            .any(|i| matches!(i.opcode, Opcode::LoadGlobal(ref s) if s == "Foo"));
+        assert!(
+            has_load_global,
+            "new Foo() should LoadGlobal to get the constructor"
+        );
+
+        // Should have CallNew(1) to call constructor with 1 argument
+        let has_call_new = chunk
+            .instructions
+            .iter()
+            .any(|i| matches!(i.opcode, Opcode::CallNew(1)));
+        assert!(has_call_new, "new Foo(5) should use CallNew(1)");
+
+        // The sequence should be:
+        // 1. CreateClosure (constructor)
+        // 2. StoreGlobal("Foo")
+        // 3. LoadGlobal("Foo")
+        // 4. LoadConstant(5)
+        // 5. CallNew(1)
+        // 6. StoreLocal (for 'f')
+    }
+
+    #[test]
+    fn test_class_constructor_bytecode_has_parameter() {
+        let mut gen = BytecodeGenerator::new();
+        // class Foo { constructor(x) { this.x = x; } }
+        let ast = ASTNode::Program(vec![Statement::ClassDeclaration {
+            name: "Foo".to_string(),
+            super_class: None,
+            body: vec![ClassElement::MethodDefinition {
+                key: "constructor".to_string(),
+                kind: MethodKind::Constructor,
+                value: Expression::FunctionExpression {
+                    name: None,
+                    params: vec![Pattern::Identifier("x".to_string())],
+                    body: vec![Statement::ExpressionStatement {
+                        expression: Expression::AssignmentExpression {
+                            left: AssignmentTarget::Member(Box::new(Expression::MemberExpression {
+                                object: Box::new(Expression::ThisExpression { position: None }),
+                                property: Box::new(Expression::Identifier {
+                                    name: "x".to_string(),
+                                    position: None,
+                                }),
+                                computed: false,
+                                optional: false,
+                                position: None,
+                            })),
+                            operator: AssignmentOperator::Assign,
+                            right: Box::new(Expression::Identifier {
+                                name: "x".to_string(),
+                                position: None,
+                            }),
+                            position: None,
+                        },
+                        position: None,
+                    }],
+                    is_async: false,
+                    is_generator: false,
+                    position: None,
+                },
+                is_static: false,
+            }],
+            position: None,
+        }]);
+
+        let _chunk = gen.generate(&ast).unwrap();
+        let nested = gen.nested_functions();
+        assert_eq!(nested.len(), 1);
+
+        // The constructor should have at least 1 register (for parameter 'x')
+        assert!(
+            nested[0].register_count >= 1,
+            "Constructor should have at least 1 register for parameter"
+        );
+
+        // Constructor bytecode should contain operations for 'this.x = x'
+        // This includes: LoadGlobal("this"), LoadLocal (for x), StoreProperty("x")
+        let has_load_global_this = nested[0]
+            .instructions
+            .iter()
+            .any(|i| matches!(i.opcode, Opcode::LoadGlobal(ref s) if s == "this"));
+        assert!(
+            has_load_global_this,
+            "Constructor body should reference 'this'"
+        );
+
+        let has_store_property = nested[0]
+            .instructions
+            .iter()
+            .any(|i| matches!(i.opcode, Opcode::StoreProperty(ref s) if s == "x"));
+        assert!(
+            has_store_property,
+            "Constructor should store property 'x' on this"
+        );
+    }
+
+    #[test]
+    fn debug_class_declaration_bytecode() {
+        let mut gen = BytecodeGenerator::new();
+        // class Foo { constructor(x) { this.x = x; } }
+        let ast = ASTNode::Program(vec![Statement::ClassDeclaration {
+            name: "Foo".to_string(),
+            super_class: None,
+            body: vec![ClassElement::MethodDefinition {
+                key: "constructor".to_string(),
+                kind: MethodKind::Constructor,
+                value: Expression::FunctionExpression {
+                    name: None,
+                    params: vec![Pattern::Identifier("x".to_string())],
+                    body: vec![Statement::ExpressionStatement {
+                        expression: Expression::AssignmentExpression {
+                            left: AssignmentTarget::Member(Box::new(Expression::MemberExpression {
+                                object: Box::new(Expression::ThisExpression { position: None }),
+                                property: Box::new(Expression::Identifier {
+                                    name: "x".to_string(),
+                                    position: None,
+                                }),
+                                computed: false,
+                                optional: false,
+                                position: None,
+                            })),
+                            operator: AssignmentOperator::Assign,
+                            right: Box::new(Expression::Identifier {
+                                name: "x".to_string(),
+                                position: None,
+                            }),
+                            position: None,
+                        },
+                        position: None,
+                    }],
+                    is_async: false,
+                    is_generator: false,
+                    position: None,
+                },
+                is_static: false,
+            }],
+            position: None,
+        }]);
+
+        let chunk = gen.generate(&ast).unwrap();
+
+        println!("\nBYTECODE FOR 'class Foo {{ constructor(x) {{ this.x = x; }} }}':");
+        println!("Main bytecode:");
+        for (idx, inst) in chunk.instructions.iter().enumerate() {
+            println!("{:3}: {:?}", idx, inst.opcode);
+        }
+
+        let nested = gen.nested_functions();
+        println!("\nConstructor bytecode ({} nested functions):", nested.len());
+        if !nested.is_empty() {
+            for (idx, inst) in nested[0].instructions.iter().enumerate() {
+                println!("{:3}: {:?}", idx, inst.opcode);
+            }
+        }
+        println!();
+
+        // Verify the fix: main bytecode should have CreateClosure + StoreGlobal("Foo")
+        assert!(chunk.instructions.iter().any(|i| matches!(i.opcode, Opcode::CreateClosure(_, _))));
+        assert!(chunk.instructions.iter().any(|i| matches!(i.opcode, Opcode::StoreGlobal(ref s) if s == "Foo")));
+    }
 }
+
 
 
 
