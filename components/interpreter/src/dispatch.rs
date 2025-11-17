@@ -12,6 +12,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use crate::context::ExecutionContext;
+use crate::gc_integration::{GCObject, VMHeap};
 use crate::promise_integration::{PromiseConstructor, PromiseObject};
 use crate::upvalue::{new_upvalue_handle, Upvalue, UpvalueHandle};
 
@@ -42,6 +43,8 @@ pub struct Dispatcher {
     try_stack: Vec<TryHandler>,
     /// Currently thrown exception (if any)
     current_exception: Option<Value>,
+    /// GC heap for JavaScript object allocation (shared with VM)
+    heap: Option<Rc<VMHeap>>,
 }
 
 impl std::fmt::Debug for Dispatcher {
@@ -54,6 +57,7 @@ impl std::fmt::Debug for Dispatcher {
             .field("current_upvalues_count", &self.current_upvalues.len())
             .field("try_stack_depth", &self.try_stack.len())
             .field("has_exception", &self.current_exception.is_some())
+            .field("has_heap", &self.heap.is_some())
             .finish()
     }
 }
@@ -91,7 +95,15 @@ impl Dispatcher {
             current_upvalues: Vec::new(),
             try_stack: Vec::new(),
             current_exception: None,
+            heap: None,
         }
+    }
+
+    /// Set the GC heap reference
+    ///
+    /// This should be called before executing bytecode to enable GC-managed object creation.
+    pub fn set_heap(&mut self, heap: Rc<VMHeap>) {
+        self.heap = Some(heap);
     }
 
     /// Capture an upvalue for a closure based on the descriptor
@@ -376,8 +388,17 @@ impl Dispatcher {
                     return Ok(return_value);
                 }
                 Opcode::CreateObject => {
-                    // Placeholder: create object with ID
-                    self.stack.push(Value::HeapObject(0));
+                    // Create a GC-managed JavaScript object
+                    if let Some(ref heap) = self.heap {
+                        let gc_object = heap.create_object();
+                        let boxed: Box<dyn Any> = Box::new(gc_object);
+                        let value =
+                            Value::NativeObject(Rc::new(RefCell::new(boxed)) as Rc<RefCell<dyn Any>>);
+                        self.stack.push(value);
+                    } else {
+                        // Fallback: use HeapObject with ID 0 (legacy behavior)
+                        self.stack.push(Value::HeapObject(0));
+                    }
                 }
                 Opcode::LoadProperty(name) => {
                     let obj = self.stack.pop().unwrap_or(Value::Undefined);
@@ -385,7 +406,17 @@ impl Dispatcher {
                     match obj {
                         Value::NativeObject(native_obj) => {
                             let borrowed = native_obj.borrow();
-                            if borrowed.is::<ConsoleObject>() {
+                            if let Some(gc_obj) = borrowed.downcast_ref::<Box<dyn Any>>() {
+                                // Check if it's a GCObject wrapped in Box<dyn Any>
+                                if let Some(gc_object) = gc_obj.downcast_ref::<GCObject>() {
+                                    let value = gc_object.get(&name);
+                                    drop(borrowed);
+                                    self.stack.push(value);
+                                } else {
+                                    drop(borrowed);
+                                    self.stack.push(Value::Undefined);
+                                }
+                            } else if borrowed.is::<ConsoleObject>() {
                                 // Return method based on property name
                                 match name.as_str() {
                                     "log" => self
@@ -467,10 +498,25 @@ impl Dispatcher {
                         _ => self.stack.push(Value::Undefined),
                     }
                 }
-                Opcode::StoreProperty(_name) => {
-                    // Placeholder: property store
-                    self.stack.pop(); // value
-                    self.stack.pop(); // object
+                Opcode::StoreProperty(name) => {
+                    let value = self.stack.pop().unwrap_or(Value::Undefined);
+                    let obj = self.stack.pop().unwrap_or(Value::Undefined);
+
+                    match obj {
+                        Value::NativeObject(native_obj) => {
+                            let mut borrowed = native_obj.borrow_mut();
+                            if let Some(gc_obj) = borrowed.downcast_mut::<Box<dyn Any>>() {
+                                // Check if it's a GCObject wrapped in Box<dyn Any>
+                                if let Some(gc_object) = gc_obj.downcast_mut::<GCObject>() {
+                                    gc_object.set(name, value);
+                                }
+                            }
+                            // For other NativeObjects, we just ignore the store (non-extensible)
+                        }
+                        _ => {
+                            // Ignore stores to non-objects
+                        }
+                    }
                 }
                 Opcode::CreateClosure(idx, upvalue_descs) => {
                     // Create a closure by capturing upvalues from the current scope
