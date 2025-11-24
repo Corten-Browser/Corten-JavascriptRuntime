@@ -74,6 +74,54 @@ def mark_task_complete(task_id: str, verification_passed: bool = True):
     print(f"Next: {json.dumps(next_info, indent=2)}")
 
 
+def reset_tasks(confirm: bool = True):
+    """
+    Reset all non-pending tasks to INCOMPLETE status.
+
+    This is used when:
+    - Previous reconciliation falsely marked tasks as completed
+    - Need to force re-verification of all tasks
+    - Recovering from inconsistent state after crash
+    """
+    queue = TaskQueue()
+
+    # Count what would be reset
+    to_reset = [
+        t for t in queue.tasks.values()
+        if t.status.value in ["completed", "blocked", "in_progress"]
+    ]
+
+    if not to_reset:
+        print("No tasks to reset (all are PENDING or INCOMPLETE)")
+        return 0
+
+    print("=" * 60)
+    print("TASK RESET")
+    print("=" * 60)
+    print()
+    print(f"Tasks to reset: {len(to_reset)}")
+    print()
+    for task in to_reset:
+        print(f"  {task.id}: {task.status.value} -> incomplete")
+    print()
+
+    if confirm:
+        print("WARNING: This will clear all completion timestamps and")
+        print("         verification results for the above tasks.")
+        print()
+        response = input("Proceed with reset? [y/N]: ")
+        if response.lower() != 'y':
+            print("Reset cancelled.")
+            return 0
+
+    count = queue.reset_all_to_incomplete()
+    print()
+    print(f"Reset {count} tasks to INCOMPLETE status")
+    print()
+    queue.print_status()
+    return count
+
+
 def print_queue_authority_message():
     """
     Print message emphasizing queue is authoritative.
@@ -98,6 +146,13 @@ def print_queue_authority_message():
     print("  Declare project complete while tasks remain")
     print("  Create your own task list")
     print("")
+    print("TASK STATUSES:")
+    print("  pending     - No work detected")
+    print("  incomplete  - Work detected, needs verification")
+    print("  in_progress - Subagent actively working")
+    print("  completed   - Verified via passing tests")
+    print("  blocked     - Waiting on dependencies")
+    print("")
     print("=" * 70)
 
 
@@ -107,6 +162,22 @@ if __name__ == "__main__":
         print(json.dumps(info, indent=2))
     elif len(sys.argv) > 2 and sys.argv[1] == "--complete":
         mark_task_complete(sys.argv[2])
+    elif len(sys.argv) > 1 and sys.argv[1] == "--reset":
+        reset_tasks(confirm=True)
+    elif len(sys.argv) > 1 and sys.argv[1] == "--reset-force":
+        reset_tasks(confirm=False)
+    elif len(sys.argv) > 1 and sys.argv[1] == "--help":
+        print("Task Runner - Enforces queue-based execution")
+        print("")
+        print("Usage:")
+        print("  python task_runner.py              Show queue status")
+        print("  python task_runner.py --current    Get current task (JSON)")
+        print("  python task_runner.py --complete TASK-ID")
+        print("                                     Mark task as complete")
+        print("  python task_runner.py --reset      Reset all to INCOMPLETE (with confirmation)")
+        print("  python task_runner.py --reset-force")
+        print("                                     Reset all to INCOMPLETE (no confirmation)")
+        print("")
     else:
         print_queue_authority_message()
         queue = TaskQueue()

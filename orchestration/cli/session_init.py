@@ -71,22 +71,33 @@ def get_queue_status(queue_state: dict) -> str:
 
     completed = sum(1 for t in tasks if t.get("status") == "completed")
     in_progress = sum(1 for t in tasks if t.get("status") == "in_progress")
+    incomplete = sum(1 for t in tasks if t.get("status") == "incomplete")
     pending = sum(1 for t in tasks if t.get("status") == "pending")
 
     if completed == len(tasks):
         return "COMPLETE (all tasks done)"
 
     percentage = (completed / len(tasks)) * 100
-    return f"{percentage:.1f}% complete ({completed}/{len(tasks)} tasks)"
+    status = f"{percentage:.1f}% complete ({completed}/{len(tasks)} tasks)"
+
+    if incomplete > 0:
+        status += f" [{incomplete} need verification]"
+
+    return status
 
 
 def get_current_task(queue_state: dict) -> dict:
-    """Get current task."""
+    """Get current task. Priority: in_progress > incomplete > pending."""
     tasks = queue_state.get("tasks", [])
 
-    # Find in-progress
+    # Find in-progress first
     for task in tasks:
         if task.get("status") == "in_progress":
+            return task
+
+    # Find incomplete (needs verification) - prioritize over pending
+    for task in tasks:
+        if task.get("status") == "incomplete":
             return task
 
     # Find first pending
@@ -125,8 +136,33 @@ def get_next_action(queue_state: dict, verification: dict) -> str:
     return "All tasks complete and verified. Ready for final commit."
 
 
+def check_and_recover_stale_tasks() -> int:
+    """
+    Check for stale IN_PROGRESS tasks and recover them.
+
+    Called at session startup to detect tasks that were left
+    IN_PROGRESS due to a crash or timeout.
+
+    Returns:
+        Number of recovered tasks
+    """
+    try:
+        from orchestration.tasks.stale_recovery import check_and_recover_at_startup
+        return check_and_recover_at_startup()
+    except ImportError:
+        # Module not available (shouldn't happen but handle gracefully)
+        return 0
+    except Exception as e:
+        # Don't fail session init if recovery fails
+        print(f"  Warning: Stale recovery check failed: {e}")
+        return 0
+
+
 def generate_enforcement_context() -> str:
     """Generate markdown context for model."""
+    # Check for and recover stale tasks at session start
+    recovered = check_and_recover_stale_tasks()
+
     queue_state = load_queue_state()
     verification = load_verification_state()
     config = load_config()
@@ -136,13 +172,19 @@ def generate_enforcement_context() -> str:
     total = len(queue_state.get("tasks", []))
 
     current_str = f"{current['id']} - {current['name']}" if current else "None"
+    current_status = current.get("status", "unknown") if current else "none"
+
+    # Get incomplete count for display
+    tasks = queue_state.get("tasks", [])
+    incomplete_count = sum(1 for t in tasks if t.get("status") == "incomplete")
 
     context = f"""
 ## ENFORCEMENT SYSTEM STATUS (AUTO-GENERATED)
 
 **Queue Status**: {get_queue_status(queue_state)}
-**Current Task**: {current_str}
+**Current Task**: {current_str} ({current_status})
 **Tasks Remaining**: {remaining}/{total}
+**Tasks Needing Verification**: {incomplete_count}
 **Verification**: {"APPROVED" if verification.get("verification_agent_approved") else "NOT APPROVED"}
 
 ### Your Next Action (MANDATORY)
@@ -181,6 +223,9 @@ python orchestration/verification/run_full_verification.py
 
 def print_status_summary():
     """Print a brief status summary."""
+    # Check for stale tasks first
+    check_and_recover_stale_tasks()
+
     queue_state = load_queue_state()
     verification = load_verification_state()
 
@@ -191,11 +236,14 @@ def print_status_summary():
     tasks = queue_state.get("tasks", [])
     if tasks:
         completed = sum(1 for t in tasks if t.get("status") == "completed")
+        incomplete = sum(1 for t in tasks if t.get("status") == "incomplete")
         print(f"Queue: {completed}/{len(tasks)} tasks completed")
+        if incomplete > 0:
+            print(f"       {incomplete} tasks need verification")
 
         current = get_current_task(queue_state)
         if current:
-            print(f"Current task: {current['id']} - {current['name']}")
+            print(f"Current task: {current['id']} - {current['name']} ({current.get('status', 'unknown')})")
     else:
         print("Queue: Not initialized")
 

@@ -17,10 +17,11 @@ from orchestration.core.paths import DataPaths
 
 
 class TaskStatus(Enum):
-    PENDING = "pending"
-    IN_PROGRESS = "in_progress"
-    COMPLETED = "completed"
-    BLOCKED = "blocked"  # Cannot proceed due to dependency
+    PENDING = "pending"           # No work detected
+    INCOMPLETE = "incomplete"     # Work started, not verified complete (NEW)
+    IN_PROGRESS = "in_progress"   # Being actively worked on now
+    COMPLETED = "completed"       # Verified complete via passing tests
+    BLOCKED = "blocked"           # Cannot proceed due to dependency
 
 
 @dataclass
@@ -91,7 +92,24 @@ class TaskQueue:
         """
         Get next available task.
         Returns None if no tasks available (all complete or blocked).
+
+        Priority order:
+        1. INCOMPLETE tasks (work detected, needs verification)
+        2. PENDING tasks (no work detected yet)
         """
+        # First check for INCOMPLETE tasks (partially done work needs attention)
+        for task in self.tasks.values():
+            if task.status == TaskStatus.INCOMPLETE:
+                # Check dependencies
+                deps_met = all(
+                    self.tasks[dep_id].status == TaskStatus.COMPLETED
+                    for dep_id in task.dependencies
+                    if dep_id in self.tasks
+                )
+                if deps_met:
+                    return task
+
+        # Then check PENDING tasks
         for task in self.tasks.values():
             if task.status == TaskStatus.PENDING:
                 # Check dependencies
@@ -140,6 +158,7 @@ class TaskQueue:
         total = len(self.tasks)
         completed = sum(1 for t in self.tasks.values() if t.status == TaskStatus.COMPLETED)
         in_progress = sum(1 for t in self.tasks.values() if t.status == TaskStatus.IN_PROGRESS)
+        incomplete = sum(1 for t in self.tasks.values() if t.status == TaskStatus.INCOMPLETE)
         pending = sum(1 for t in self.tasks.values() if t.status == TaskStatus.PENDING)
         blocked = sum(1 for t in self.tasks.values() if t.status == TaskStatus.BLOCKED)
 
@@ -147,6 +166,7 @@ class TaskQueue:
             "total": total,
             "completed": completed,
             "in_progress": in_progress,
+            "incomplete": incomplete,
             "pending": pending,
             "blocked": blocked,
             "percentage": (completed / total * 100) if total > 0 else 0
@@ -185,6 +205,7 @@ class TaskQueue:
         print(f"Progress: {progress['percentage']:.1f}% ({progress['completed']}/{progress['total']})")
         print(f"  Completed: {progress['completed']}")
         print(f"  In Progress: {progress['in_progress']}")
+        print(f"  Incomplete: {progress['incomplete']}")
         print(f"  Pending: {progress['pending']}")
         print(f"  Blocked: {progress['blocked']}")
         print("")
@@ -195,12 +216,76 @@ class TaskQueue:
                 print(f"NEXT TASK: {next_task.id}")
                 print(f"  Name: {next_task.name}")
                 print(f"  Feature: {next_task.feature_id}")
+                print(f"  Status: {next_task.status.value}")
             else:
                 print("NO TASKS AVAILABLE (check dependencies or blockages)")
         else:
             print("ALL TASKS COMPLETED")
 
         print("=" * 60)
+
+    def reset_to_incomplete(self, task_id: str, reason: str = None):
+        """
+        Reset a single task to INCOMPLETE status.
+
+        Used for recovery from crashes or manual reset.
+
+        Args:
+            task_id: Task to reset
+            reason: Optional reason for the reset
+        """
+        if task_id not in self.tasks:
+            raise ValueError(f"Task {task_id} not found")
+
+        task = self.tasks[task_id]
+        old_status = task.status.value
+        task.status = TaskStatus.INCOMPLETE
+        task.started_at = None  # Clear - not currently being worked on
+        task.completed_at = None
+        task.verification_result = {
+            "reset": True,
+            "reset_timestamp": datetime.now().isoformat(),
+            "previous_status": old_status,
+            "reason": reason or "Manual reset"
+        }
+        self._save_state()
+
+    def reset_all_to_incomplete(self, include_statuses: list[str] = None) -> int:
+        """
+        Reset multiple tasks to INCOMPLETE status.
+
+        Args:
+            include_statuses: List of status values to reset.
+                             Default: ["completed", "blocked", "in_progress"]
+
+        Returns:
+            Number of tasks reset
+        """
+        if include_statuses is None:
+            include_statuses = ["completed", "blocked", "in_progress"]
+
+        reset_count = 0
+        reset_timestamp = datetime.now().isoformat()
+
+        for task in self.tasks.values():
+            if task.status.value in include_statuses:
+                old_status = task.status.value
+                task.status = TaskStatus.INCOMPLETE
+                task.started_at = None
+                task.completed_at = None
+                task.verification_result = {
+                    "reset": True,
+                    "reset_timestamp": reset_timestamp,
+                    "previous_status": old_status,
+                    "reason": "Bulk reset via --reset flag"
+                }
+                reset_count += 1
+
+        if reset_count > 0:
+            self.completed_order = []  # Clear completion order
+            self._save_state()
+
+        return reset_count
 
 
 if __name__ == "__main__":
