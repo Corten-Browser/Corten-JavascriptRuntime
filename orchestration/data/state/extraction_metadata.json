@@ -1,0 +1,18 @@
+{
+  "last_extraction": "2025-11-24T07:06:48.923946",
+  "extraction_method": "pending-llm",
+  "spec_files": [
+    {
+      "path": "specifications/javascript-runtime-specification-V2.md",
+      "features_extracted": 0,
+      "extraction_method": "none",
+      "last_processed": "2025-11-24T07:06:48.924000"
+    }
+  ],
+  "total_features": 0,
+  "automated_features": 0,
+  "llm_features": 0,
+  "llm_extraction_complete": false,
+  "llm_extraction_timestamp": null,
+  "automated_extraction_success": false
+}
