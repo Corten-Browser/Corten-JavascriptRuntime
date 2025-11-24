@@ -41,6 +41,7 @@ pub mod collections;
 pub mod console;
 pub mod date;
 pub mod error;
+pub mod intl;
 pub mod iterator;
 pub mod json;
 pub mod math;
@@ -66,6 +67,14 @@ pub use collections::{MapIterator, MapObject, SetIterator, SetObject, WeakMapObj
 pub use console::ConsoleObject;
 pub use date::{DateConstructor, JsDate};
 pub use error::{ErrorConstructor, ErrorKind, JsErrorObject, StackFrame};
+pub use intl::{
+    CaseFirst, Collator, CollatorOptions, CollatorSensitivity, CollatorUsage,
+    CompactDisplay, CurrencyDisplay, DateTimeFormat, DateTimeFormatOptions, DateTimeStyle,
+    HourCycle, Intl, ListFormat, ListFormatOptions, ListFormatStyle, ListFormatType, Locale,
+    Notation, NumberFormat, NumberFormatOptions, NumberStyle, PluralCategory, PluralRules,
+    PluralRulesOptions, PluralRulesType, RelativeTimeFormat, RelativeTimeFormatOptions,
+    RelativeTimeNumeric, RelativeTimeStyle, RelativeTimeUnit, SignDisplay,
+};
 pub use iterator::{
     ArrayIterator, GeneratorFunction, GeneratorObject, GeneratorState, Iterator,
     IteratorHelpers, IteratorKind, IteratorProtocol, IteratorResult, ObjectIterator,

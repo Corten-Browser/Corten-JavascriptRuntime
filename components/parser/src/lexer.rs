@@ -203,6 +203,11 @@ pub struct Lexer<'a> {
     line: u32,
     column: u32,
     current_token: Option<Token>,
+    /// Tracks if a line terminator was encountered before the current token
+    /// Used for Automatic Semicolon Insertion (ASI)
+    pub line_terminator_before_token: bool,
+    /// Previous line number (used to detect line changes)
+    previous_line: u32,
 }
 
 impl<'a> Lexer<'a> {
@@ -215,6 +220,8 @@ impl<'a> Lexer<'a> {
             line: 1,
             column: 1,
             current_token: None,
+            line_terminator_before_token: false,
+            previous_line: 1,
         }
     }
 
@@ -235,7 +242,14 @@ impl<'a> Lexer<'a> {
     }
 
     fn scan_token(&mut self) -> Result<Token, JsError> {
+        // Record the line before skipping whitespace
+        let line_before = self.line;
+
         self.skip_whitespace_and_comments();
+
+        // Check if we crossed a line boundary (for ASI)
+        self.line_terminator_before_token = self.line > line_before;
+        self.previous_line = self.line;
 
         if self.is_at_end() {
             return Ok(Token::EOF);
