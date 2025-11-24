@@ -1,18 +1,41 @@
 {
-  "last_extraction": "2025-11-24T07:06:48.923946",
-  "extraction_method": "pending-llm",
+  "last_extraction": "2025-11-24T07:10:00.000000",
+  "extraction_method": "hybrid",
   "spec_files": [
     {
       "path": "specifications/javascript-runtime-specification-V2.md",
-      "features_extracted": 0,
-      "extraction_method": "none",
-      "last_processed": "2025-11-24T07:06:48.924000"
+      "features_extracted": 73,
+      "extraction_method": "llm",
+      "last_processed": "2025-11-24T07:10:00.000000"
     }
   ],
-  "total_features": 0,
+  "total_features": 73,
   "automated_features": 0,
-  "llm_features": 0,
-  "llm_extraction_complete": false,
-  "llm_extraction_timestamp": null,
-  "automated_extraction_success": false
+  "llm_features": 73,
+  "llm_extraction_complete": true,
+  "llm_extraction_timestamp": "2025-11-24T07:10:00.000000",
+  "automated_extraction_success": false,
+  "detected_language": "rust",
+  "language_confidence": "high",
+  "feature_categories": {
+    "parser_subsystem": 6,
+    "bytecode_generation": 5,
+    "interpreter": 3,
+    "memory_management": 8,
+    "object_representation": 3,
+    "builtin_objects": 22,
+    "event_loop": 2,
+    "modules": 3,
+    "jit_compilation": 6,
+    "optimization": 4,
+    "browser_integration": 7,
+    "workers": 4,
+    "testing": 1
+  },
+  "template_matches": {
+    "javascript-js-runtime-integration": 1,
+    "javascript-event-loop": 3,
+    "javascript-wasm-support": 1,
+    "devtools-debugger": 1
+  }
 }
