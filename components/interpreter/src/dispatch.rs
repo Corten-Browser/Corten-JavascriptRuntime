@@ -330,6 +330,16 @@ impl Dispatcher {
                     let result = Value::Boolean(!a.is_truthy());
                     self.stack.push(result);
                 }
+                Opcode::Typeof => {
+                    let a = self.stack.pop().unwrap_or(Value::Undefined);
+                    // typeof operator - returns type as string
+                    self.stack.push(Value::String(a.type_of()));
+                }
+                Opcode::Void => {
+                    // void operator - discard value and push undefined
+                    let _discarded = self.stack.pop();
+                    self.stack.push(Value::Undefined);
+                }
                 Opcode::Equal => {
                     let b = self.stack.pop().unwrap_or(Value::Undefined);
                     let a = self.stack.pop().unwrap_or(Value::Undefined);

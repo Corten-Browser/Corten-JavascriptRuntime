@@ -47,10 +47,11 @@ pub enum Keyword {
     False,
     /// null keyword
     Null,
-    /// undefined keyword
-    Undefined,
+    // Note: 'undefined' is NOT a keyword - it's a global property
     /// typeof keyword
     Typeof,
+    /// void keyword
+    Void,
     /// instanceof keyword
     Instanceof,
     /// in keyword
@@ -71,8 +72,7 @@ pub enum Keyword {
     Export,
     /// default keyword
     Default,
-    /// constructor keyword
-    Constructor,
+    // Note: 'constructor' is NOT a keyword - it's a special method name in classes
 }
 
 /// JavaScript punctuators (operators and delimiters)
@@ -576,8 +576,10 @@ impl<'a> Lexer<'a> {
             "true" => Token::Keyword(Keyword::True),
             "false" => Token::Keyword(Keyword::False),
             "null" => Token::Keyword(Keyword::Null),
-            "undefined" => Token::Keyword(Keyword::Undefined),
+            // Note: "undefined" is NOT a keyword - it's a global property that can be shadowed
+            // It's handled as an identifier and resolved at runtime
             "typeof" => Token::Keyword(Keyword::Typeof),
+            "void" => Token::Keyword(Keyword::Void),
             "instanceof" => Token::Keyword(Keyword::Instanceof),
             "in" => Token::Keyword(Keyword::In),
             "try" => Token::Keyword(Keyword::Try),
@@ -588,7 +590,7 @@ impl<'a> Lexer<'a> {
             "import" => Token::Keyword(Keyword::Import),
             "export" => Token::Keyword(Keyword::Export),
             "default" => Token::Keyword(Keyword::Default),
-            "constructor" => Token::Keyword(Keyword::Constructor),
+            // Note: 'constructor' is NOT a keyword - it's just a special method name
             _ => Token::Identifier(ident),
         };
 

@@ -885,6 +885,7 @@ impl<'a> Parser<'a> {
             Token::Punctuator(Punctuator::Plus) => Some(UnaryOperator::Plus),
             Token::Punctuator(Punctuator::Tilde) => Some(UnaryOperator::BitwiseNot),
             Token::Keyword(Keyword::Typeof) => Some(UnaryOperator::Typeof),
+            Token::Keyword(Keyword::Void) => Some(UnaryOperator::Void),
             _ => None,
         };
 
@@ -1165,13 +1166,8 @@ impl<'a> Parser<'a> {
                     position: None,
                 })
             }
-            Token::Keyword(Keyword::Undefined) => {
-                self.lexer.next_token()?;
-                Ok(Expression::Literal {
-                    value: Literal::Undefined,
-                    position: None,
-                })
-            }
+            // Note: 'undefined' is NOT a keyword - it's handled as an identifier
+            // and resolved at runtime from the global scope
             Token::Keyword(Keyword::This) => {
                 self.lexer.next_token()?;
                 Ok(Expression::ThisExpression { position: None })
@@ -1448,8 +1444,8 @@ impl<'a> Parser<'a> {
             Token::Identifier(name) => Ok(name),
             Token::Keyword(kw) => {
                 // Allow keywords to be used as property/method names
+                // Note: 'constructor' is now an identifier, not a keyword
                 Ok(match kw {
-                    Keyword::Constructor => "constructor".to_string(),
                     Keyword::Let => "let".to_string(),
                     Keyword::Const => "const".to_string(),
                     Keyword::Var => "var".to_string(),
@@ -1471,8 +1467,9 @@ impl<'a> Parser<'a> {
                     Keyword::True => "true".to_string(),
                     Keyword::False => "false".to_string(),
                     Keyword::Null => "null".to_string(),
-                    Keyword::Undefined => "undefined".to_string(),
+                    // Note: 'undefined' is NOT a keyword
                     Keyword::Typeof => "typeof".to_string(),
+                    Keyword::Void => "void".to_string(),
                     Keyword::Instanceof => "instanceof".to_string(),
                     Keyword::In => "in".to_string(),
                     Keyword::Try => "try".to_string(),

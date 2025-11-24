@@ -749,6 +749,14 @@ impl BytecodeGenerator {
                         // Logical NOT - invert truthiness
                         self.chunk.emit(Opcode::Not);
                     }
+                    UnaryOperator::Typeof => {
+                        // typeof operator - returns type as string
+                        self.chunk.emit(Opcode::Typeof);
+                    }
+                    UnaryOperator::Void => {
+                        // void operator - discard value and push undefined
+                        self.chunk.emit(Opcode::Void);
+                    }
                     _ => {}
                 }
             }

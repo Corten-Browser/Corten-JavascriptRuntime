@@ -290,6 +290,8 @@ impl BytecodeChunk {
             Opcode::CreateArray(count) => (47, (*count as u32).to_le_bytes().to_vec()),
             Opcode::CallMethod(argc) => (48, vec![*argc]),
             Opcode::CallNew(argc) => (49, vec![*argc]),
+            Opcode::Typeof => (50, vec![]),
+            Opcode::Void => (51, vec![]),
         }
     }
 
@@ -526,6 +528,8 @@ impl BytecodeChunk {
                 offset += 1;
                 Opcode::CallNew(argc)
             }
+            50 => Opcode::Typeof,
+            51 => Opcode::Void,
             _ => return Err(format!("Unknown opcode tag: {}", tag)),
         };
 

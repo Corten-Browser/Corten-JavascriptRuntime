@@ -119,6 +119,10 @@ pub enum IROpcode {
     CallMethod(u8),
     /// Call constructor with new (stack: [constructor, args...] -> [instance])
     CallNew(u8),
+    /// typeof operator - push type string
+    Typeof,
+    /// void operator - evaluate expression, push undefined
+    Void,
     /// Deoptimize - fall back to interpreter
     Deoptimize,
 }
@@ -224,6 +228,8 @@ impl IRFunction {
                 Opcode::CreateArray(size) => IROpcode::CreateArray(*size),
                 Opcode::CallMethod(argc) => IROpcode::CallMethod(*argc),
                 Opcode::CallNew(argc) => IROpcode::CallNew(*argc),
+                Opcode::Typeof => IROpcode::Typeof,
+                Opcode::Void => IROpcode::Void,
             };
 
             ir_func.instructions.push(IRInstruction::new(ir_op, offset));
