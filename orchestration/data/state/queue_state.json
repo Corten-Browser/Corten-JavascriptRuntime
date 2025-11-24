@@ -1,11 +1,11 @@
 {
   "tasks": [],
   "completed_order": [],
-  "last_updated": "2025-11-24T07:06:48.923068",
+  "last_updated": "2025-11-24T19:23:40.913637Z",
   "initialized": true,
-  "spec_file": "specifications/javascript-runtime-specification-V2.md",
-  "spec_files": [
-    "specifications/javascript-runtime-specification-V2.md"
-  ],
-  "total_features": 0
+  "spec_file": "",
+  "spec_files": [],
+  "total_features": 73,
+  "reset_at": "2025-11-24T19:23:40.913637Z",
+  "reset_reason": "User requested full reset via /orch-reconcile-queue --reset"
 }

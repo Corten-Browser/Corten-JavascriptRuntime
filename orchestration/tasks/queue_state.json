@@ -1,18 +1,18 @@
 {
   "queue_version": "1.0.0",
   "created_at": "2025-11-24T07:10:00.000000",
-  "last_updated": "2025-11-24T06:42:01.167414Z",
+  "last_updated": "2025-11-24T19:23:40.913637Z",
   "detected_language": "rust",
   "language_confidence": "high",
   "total_features": 73,
-  "completed_features": 73,
+  "completed_features": 0,
   "tasks": [
     {
       "id": "FEAT-001",
       "name": "Lexical Analyzer (Tokenizer)",
       "description": "Perform lexical analysis producing token stream from source text. Handle JavaScript's complex contextual keywords (await, yield, async) and all token types.",
       "phase": "Phase 1: Core Interpreter",
-      "status": "completed",
+      "status": "incomplete",
       "priority": "critical",
       "extraction_method": "llm",
       "template_id": null,
@@ -20,16 +20,15 @@
       "estimated_loc": "2000-3000",
       "difficulty": "medium",
       "created_at": "2025-11-24T07:10:00.000000",
-      "completed_at": "2025-11-24T06:22:25.770509Z",
-      "completion_method": "reconciliation",
-      "reconciliation_notes": "Detected as already implemented via /orch-reconcile-queue"
+      "reset_at": "2025-11-24T19:23:40.913637Z",
+      "reset_from": "completed"
     },
     {
       "id": "FEAT-002",
       "name": "Recursive Descent Parser",
       "description": "Hand-written recursive descent parser for JavaScript grammar. Parse ES5+ core syntax, validate syntax, detect early errors per spec, collect function metadata (parameter count, uses eval/with, contains super).",
       "phase": "Phase 1: Core Interpreter",
-      "status": "completed",
+      "status": "incomplete",
       "priority": "critical",
       "extraction_method": "llm",
       "template_id": null,
@@ -39,16 +38,15 @@
       "estimated_loc": "5000-8000",
       "difficulty": "hard",
       "created_at": "2025-11-24T07:10:00.000000",
-      "completed_at": "2025-11-24T06:22:25.770509Z",
-      "completion_method": "reconciliation",
-      "reconciliation_notes": "Detected as already implemented via /orch-reconcile-queue"
+      "reset_at": "2025-11-24T19:23:40.913637Z",
+      "reset_from": "completed"
     },
     {
       "id": "FEAT-003",
       "name": "Lazy Parsing with Delazification",
       "description": "Implement two-pass parsing: preparser validates syntax without building complete AST, full parser triggers when function first executes. Dramatically reduces startup time and memory.",
       "phase": "Phase 1: Core Interpreter",
-      "status": "completed",
+      "status": "incomplete",
       "priority": "high",
       "extraction_method": "llm",
       "template_id": null,
@@ -58,16 +56,15 @@
       "estimated_loc": "2000-3000",
       "difficulty": "hard",
       "created_at": "2025-11-24T07:10:00.000000",
-      "completed_at": "2025-11-24T06:22:25.770509Z",
-      "completion_method": "reconciliation",
-      "reconciliation_notes": "Detected as already implemented via /orch-reconcile-queue"
+      "reset_at": "2025-11-24T19:23:40.913637Z",
+      "reset_from": "completed"
     },
     {
       "id": "FEAT-004",
       "name": "Scope Analysis",
       "description": "Identify lexical scopes, resolve variable references, determine which variables require heap allocation (captured by closures), annotate AST with scope information.",
       "phase": "Phase 1: Core Interpreter",
-      "status": "completed",
+      "status": "incomplete",
       "priority": "critical",
       "extraction_method": "llm",
       "template_id": null,
@@ -77,16 +74,15 @@
       "estimated_loc": "1500-2500",
       "difficulty": "medium",
       "created_at": "2025-11-24T07:10:00.000000",
-      "completed_at": "2025-11-24T06:22:25.770509Z",
-      "completion_method": "reconciliation",
-      "reconciliation_notes": "Detected as already implemented via /orch-reconcile-queue"
+      "reset_at": "2025-11-24T19:23:40.913637Z",
+      "reset_from": "completed"
     },
     {
       "id": "FEAT-005",
       "name": "AST Construction",
       "description": "Construct Abstract Syntax Tree through recursive descent with proper node types for all JavaScript constructs.",
       "phase": "Phase 1: Core Interpreter",
-      "status": "completed",
+      "status": "incomplete",
       "priority": "critical",
       "extraction_method": "llm",
       "template_id": null,
@@ -96,16 +92,15 @@
       "estimated_loc": "2000-3000",
       "difficulty": "medium",
       "created_at": "2025-11-24T07:10:00.000000",
-      "completed_at": "2025-11-24T06:22:25.770509Z",
-      "completion_method": "reconciliation",
-      "reconciliation_notes": "Detected as already implemented via /orch-reconcile-queue"
+      "reset_at": "2025-11-24T19:23:40.913637Z",
+      "reset_from": "completed"
     },
     {
       "id": "FEAT-006",
       "name": "Automatic Semicolon Insertion",
       "description": "Implement JavaScript's automatic semicolon insertion rules per ECMAScript specification.",
       "phase": "Phase 1: Core Interpreter",
-      "status": "completed",
+      "status": "incomplete",
       "priority": "high",
       "extraction_method": "llm",
       "template_id": null,
@@ -115,16 +110,15 @@
       "estimated_loc": "500-800",
       "difficulty": "medium",
       "created_at": "2025-11-24T07:10:00.000000",
-      "completed_at": "2025-11-24T06:42:01.167414Z",
-      "completion_method": "implementation",
-      "implementation_notes": "Implemented via orchestration"
+      "reset_at": "2025-11-24T19:23:40.913637Z",
+      "reset_from": "completed"
     },
     {
       "id": "FEAT-007",
       "name": "Bytecode Generator",
       "description": "Walk AST and emit compact register-based bytecode. Perform register allocation, assign accumulator for expression temporaries, produce bytecode instructions with explicit register operands.",
       "phase": "Phase 1: Core Interpreter",
-      "status": "completed",
+      "status": "incomplete",
       "priority": "critical",
       "extraction_method": "llm",
       "template_id": null,
@@ -135,16 +129,15 @@
       "estimated_loc": "4000-6000",
       "difficulty": "hard",
       "created_at": "2025-11-24T07:10:00.000000",
-      "completed_at": "2025-11-24T06:22:25.770509Z",
-      "completion_method": "reconciliation",
-      "reconciliation_notes": "Detected as already implemented via /orch-reconcile-queue"
+      "reset_at": "2025-11-24T19:23:40.913637Z",
+      "reset_from": "completed"
     },
     {
       "id": "FEAT-008",
       "name": "Bytecode Instruction Set",
       "description": "Define instruction categories: literals (LoadConstant, LoadUndefined), variables (LoadGlobal, StoreLocal), operators (Add, Multiply), control flow (Jump, JumpIfTrue, Return), objects (CreateObject, LoadProperty), functions (CreateClosure, CallFunction).",
       "phase": "Phase 1: Core Interpreter",
-      "status": "completed",
+      "status": "incomplete",
       "priority": "critical",
       "extraction_method": "llm",
       "template_id": null,
@@ -154,16 +147,15 @@
       "estimated_loc": "2000-3000",
       "difficulty": "medium",
       "created_at": "2025-11-24T07:10:00.000000",
-      "completed_at": "2025-11-24T06:22:25.770509Z",
-      "completion_method": "reconciliation",
-      "reconciliation_notes": "Detected as already implemented via /orch-reconcile-queue"
+      "reset_at": "2025-11-24T19:23:40.913637Z",
+      "reset_from": "completed"
     },
     {
       "id": "FEAT-009",
       "name": "Dead Code Elimination (Bytecode)",
       "description": "Remove unreachable statements during bytecode generation.",
       "phase": "Phase 1: Core Interpreter",
-      "status": "completed",
+      "status": "incomplete",
       "priority": "medium",
       "extraction_method": "llm",
       "template_id": null,
@@ -173,16 +165,15 @@
       "estimated_loc": "500-800",
       "difficulty": "medium",
       "created_at": "2025-11-24T07:10:00.000000",
-      "completed_at": "2025-11-24T06:22:25.770509Z",
-      "completion_method": "reconciliation",
-      "reconciliation_notes": "Detected as already implemented via /orch-reconcile-queue"
+      "reset_at": "2025-11-24T19:23:40.913637Z",
+      "reset_from": "completed"
     },
     {
       "id": "FEAT-010",
       "name": "Constant Folding",
       "description": "Evaluate constant expressions at compile time during bytecode generation.",
       "phase": "Phase 1: Core Interpreter",
-      "status": "completed",
+      "status": "incomplete",
       "priority": "medium",
       "extraction_method": "llm",
       "template_id": null,
@@ -192,16 +183,15 @@
       "estimated_loc": "800-1200",
       "difficulty": "medium",
       "created_at": "2025-11-24T07:10:00.000000",
-      "completed_at": "2025-11-24T06:22:25.770509Z",
-      "completion_method": "reconciliation",
-      "reconciliation_notes": "Detected as already implemented via /orch-reconcile-queue"
+      "reset_at": "2025-11-24T19:23:40.913637Z",
+      "reset_from": "completed"
     },
     {
       "id": "FEAT-011",
       "name": "Peephole Optimization",
       "description": "Replace bytecode instruction sequences with equivalent shorter forms.",
       "phase": "Phase 1: Core Interpreter",
-      "status": "completed",
+      "status": "incomplete",
       "priority": "medium",
       "extraction_method": "llm",
       "template_id": null,
@@ -211,16 +201,15 @@
       "estimated_loc": "600-1000",
       "difficulty": "medium",
       "created_at": "2025-11-24T07:10:00.000000",
-      "completed_at": "2025-11-24T06:22:25.770509Z",
-      "completion_method": "reconciliation",
-      "reconciliation_notes": "Detected as already implemented via /orch-reconcile-queue"
+      "reset_at": "2025-11-24T19:23:40.913637Z",
+      "reset_from": "completed"
     },
     {
       "id": "FEAT-012",
       "name": "Bytecode Interpreter Dispatch Loop",
       "description": "Execute bytecode one instruction at a time with dispatch loop selecting handler for each opcode. Use accumulator register for expression results.",
       "phase": "Phase 1: Core Interpreter",
-      "status": "completed",
+      "status": "incomplete",
       "priority": "critical",
       "extraction_method": "llm",
       "template_id": "javascript-js-runtime-integration",
@@ -242,16 +231,15 @@
         }
       ],
       "created_at": "2025-11-24T07:10:00.000000",
-      "completed_at": "2025-11-24T06:22:25.770509Z",
-      "completion_method": "reconciliation",
-      "reconciliation_notes": "Detected as already implemented via /orch-reconcile-queue"
+      "reset_at": "2025-11-24T19:23:40.913637Z",
+      "reset_from": "completed"
     },
     {
       "id": "FEAT-013",
       "name": "Inline Caching System",
       "description": "Install inline caches at every property access, function call, and type-sensitive operation. Support uninitialized, monomorphic (one shape), polymorphic (\u22644 shapes), and megamorphic states.",
       "phase": "Phase 1: Core Interpreter",
-      "status": "completed",
+      "status": "incomplete",
       "priority": "high",
       "extraction_method": "llm",
       "template_id": null,
@@ -261,16 +249,15 @@
       "estimated_loc": "2500-4000",
       "difficulty": "hard",
       "created_at": "2025-11-24T07:10:00.000000",
-      "completed_at": "2025-11-24T06:22:25.770509Z",
-      "completion_method": "reconciliation",
-      "reconciliation_notes": "Detected as already implemented via /orch-reconcile-queue"
+      "reset_at": "2025-11-24T19:23:40.913637Z",
+      "reset_from": "completed"
     },
     {
       "id": "FEAT-014",
       "name": "Profiling Instrumentation",
       "description": "Collect execution counters (function invocations, loop iterations), type feedback (observed types at operations), inline cache states, and branch outcomes. Guide JIT compilation decisions.",
       "phase": "Phase 1: Core Interpreter",
-      "status": "completed",
+      "status": "incomplete",
       "priority": "high",
       "extraction_method": "llm",
       "template_id": null,
@@ -280,16 +267,15 @@
       "estimated_loc": "1500-2500",
       "difficulty": "medium",
       "created_at": "2025-11-24T07:10:00.000000",
-      "completed_at": "2025-11-24T06:22:25.770509Z",
-      "completion_method": "reconciliation",
-      "reconciliation_notes": "Detected as already implemented via /orch-reconcile-queue"
+      "reset_at": "2025-11-24T19:23:40.913637Z",
+      "reset_from": "completed"
     },
     {
       "id": "FEAT-015",
       "name": "Counter-Based Tier Transitions",
       "description": "Implement counter thresholds for tier transitions: baseline JIT after ~500 executions, optimizing JIT after ~10,000 executions.",
       "phase": "Phase 4: JIT Compilation",
-      "status": "completed",
+      "status": "incomplete",
       "priority": "high",
       "extraction_method": "llm",
       "template_id": null,
@@ -299,16 +285,15 @@
       "estimated_loc": "800-1200",
       "difficulty": "medium",
       "created_at": "2025-11-24T07:10:00.000000",
-      "completed_at": "2025-11-24T06:22:25.770509Z",
-      "completion_method": "reconciliation",
-      "reconciliation_notes": "Detected as already implemented via /orch-reconcile-queue"
+      "reset_at": "2025-11-24T19:23:40.913637Z",
+      "reset_from": "completed"
     },
     {
       "id": "FEAT-016",
       "name": "Arena-Based Heap Allocator",
       "description": "Implement JavaScript heap as arena allocator with young_gen and old_gen arenas, plus remembered_set for cross-generation references.",
       "phase": "Phase 1: Core Interpreter",
-      "status": "completed",
+      "status": "incomplete",
       "priority": "critical",
       "extraction_method": "llm",
       "template_id": null,
@@ -326,16 +311,15 @@
         }
       ],
       "created_at": "2025-11-24T07:10:00.000000",
-      "completed_at": "2025-11-24T06:22:25.770509Z",
-      "completion_method": "reconciliation",
-      "reconciliation_notes": "Detected as already implemented via /orch-reconcile-queue"
+      "reset_at": "2025-11-24T19:23:40.913637Z",
+      "reset_from": "completed"
     },
     {
       "id": "FEAT-017",
       "name": "Young Generation Collector (Semi-Space Copying)",
       "description": "Implement semi-space copying algorithm: divide young generation into two equal semi-spaces, use bump pointer allocation, copy survivors on scavenge, swap space roles.",
       "phase": "Phase 1: Core Interpreter",
-      "status": "completed",
+      "status": "incomplete",
       "priority": "critical",
       "extraction_method": "llm",
       "template_id": null,
@@ -345,16 +329,15 @@
       "estimated_loc": "2000-3000",
       "difficulty": "hard",
       "created_at": "2025-11-24T07:10:00.000000",
-      "completed_at": "2025-11-24T06:22:25.770509Z",
-      "completion_method": "reconciliation",
-      "reconciliation_notes": "Detected as already implemented via /orch-reconcile-queue"
+      "reset_at": "2025-11-24T19:23:40.913637Z",
+      "reset_from": "completed"
     },
     {
       "id": "FEAT-018",
       "name": "Old Generation Collector (Mark-and-Sweep)",
       "description": "Implement mark-and-sweep GC with tri-color marking abstraction for old generation.",
       "phase": "Phase 2: Modern JavaScript",
-      "status": "completed",
+      "status": "incomplete",
       "priority": "high",
       "extraction_method": "llm",
       "template_id": null,
@@ -364,16 +347,15 @@
       "estimated_loc": "2500-4000",
       "difficulty": "hard",
       "created_at": "2025-11-24T07:10:00.000000",
-      "completed_at": "2025-11-24T06:22:25.770509Z",
-      "completion_method": "reconciliation",
-      "reconciliation_notes": "Detected as already implemented via /orch-reconcile-queue"
+      "reset_at": "2025-11-24T19:23:40.913637Z",
+      "reset_from": "completed"
     },
     {
       "id": "FEAT-019",
       "name": "Concurrent/Incremental Marking",
       "description": "Implement concurrent marking on background threads while JavaScript executes. Divide work into small slices for incremental marking.",
       "phase": "Phase 5: Optimization",
-      "status": "completed",
+      "status": "incomplete",
       "priority": "medium",
       "extraction_method": "llm",
       "template_id": null,
@@ -383,16 +365,15 @@
       "estimated_loc": "3000-5000",
       "difficulty": "expert",
       "created_at": "2025-11-24T07:10:00.000000",
-      "completed_at": "2025-11-24T06:42:01.167414Z",
-      "completion_method": "implementation",
-      "implementation_notes": "Implemented via orchestration"
+      "reset_at": "2025-11-24T19:23:40.913637Z",
+      "reset_from": "completed"
     },
     {
       "id": "FEAT-020",
       "name": "Write Barriers",
       "description": "Implement write barriers in unsafe Rust for tracking cross-generation references and maintaining marking invariants.",
       "phase": "Phase 2: Modern JavaScript",
-      "status": "completed",
+      "status": "incomplete",
       "priority": "critical",
       "extraction_method": "llm",
       "template_id": null,
@@ -402,16 +383,15 @@
       "estimated_loc": "800-1200",
       "difficulty": "hard",
       "created_at": "2025-11-24T07:10:00.000000",
-      "completed_at": "2025-11-24T06:22:25.770509Z",
-      "completion_method": "reconciliation",
-      "reconciliation_notes": "Detected as already implemented via /orch-reconcile-queue"
+      "reset_at": "2025-11-24T19:23:40.913637Z",
+      "reset_from": "completed"
     },
     {
       "id": "FEAT-021",
       "name": "Rooting API",
       "description": "Create safe Rust wrappers exposing GC'd objects to rest of engine. Prevent collection of stack-referenced objects.",
       "phase": "Phase 1: Core Interpreter",
-      "status": "completed",
+      "status": "incomplete",
       "priority": "critical",
       "extraction_method": "llm",
       "template_id": null,
@@ -421,16 +401,15 @@
       "estimated_loc": "1000-1500",
       "difficulty": "hard",
       "created_at": "2025-11-24T07:10:00.000000",
-      "completed_at": "2025-11-24T06:22:25.770509Z",
-      "completion_method": "reconciliation",
-      "reconciliation_notes": "Detected as already implemented via /orch-reconcile-queue"
+      "reset_at": "2025-11-24T19:23:40.913637Z",
+      "reset_from": "completed"
     },
     {
       "id": "FEAT-022",
       "name": "Hidden Classes (Maps/Shapes)",
       "description": "Implement hidden class system for property access optimization. Objects with same properties in same order share hidden class descriptor. Include transition maps.",
       "phase": "Phase 4: JIT Compilation",
-      "status": "completed",
+      "status": "incomplete",
       "priority": "high",
       "extraction_method": "llm",
       "template_id": null,
@@ -446,16 +425,15 @@
         }
       ],
       "created_at": "2025-11-24T07:10:00.000000",
-      "completed_at": "2025-11-24T06:22:25.770509Z",
-      "completion_method": "reconciliation",
-      "reconciliation_notes": "Detected as already implemented via /orch-reconcile-queue"
+      "reset_at": "2025-11-24T19:23:40.913637Z",
+      "reset_from": "completed"
     },
     {
       "id": "FEAT-023",
       "name": "Tagged Pointer Values",
       "description": "Use least significant bits for type tags: Smi (small integer tagged), HeapObject (pointer tagged), Double (boxed).",
       "phase": "Phase 1: Core Interpreter",
-      "status": "completed",
+      "status": "incomplete",
       "priority": "critical",
       "extraction_method": "llm",
       "template_id": null,
@@ -465,16 +443,15 @@
       "estimated_loc": "800-1200",
       "difficulty": "medium",
       "created_at": "2025-11-24T07:10:00.000000",
-      "completed_at": "2025-11-24T06:22:25.770509Z",
-      "completion_method": "reconciliation",
-      "reconciliation_notes": "Detected as already implemented via /orch-reconcile-queue"
+      "reset_at": "2025-11-24T19:23:40.913637Z",
+      "reset_from": "completed"
     },
     {
       "id": "FEAT-024",
       "name": "JSObject Structure",
       "description": "Implement JSObject with hidden class pointer, property slots vector, and elements vector for array elements.",
       "phase": "Phase 1: Core Interpreter",
-      "status": "completed",
+      "status": "incomplete",
       "priority": "critical",
       "extraction_method": "llm",
       "template_id": null,
@@ -485,16 +462,15 @@
       "estimated_loc": "1500-2500",
       "difficulty": "medium",
       "created_at": "2025-11-24T07:10:00.000000",
-      "completed_at": "2025-11-24T06:22:25.770509Z",
-      "completion_method": "reconciliation",
-      "reconciliation_notes": "Detected as already implemented via /orch-reconcile-queue"
+      "reset_at": "2025-11-24T19:23:40.913637Z",
+      "reset_from": "completed"
     },
     {
       "id": "FEAT-025",
       "name": "Object Built-in",
       "description": "Implement Object constructor and prototype methods per ECMAScript 2024 specification.",
       "phase": "Phase 1: Core Interpreter",
-      "status": "completed",
+      "status": "incomplete",
       "priority": "critical",
       "extraction_method": "llm",
       "template_id": null,
@@ -504,16 +480,15 @@
       "estimated_loc": "1500-2500",
       "difficulty": "medium",
       "created_at": "2025-11-24T07:10:00.000000",
-      "completed_at": "2025-11-24T06:22:25.770509Z",
-      "completion_method": "reconciliation",
-      "reconciliation_notes": "Detected as already implemented via /orch-reconcile-queue"
+      "reset_at": "2025-11-24T19:23:40.913637Z",
+      "reset_from": "completed"
     },
     {
       "id": "FEAT-026",
       "name": "Function Built-in",
       "description": "Implement Function constructor and prototype methods including call, apply, bind.",
       "phase": "Phase 1: Core Interpreter",
-      "status": "completed",
+      "status": "incomplete",
       "priority": "critical",
       "extraction_method": "llm",
       "template_id": null,
@@ -523,16 +498,15 @@
       "estimated_loc": "2000-3000",
       "difficulty": "medium",
       "created_at": "2025-11-24T07:10:00.000000",
-      "completed_at": "2025-11-24T06:22:25.770509Z",
-      "completion_method": "reconciliation",
-      "reconciliation_notes": "Detected as already implemented via /orch-reconcile-queue"
+      "reset_at": "2025-11-24T19:23:40.913637Z",
+      "reset_from": "completed"
     },
     {
       "id": "FEAT-027",
       "name": "Boolean Built-in",
       "description": "Implement Boolean constructor and prototype methods.",
       "phase": "Phase 1: Core Interpreter",
-      "status": "completed",
+      "status": "incomplete",
       "priority": "high",
       "extraction_method": "llm",
       "template_id": null,
@@ -542,16 +516,15 @@
       "estimated_loc": "300-500",
       "difficulty": "easy",
       "created_at": "2025-11-24T07:10:00.000000",
-      "completed_at": "2025-11-24T06:22:25.770509Z",
-      "completion_method": "reconciliation",
-      "reconciliation_notes": "Detected as already implemented via /orch-reconcile-queue"
+      "reset_at": "2025-11-24T19:23:40.913637Z",
+      "reset_from": "completed"
     },
     {
       "id": "FEAT-028",
       "name": "Symbol Built-in",
       "description": "Implement Symbol constructor and well-known symbols per ES6+ specification.",
       "phase": "Phase 2: Modern JavaScript",
-      "status": "completed",
+      "status": "incomplete",
       "priority": "high",
       "extraction_method": "llm",
       "template_id": null,
@@ -561,16 +534,15 @@
       "estimated_loc": "800-1200",
       "difficulty": "medium",
       "created_at": "2025-11-24T07:10:00.000000",
-      "completed_at": "2025-11-24T06:22:25.770509Z",
-      "completion_method": "reconciliation",
-      "reconciliation_notes": "Detected as already implemented via /orch-reconcile-queue"
+      "reset_at": "2025-11-24T19:23:40.913637Z",
+      "reset_from": "completed"
     },
     {
       "id": "FEAT-029",
       "name": "Error Types",
       "description": "Implement Error, TypeError, SyntaxError, ReferenceError, RangeError, URIError, EvalError with stack traces.",
       "phase": "Phase 1: Core Interpreter",
-      "status": "completed",
+      "status": "incomplete",
       "priority": "critical",
       "extraction_method": "llm",
       "template_id": null,
@@ -580,16 +552,15 @@
       "estimated_loc": "1500-2500",
       "difficulty": "medium",
       "created_at": "2025-11-24T07:10:00.000000",
-      "completed_at": "2025-11-24T06:22:25.770509Z",
-      "completion_method": "reconciliation",
-      "reconciliation_notes": "Detected as already implemented via /orch-reconcile-queue"
+      "reset_at": "2025-11-24T19:23:40.913637Z",
+      "reset_from": "completed"
     },
     {
       "id": "FEAT-030",
       "name": "Number Built-in",
       "description": "Implement Number constructor, prototype methods, and static methods (isNaN, isFinite, etc.).",
       "phase": "Phase 1: Core Interpreter",
-      "status": "completed",
+      "status": "incomplete",
       "priority": "critical",
       "extraction_method": "llm",
       "template_id": null,
@@ -605,16 +576,15 @@
         }
       ],
       "created_at": "2025-11-24T07:10:00.000000",
-      "completed_at": "2025-11-24T06:22:25.770509Z",
-      "completion_method": "reconciliation",
-      "reconciliation_notes": "Detected as already implemented via /orch-reconcile-queue"
+      "reset_at": "2025-11-24T19:23:40.913637Z",
+      "reset_from": "completed"
     },
     {
       "id": "FEAT-031",
       "name": "BigInt Built-in",
       "description": "Implement arbitrary precision integers with overloaded operators, type coercion rules, and TypedArray integration (BigInt64Array, BigUint64Array).",
       "phase": "Phase 2: Modern JavaScript",
-      "status": "completed",
+      "status": "incomplete",
       "priority": "high",
       "extraction_method": "llm",
       "template_id": null,
@@ -630,16 +600,15 @@
         }
       ],
       "created_at": "2025-11-24T07:10:00.000000",
-      "completed_at": "2025-11-24T06:22:25.770509Z",
-      "completion_method": "reconciliation",
-      "reconciliation_notes": "Detected as already implemented via /orch-reconcile-queue"
+      "reset_at": "2025-11-24T19:23:40.913637Z",
+      "reset_from": "completed"
     },
     {
       "id": "FEAT-032",
       "name": "Math Object",
       "description": "Implement all Math static methods (sin, cos, sqrt, random, etc.).",
       "phase": "Phase 1: Core Interpreter",
-      "status": "completed",
+      "status": "incomplete",
       "priority": "high",
       "extraction_method": "llm",
       "template_id": null,
@@ -649,16 +618,15 @@
       "estimated_loc": "800-1200",
       "difficulty": "easy",
       "created_at": "2025-11-24T07:10:00.000000",
-      "completed_at": "2025-11-24T06:22:25.770509Z",
-      "completion_method": "reconciliation",
-      "reconciliation_notes": "Detected as already implemented via /orch-reconcile-queue"
+      "reset_at": "2025-11-24T19:23:40.913637Z",
+      "reset_from": "completed"
     },
     {
       "id": "FEAT-033",
       "name": "Date Built-in",
       "description": "Implement Date constructor and all prototype methods for date/time manipulation.",
       "phase": "Phase 1: Core Interpreter",
-      "status": "completed",
+      "status": "incomplete",
       "priority": "high",
       "extraction_method": "llm",
       "template_id": null,
@@ -668,16 +636,15 @@
       "estimated_loc": "2000-3000",
       "difficulty": "medium",
       "created_at": "2025-11-24T07:10:00.000000",
-      "completed_at": "2025-11-24T06:22:25.770509Z",
-      "completion_method": "reconciliation",
-      "reconciliation_notes": "Detected as already implemented via /orch-reconcile-queue"
+      "reset_at": "2025-11-24T19:23:40.913637Z",
+      "reset_from": "completed"
     },
     {
       "id": "FEAT-034",
       "name": "String Built-in",
       "description": "Implement String constructor and all prototype methods including Unicode support.",
       "phase": "Phase 1: Core Interpreter",
-      "status": "completed",
+      "status": "incomplete",
       "priority": "critical",
       "extraction_method": "llm",
       "template_id": null,
@@ -687,16 +654,15 @@
       "estimated_loc": "2500-4000",
       "difficulty": "medium",
       "created_at": "2025-11-24T07:10:00.000000",
-      "completed_at": "2025-11-24T06:22:25.770509Z",
-      "completion_method": "reconciliation",
-      "reconciliation_notes": "Detected as already implemented via /orch-reconcile-queue"
+      "reset_at": "2025-11-24T19:23:40.913637Z",
+      "reset_from": "completed"
     },
     {
       "id": "FEAT-035",
       "name": "RegExp Engine",
       "description": "Full Unicode support including Unicode property escapes, named capture groups, lookbehind assertions, dotAll mode, sticky flag, unicode flag, and /v flag for set operations.",
       "phase": "Phase 2: Modern JavaScript",
-      "status": "completed",
+      "status": "incomplete",
       "priority": "high",
       "extraction_method": "llm",
       "template_id": null,
@@ -712,16 +678,15 @@
         }
       ],
       "created_at": "2025-11-24T07:10:00.000000",
-      "completed_at": "2025-11-24T06:22:25.770509Z",
-      "completion_method": "reconciliation",
-      "reconciliation_notes": "Detected as already implemented via /orch-reconcile-queue"
+      "reset_at": "2025-11-24T19:23:40.913637Z",
+      "reset_from": "completed"
     },
     {
       "id": "FEAT-036",
       "name": "Array Built-in",
       "description": "Implement Array constructor and all prototype methods (map, filter, reduce, etc.).",
       "phase": "Phase 1: Core Interpreter",
-      "status": "completed",
+      "status": "incomplete",
       "priority": "critical",
       "extraction_method": "llm",
       "template_id": null,
@@ -731,16 +696,15 @@
       "estimated_loc": "3000-5000",
       "difficulty": "medium",
       "created_at": "2025-11-24T07:10:00.000000",
-      "completed_at": "2025-11-24T06:22:25.770509Z",
-      "completion_method": "reconciliation",
-      "reconciliation_notes": "Detected as already implemented via /orch-reconcile-queue"
+      "reset_at": "2025-11-24T19:23:40.913637Z",
+      "reset_from": "completed"
     },
     {
       "id": "FEAT-037",
       "name": "TypedArray Implementation",
       "description": "Implement all TypedArray variants (Int8Array, Uint8Array, Int16Array, Uint16Array, Int32Array, Uint32Array, Float32Array, Float64Array, BigInt64Array, BigUint64Array).",
       "phase": "Phase 2: Modern JavaScript",
-      "status": "completed",
+      "status": "incomplete",
       "priority": "high",
       "extraction_method": "llm",
       "template_id": null,
@@ -750,16 +714,15 @@
       "estimated_loc": "4000-6000",
       "difficulty": "hard",
       "created_at": "2025-11-24T07:10:00.000000",
-      "completed_at": "2025-11-24T06:22:25.770509Z",
-      "completion_method": "reconciliation",
-      "reconciliation_notes": "Detected as already implemented via /orch-reconcile-queue"
+      "reset_at": "2025-11-24T19:23:40.913637Z",
+      "reset_from": "completed"
     },
     {
       "id": "FEAT-038",
       "name": "ArrayBuffer",
       "description": "Implement ArrayBuffer for raw binary data storage.",
       "phase": "Phase 2: Modern JavaScript",
-      "status": "completed",
+      "status": "incomplete",
       "priority": "high",
       "extraction_method": "llm",
       "template_id": null,
@@ -769,16 +732,15 @@
       "estimated_loc": "1000-1500",
       "difficulty": "medium",
       "created_at": "2025-11-24T07:10:00.000000",
-      "completed_at": "2025-11-24T06:22:25.770509Z",
-      "completion_method": "reconciliation",
-      "reconciliation_notes": "Detected as already implemented via /orch-reconcile-queue"
+      "reset_at": "2025-11-24T19:23:40.913637Z",
+      "reset_from": "completed"
     },
     {
       "id": "FEAT-039",
       "name": "SharedArrayBuffer",
       "description": "Implement SharedArrayBuffer for shared memory between Web Workers using Arc and atomic types.",
       "phase": "Phase 3: Browser Integration",
-      "status": "completed",
+      "status": "incomplete",
       "priority": "medium",
       "extraction_method": "llm",
       "template_id": null,
@@ -789,16 +751,15 @@
       "estimated_loc": "1500-2500",
       "difficulty": "hard",
       "created_at": "2025-11-24T07:10:00.000000",
-      "completed_at": "2025-11-24T06:22:25.770509Z",
-      "completion_method": "reconciliation",
-      "reconciliation_notes": "Detected as already implemented via /orch-reconcile-queue"
+      "reset_at": "2025-11-24T19:23:40.913637Z",
+      "reset_from": "completed"
     },
     {
       "id": "FEAT-040",
       "name": "DataView",
       "description": "Implement DataView for low-level ArrayBuffer access with endianness control.",
       "phase": "Phase 2: Modern JavaScript",
-      "status": "completed",
+      "status": "incomplete",
       "priority": "medium",
       "extraction_method": "llm",
       "template_id": null,
@@ -808,16 +769,15 @@
       "estimated_loc": "800-1200",
       "difficulty": "medium",
       "created_at": "2025-11-24T07:10:00.000000",
-      "completed_at": "2025-11-24T06:22:25.770509Z",
-      "completion_method": "reconciliation",
-      "reconciliation_notes": "Detected as already implemented via /orch-reconcile-queue"
+      "reset_at": "2025-11-24T19:23:40.913637Z",
+      "reset_from": "completed"
     },
     {
       "id": "FEAT-041",
       "name": "Map Built-in",
       "description": "Implement Map constructor and all prototype methods with proper iteration.",
       "phase": "Phase 2: Modern JavaScript",
-      "status": "completed",
+      "status": "incomplete",
       "priority": "high",
       "extraction_method": "llm",
       "template_id": null,
@@ -827,16 +787,15 @@
       "estimated_loc": "1000-1500",
       "difficulty": "medium",
       "created_at": "2025-11-24T07:10:00.000000",
-      "completed_at": "2025-11-24T06:22:25.770509Z",
-      "completion_method": "reconciliation",
-      "reconciliation_notes": "Detected as already implemented via /orch-reconcile-queue"
+      "reset_at": "2025-11-24T19:23:40.913637Z",
+      "reset_from": "completed"
     },
     {
       "id": "FEAT-042",
       "name": "Set Built-in",
       "description": "Implement Set constructor and all prototype methods with proper iteration.",
       "phase": "Phase 2: Modern JavaScript",
-      "status": "completed",
+      "status": "incomplete",
       "priority": "high",
       "extraction_method": "llm",
       "template_id": null,
@@ -846,16 +805,15 @@
       "estimated_loc": "1000-1500",
       "difficulty": "medium",
       "created_at": "2025-11-24T07:10:00.000000",
-      "completed_at": "2025-11-24T06:22:25.770509Z",
-      "completion_method": "reconciliation",
-      "reconciliation_notes": "Detected as already implemented via /orch-reconcile-queue"
+      "reset_at": "2025-11-24T19:23:40.913637Z",
+      "reset_from": "completed"
     },
     {
       "id": "FEAT-043",
       "name": "WeakMap and WeakSet",
       "description": "Implement WeakMap and WeakSet with proper weak reference semantics for GC interaction.",
       "phase": "Phase 2: Modern JavaScript",
-      "status": "completed",
+      "status": "incomplete",
       "priority": "medium",
       "extraction_method": "llm",
       "template_id": null,
@@ -867,16 +825,15 @@
       "estimated_loc": "1500-2500",
       "difficulty": "hard",
       "created_at": "2025-11-24T07:10:00.000000",
-      "completed_at": "2025-11-24T06:22:25.770509Z",
-      "completion_method": "reconciliation",
-      "reconciliation_notes": "Detected as already implemented via /orch-reconcile-queue"
+      "reset_at": "2025-11-24T19:23:40.913637Z",
+      "reset_from": "completed"
     },
     {
       "id": "FEAT-044",
       "name": "JSON Object",
       "description": "Implement JSON.parse and JSON.stringify with full specification compliance.",
       "phase": "Phase 1: Core Interpreter",
-      "status": "completed",
+      "status": "incomplete",
       "priority": "high",
       "extraction_method": "llm",
       "template_id": null,
@@ -886,16 +843,15 @@
       "estimated_loc": "1500-2500",
       "difficulty": "medium",
       "created_at": "2025-11-24T07:10:00.000000",
-      "completed_at": "2025-11-24T06:22:25.770509Z",
-      "completion_method": "reconciliation",
-      "reconciliation_notes": "Detected as already implemented via /orch-reconcile-queue"
+      "reset_at": "2025-11-24T19:23:40.913637Z",
+      "reset_from": "completed"
     },
     {
       "id": "FEAT-045",
       "name": "Promise Built-in",
       "description": "Implement Promise constructor, static methods (all, race, allSettled, any, resolve, reject), and prototype methods (then, catch, finally).",
       "phase": "Phase 2: Modern JavaScript",
-      "status": "completed",
+      "status": "incomplete",
       "priority": "critical",
       "extraction_method": "llm",
       "template_id": "javascript-event-loop",
@@ -918,16 +874,15 @@
         }
       ],
       "created_at": "2025-11-24T07:10:00.000000",
-      "completed_at": "2025-11-24T06:22:25.770509Z",
-      "completion_method": "reconciliation",
-      "reconciliation_notes": "Detected as already implemented via /orch-reconcile-queue"
+      "reset_at": "2025-11-24T19:23:40.913637Z",
+      "reset_from": "completed"
     },
     {
       "id": "FEAT-046",
       "name": "Generator and GeneratorFunction",
       "description": "Implement Generator protocol and GeneratorFunction constructor.",
       "phase": "Phase 2: Modern JavaScript",
-      "status": "completed",
+      "status": "incomplete",
       "priority": "high",
       "extraction_method": "llm",
       "template_id": null,
@@ -937,16 +892,15 @@
       "estimated_loc": "2500-4000",
       "difficulty": "hard",
       "created_at": "2025-11-24T07:10:00.000000",
-      "completed_at": "2025-11-24T06:22:25.770509Z",
-      "completion_method": "reconciliation",
-      "reconciliation_notes": "Detected as already implemented via /orch-reconcile-queue"
+      "reset_at": "2025-11-24T19:23:40.913637Z",
+      "reset_from": "completed"
     },
     {
       "id": "FEAT-047",
       "name": "AsyncFunction and AsyncGenerator",
       "description": "Transform async functions to state machines (similar to Rust's async transformation). Each await point becomes state transition.",
       "phase": "Phase 2: Modern JavaScript",
-      "status": "completed",
+      "status": "incomplete",
       "priority": "critical",
       "extraction_method": "llm",
       "template_id": null,
@@ -957,16 +911,15 @@
       "estimated_loc": "3000-5000",
       "difficulty": "expert",
       "created_at": "2025-11-24T07:10:00.000000",
-      "completed_at": "2025-11-24T06:22:25.770509Z",
-      "completion_method": "reconciliation",
-      "reconciliation_notes": "Detected as already implemented via /orch-reconcile-queue"
+      "reset_at": "2025-11-24T19:23:40.913637Z",
+      "reset_from": "completed"
     },
     {
       "id": "FEAT-048",
       "name": "Event Loop with Task Queues",
       "description": "Implement event loop with multiple task queues (macrotasks) with priorities: DOM manipulation, user interaction, networking, timers, history traversal.",
       "phase": "Phase 3: Browser Integration",
-      "status": "completed",
+      "status": "incomplete",
       "priority": "critical",
       "extraction_method": "llm",
       "template_id": "javascript-event-loop",
@@ -986,16 +939,15 @@
         }
       ],
       "created_at": "2025-11-24T07:10:00.000000",
-      "completed_at": "2025-11-24T06:22:25.770509Z",
-      "completion_method": "reconciliation",
-      "reconciliation_notes": "Detected as already implemented via /orch-reconcile-queue"
+      "reset_at": "2025-11-24T19:23:40.913637Z",
+      "reset_from": "completed"
     },
     {
       "id": "FEAT-049",
       "name": "Microtask Queue",
       "description": "Implement microtask queue processed after current task, before next task. Sources: Promise reactions, queueMicrotask(), MutationObserver callbacks.",
       "phase": "Phase 3: Browser Integration",
-      "status": "completed",
+      "status": "incomplete",
       "priority": "critical",
       "extraction_method": "llm",
       "template_id": "javascript-event-loop",
@@ -1005,16 +957,15 @@
       "estimated_loc": "1000-1500",
       "difficulty": "medium",
       "created_at": "2025-11-24T07:10:00.000000",
-      "completed_at": "2025-11-24T06:22:25.770509Z",
-      "completion_method": "reconciliation",
-      "reconciliation_notes": "Detected as already implemented via /orch-reconcile-queue"
+      "reset_at": "2025-11-24T19:23:40.913637Z",
+      "reset_from": "completed"
     },
     {
       "id": "FEAT-050",
       "name": "Proxy Built-in",
       "description": "Implement Proxy constructor with all traps (get, set, has, deleteProperty, etc.).",
       "phase": "Phase 2: Modern JavaScript",
-      "status": "completed",
+      "status": "incomplete",
       "priority": "high",
       "extraction_method": "llm",
       "template_id": null,
@@ -1024,16 +975,15 @@
       "estimated_loc": "3000-5000",
       "difficulty": "hard",
       "created_at": "2025-11-24T07:10:00.000000",
-      "completed_at": "2025-11-24T06:22:25.770509Z",
-      "completion_method": "reconciliation",
-      "reconciliation_notes": "Detected as already implemented via /orch-reconcile-queue"
+      "reset_at": "2025-11-24T19:23:40.913637Z",
+      "reset_from": "completed"
     },
     {
       "id": "FEAT-051",
       "name": "Reflect Object",
       "description": "Implement all Reflect static methods corresponding to Proxy traps.",
       "phase": "Phase 2: Modern JavaScript",
-      "status": "completed",
+      "status": "incomplete",
       "priority": "high",
       "extraction_method": "llm",
       "template_id": null,
@@ -1043,16 +993,15 @@
       "estimated_loc": "1000-1500",
       "difficulty": "medium",
       "created_at": "2025-11-24T07:10:00.000000",
-      "completed_at": "2025-11-24T06:22:25.770509Z",
-      "completion_method": "reconciliation",
-      "reconciliation_notes": "Detected as already implemented via /orch-reconcile-queue"
+      "reset_at": "2025-11-24T19:23:40.913637Z",
+      "reset_from": "completed"
     },
     {
       "id": "FEAT-052",
       "name": "Intl Namespace",
       "description": "Implement Intl with Collator, NumberFormat, DateTimeFormat, PluralRules, RelativeTimeFormat, ListFormat, etc.",
       "phase": "Phase 2: Modern JavaScript",
-      "status": "completed",
+      "status": "incomplete",
       "priority": "medium",
       "extraction_method": "llm",
       "template_id": null,
@@ -1068,16 +1017,15 @@
         }
       ],
       "created_at": "2025-11-24T07:10:00.000000",
-      "completed_at": "2025-11-24T06:42:01.167414Z",
-      "completion_method": "implementation",
-      "implementation_notes": "Implemented via orchestration"
+      "reset_at": "2025-11-24T19:23:40.913637Z",
+      "reset_from": "completed"
     },
     {
       "id": "FEAT-053",
       "name": "WeakRef and FinalizationRegistry",
       "description": "Implement WeakRef for weak object references and FinalizationRegistry for cleanup callbacks.",
       "phase": "Phase 2: Modern JavaScript",
-      "status": "completed",
+      "status": "incomplete",
       "priority": "medium",
       "extraction_method": "llm",
       "template_id": null,
@@ -1088,16 +1036,15 @@
       "estimated_loc": "1500-2500",
       "difficulty": "hard",
       "created_at": "2025-11-24T07:10:00.000000",
-      "completed_at": "2025-11-24T06:22:25.770509Z",
-      "completion_method": "reconciliation",
-      "reconciliation_notes": "Detected as already implemented via /orch-reconcile-queue"
+      "reset_at": "2025-11-24T19:23:40.913637Z",
+      "reset_from": "completed"
     },
     {
       "id": "FEAT-054",
       "name": "Web Workers Implementation",
       "description": "Implement Web Workers using Rust std::thread with message channels.",
       "phase": "Phase 3: Browser Integration",
-      "status": "completed",
+      "status": "incomplete",
       "priority": "high",
       "extraction_method": "llm",
       "template_id": null,
@@ -1113,16 +1060,15 @@
         }
       ],
       "created_at": "2025-11-24T07:10:00.000000",
-      "completed_at": "2025-11-24T06:22:25.770509Z",
-      "completion_method": "reconciliation",
-      "reconciliation_notes": "Detected as already implemented via /orch-reconcile-queue"
+      "reset_at": "2025-11-24T19:23:40.913637Z",
+      "reset_from": "completed"
     },
     {
       "id": "FEAT-055",
       "name": "Structured Clone Algorithm",
       "description": "Implement structured clone for message passing between workers with serde-based serialization.",
       "phase": "Phase 3: Browser Integration",
-      "status": "completed",
+      "status": "incomplete",
       "priority": "high",
       "extraction_method": "llm",
       "template_id": null,
@@ -1138,16 +1084,15 @@
         }
       ],
       "created_at": "2025-11-24T07:10:00.000000",
-      "completed_at": "2025-11-24T06:42:01.167414Z",
-      "completion_method": "implementation",
-      "implementation_notes": "Implemented via orchestration"
+      "reset_at": "2025-11-24T19:23:40.913637Z",
+      "reset_from": "completed"
     },
     {
       "id": "FEAT-056",
       "name": "Atomics Object",
       "description": "Implement Atomics static methods for SharedArrayBuffer atomic operations using Rust's std::sync::atomic.",
       "phase": "Phase 3: Browser Integration",
-      "status": "completed",
+      "status": "incomplete",
       "priority": "medium",
       "extraction_method": "llm",
       "template_id": null,
@@ -1157,16 +1102,15 @@
       "estimated_loc": "1000-1500",
       "difficulty": "hard",
       "created_at": "2025-11-24T07:10:00.000000",
-      "completed_at": "2025-11-24T06:22:25.770509Z",
-      "completion_method": "reconciliation",
-      "reconciliation_notes": "Detected as already implemented via /orch-reconcile-queue"
+      "reset_at": "2025-11-24T19:23:40.913637Z",
+      "reset_from": "completed"
     },
     {
       "id": "FEAT-057",
       "name": "ES Modules",
       "description": "Implement ES module system with import/export syntax, module loading pipeline, and proper module status tracking (Unlinked, Linking, Linked, Evaluating, Evaluated, Error).",
       "phase": "Phase 2: Modern JavaScript",
-      "status": "completed",
+      "status": "incomplete",
       "priority": "critical",
       "extraction_method": "llm",
       "template_id": null,
@@ -1176,16 +1120,15 @@
       "estimated_loc": "4000-6000",
       "difficulty": "hard",
       "created_at": "2025-11-24T07:10:00.000000",
-      "completed_at": "2025-11-24T06:22:25.770509Z",
-      "completion_method": "reconciliation",
-      "reconciliation_notes": "Detected as already implemented via /orch-reconcile-queue"
+      "reset_at": "2025-11-24T19:23:40.913637Z",
+      "reset_from": "completed"
     },
     {
       "id": "FEAT-058",
       "name": "Top-Level Await",
       "description": "Implement top-level await in modules with Promise-based module evaluation.",
       "phase": "Phase 2: Modern JavaScript",
-      "status": "completed",
+      "status": "incomplete",
       "priority": "high",
       "extraction_method": "llm",
       "template_id": null,
@@ -1196,16 +1139,15 @@
       "estimated_loc": "1000-1500",
       "difficulty": "hard",
       "created_at": "2025-11-24T07:10:00.000000",
-      "completed_at": "2025-11-24T06:22:25.770509Z",
-      "completion_method": "reconciliation",
-      "reconciliation_notes": "Detected as already implemented via /orch-reconcile-queue"
+      "reset_at": "2025-11-24T19:23:40.913637Z",
+      "reset_from": "completed"
     },
     {
       "id": "FEAT-059",
       "name": "Dynamic Import",
       "description": "Implement import() expression with Promise-based API, integration with module loader, lazy compilation, and code splitting support.",
       "phase": "Phase 2: Modern JavaScript",
-      "status": "completed",
+      "status": "incomplete",
       "priority": "high",
       "extraction_method": "llm",
       "template_id": null,
@@ -1216,16 +1158,15 @@
       "estimated_loc": "1500-2500",
       "difficulty": "hard",
       "created_at": "2025-11-24T07:10:00.000000",
-      "completed_at": "2025-11-24T06:22:25.770509Z",
-      "completion_method": "reconciliation",
-      "reconciliation_notes": "Detected as already implemented via /orch-reconcile-queue"
+      "reset_at": "2025-11-24T19:23:40.913637Z",
+      "reset_from": "completed"
     },
     {
       "id": "FEAT-060",
       "name": "Baseline JIT Compiler",
       "description": "Template JIT that translates bytecode to machine code through direct templates. Preserves inline caches, uses same runtime call stubs. 10x faster compilation than optimizing JIT with 2-3x speedup over interpreter.",
       "phase": "Phase 4: JIT Compilation",
-      "status": "completed",
+      "status": "incomplete",
       "priority": "high",
       "extraction_method": "llm",
       "template_id": null,
@@ -1242,16 +1183,15 @@
         }
       ],
       "created_at": "2025-11-24T07:10:00.000000",
-      "completed_at": "2025-11-24T06:22:25.770509Z",
-      "completion_method": "reconciliation",
-      "reconciliation_notes": "Detected as already implemented via /orch-reconcile-queue"
+      "reset_at": "2025-11-24T19:23:40.913637Z",
+      "reset_from": "completed"
     },
     {
       "id": "FEAT-061",
       "name": "On-Stack Replacement (OSR)",
       "description": "Allow running code to transition between tiers without returning to caller. Compile at iteration start, check compiled code availability, reconstruct activation record, jump to compiled loop body.",
       "phase": "Phase 4: JIT Compilation",
-      "status": "completed",
+      "status": "incomplete",
       "priority": "high",
       "extraction_method": "llm",
       "template_id": null,
@@ -1261,16 +1201,15 @@
       "estimated_loc": "3000-5000",
       "difficulty": "expert",
       "created_at": "2025-11-24T07:10:00.000000",
-      "completed_at": "2025-11-24T06:22:25.770509Z",
-      "completion_method": "reconciliation",
-      "reconciliation_notes": "Detected as already implemented via /orch-reconcile-queue"
+      "reset_at": "2025-11-24T19:23:40.913637Z",
+      "reset_from": "completed"
     },
     {
       "id": "FEAT-062",
       "name": "Optimizing JIT Compiler",
       "description": "Transform bytecode and IC feedback into optimized machine code through speculative optimization. Assumes types based on profiling, specializes code, inserts guards with bailout.",
       "phase": "Phase 5: Optimization",
-      "status": "completed",
+      "status": "incomplete",
       "priority": "high",
       "extraction_method": "llm",
       "template_id": null,
@@ -1291,16 +1230,15 @@
         }
       ],
       "created_at": "2025-11-24T07:10:00.000000",
-      "completed_at": "2025-11-24T06:22:25.770509Z",
-      "completion_method": "reconciliation",
-      "reconciliation_notes": "Detected as already implemented via /orch-reconcile-queue"
+      "reset_at": "2025-11-24T19:23:40.913637Z",
+      "reset_from": "completed"
     },
     {
       "id": "FEAT-063",
       "name": "Type Specialization",
       "description": "Replace generic operations with type-specific variants based on profiling feedback.",
       "phase": "Phase 5: Optimization",
-      "status": "completed",
+      "status": "incomplete",
       "priority": "high",
       "extraction_method": "llm",
       "template_id": null,
@@ -1310,16 +1248,15 @@
       "estimated_loc": "3000-5000",
       "difficulty": "expert",
       "created_at": "2025-11-24T07:10:00.000000",
-      "completed_at": "2025-11-24T06:42:01.167414Z",
-      "completion_method": "implementation",
-      "implementation_notes": "Implemented via orchestration"
+      "reset_at": "2025-11-24T19:23:40.913637Z",
+      "reset_from": "completed"
     },
     {
       "id": "FEAT-064",
       "name": "Function Inlining",
       "description": "Replace function calls with callee body in optimizing JIT.",
       "phase": "Phase 5: Optimization",
-      "status": "completed",
+      "status": "incomplete",
       "priority": "high",
       "extraction_method": "llm",
       "template_id": null,
@@ -1329,16 +1266,15 @@
       "estimated_loc": "2000-3000",
       "difficulty": "expert",
       "created_at": "2025-11-24T07:10:00.000000",
-      "completed_at": "2025-11-24T06:42:01.167414Z",
-      "completion_method": "implementation",
-      "implementation_notes": "Implemented via orchestration"
+      "reset_at": "2025-11-24T19:23:40.913637Z",
+      "reset_from": "completed"
     },
     {
       "id": "FEAT-065",
       "name": "Deoptimization Infrastructure",
       "description": "Implement bailout mechanism when speculative assumptions violated: capture live values, map optimized frame to interpreter frame layout, reconstruct interpreter state, continue in interpreter.",
       "phase": "Phase 5: Optimization",
-      "status": "completed",
+      "status": "incomplete",
       "priority": "critical",
       "extraction_method": "llm",
       "template_id": null,
@@ -1348,16 +1284,15 @@
       "estimated_loc": "4000-6000",
       "difficulty": "expert",
       "created_at": "2025-11-24T07:10:00.000000",
-      "completed_at": "2025-11-24T06:22:25.770509Z",
-      "completion_method": "reconciliation",
-      "reconciliation_notes": "Detected as already implemented via /orch-reconcile-queue"
+      "reset_at": "2025-11-24T19:23:40.913637Z",
+      "reset_from": "completed"
     },
     {
       "id": "FEAT-066",
       "name": "Console API",
       "description": "Full console object: log/debug/info/warn/error, formatting (%s, %d, %i, %f, %o, %O, %c), grouping, timing (time/timeEnd/timeLog), profiling, table(), assert().",
       "phase": "Phase 3: Browser Integration",
-      "status": "completed",
+      "status": "incomplete",
       "priority": "high",
       "extraction_method": "llm",
       "template_id": null,
@@ -1367,16 +1302,15 @@
       "estimated_loc": "1500-2500",
       "difficulty": "medium",
       "created_at": "2025-11-24T07:10:00.000000",
-      "completed_at": "2025-11-24T06:22:25.770509Z",
-      "completion_method": "reconciliation",
-      "reconciliation_notes": "Detected as already implemented via /orch-reconcile-queue"
+      "reset_at": "2025-11-24T19:23:40.913637Z",
+      "reset_from": "completed"
     },
     {
       "id": "FEAT-067",
       "name": "Content Security Policy Enforcement",
       "description": "CSP enforcement: block eval() without 'unsafe-eval', block Function constructor, prevent inline script execution, nonce validation.",
       "phase": "Phase 3: Browser Integration",
-      "status": "completed",
+      "status": "incomplete",
       "priority": "high",
       "extraction_method": "llm",
       "template_id": null,
@@ -1386,16 +1320,15 @@
       "estimated_loc": "1500-2500",
       "difficulty": "medium",
       "created_at": "2025-11-24T07:10:00.000000",
-      "completed_at": "2025-11-24T06:22:25.770509Z",
-      "completion_method": "reconciliation",
-      "reconciliation_notes": "Detected as already implemented via /orch-reconcile-queue"
+      "reset_at": "2025-11-24T19:23:40.913637Z",
+      "reset_from": "completed"
     },
     {
       "id": "FEAT-068",
       "name": "Same-Origin Policy Enforcement",
       "description": "Origin checks with type safety: scheme, host, port comparison.",
       "phase": "Phase 3: Browser Integration",
-      "status": "completed",
+      "status": "incomplete",
       "priority": "high",
       "extraction_method": "llm",
       "template_id": null,
@@ -1403,16 +1336,15 @@
       "estimated_loc": "500-800",
       "difficulty": "medium",
       "created_at": "2025-11-24T07:10:00.000000",
-      "completed_at": "2025-11-24T06:42:01.167414Z",
-      "completion_method": "implementation",
-      "implementation_notes": "Implemented via orchestration"
+      "reset_at": "2025-11-24T19:23:40.913637Z",
+      "reset_from": "completed"
     },
     {
       "id": "FEAT-069",
       "name": "WebAssembly Integration",
       "description": "Integrate Rust WebAssembly runtime (Wasmtime/Wasmer) with JavaScript: instantiate modules, call functions, access memory, provide imports.",
       "phase": "Phase 5: Optimization",
-      "status": "completed",
+      "status": "incomplete",
       "priority": "high",
       "extraction_method": "llm",
       "template_id": "javascript-wasm-support",
@@ -1434,16 +1366,15 @@
         }
       ],
       "created_at": "2025-11-24T07:10:00.000000",
-      "completed_at": "2025-11-24T06:22:25.770509Z",
-      "completion_method": "reconciliation",
-      "reconciliation_notes": "Detected as already implemented via /orch-reconcile-queue"
+      "reset_at": "2025-11-24T19:23:40.913637Z",
+      "reset_from": "completed"
     },
     {
       "id": "FEAT-070",
       "name": "Service Workers",
       "description": "Implement service worker lifecycle, fetch interception, and Cache API.",
       "phase": "Phase 5: Optimization",
-      "status": "completed",
+      "status": "incomplete",
       "priority": "medium",
       "extraction_method": "llm",
       "template_id": null,
@@ -1454,16 +1385,15 @@
       "estimated_loc": "4000-6000",
       "difficulty": "hard",
       "created_at": "2025-11-24T07:10:00.000000",
-      "completed_at": "2025-11-24T06:42:01.167414Z",
-      "completion_method": "implementation",
-      "implementation_notes": "Implemented via orchestration"
+      "reset_at": "2025-11-24T19:23:40.913637Z",
+      "reset_from": "completed"
     },
     {
       "id": "FEAT-071",
       "name": "Source Maps Support",
       "description": "Parse source map format (v3 specification), map minified positions to original source, integrate with error stack traces, support inline and external source maps.",
       "phase": "Phase 3: Browser Integration",
-      "status": "completed",
+      "status": "incomplete",
       "priority": "medium",
       "extraction_method": "llm",
       "template_id": null,
@@ -1473,16 +1403,15 @@
       "estimated_loc": "2000-3000",
       "difficulty": "medium",
       "created_at": "2025-11-24T07:10:00.000000",
-      "completed_at": "2025-11-24T06:22:25.770509Z",
-      "completion_method": "reconciliation",
-      "reconciliation_notes": "Detected as already implemented via /orch-reconcile-queue"
+      "reset_at": "2025-11-24T19:23:40.913637Z",
+      "reset_from": "completed"
     },
     {
       "id": "FEAT-072",
       "name": "DevTools Protocol Implementation",
       "description": "Implement Debugger domain (breakpoints, stepping, scope inspection), Runtime domain (evaluation, object inspection), Profiler domain (CPU profiling, heap snapshots), Console domain.",
       "phase": "Phase 3: Browser Integration",
-      "status": "completed",
+      "status": "incomplete",
       "priority": "medium",
       "extraction_method": "llm",
       "template_id": "devtools-debugger",
@@ -1493,16 +1422,15 @@
       "estimated_loc": "8000-12000",
       "difficulty": "hard",
       "created_at": "2025-11-24T07:10:00.000000",
-      "completed_at": "2025-11-24T06:22:25.770509Z",
-      "completion_method": "reconciliation",
-      "reconciliation_notes": "Detected as already implemented via /orch-reconcile-queue"
+      "reset_at": "2025-11-24T19:23:40.913637Z",
+      "reset_from": "completed"
     },
     {
       "id": "FEAT-073",
       "name": "Test262 Conformance Testing",
       "description": "Integrate Test262 conformance suite (50,000+ tests). Implementation stages: Core language (5,000), Built-ins (10,000), Modern features (15,000), Advanced (10,000), Annex B (5,000). Target 95%+ for production.",
       "phase": "Phase 1: Core Interpreter",
-      "status": "completed",
+      "status": "incomplete",
       "priority": "high",
       "extraction_method": "llm",
       "template_id": null,
@@ -1519,9 +1447,8 @@
         ]
       },
       "created_at": "2025-11-24T07:10:00.000000",
-      "completed_at": "2025-11-24T06:22:25.770509Z",
-      "completion_method": "reconciliation",
-      "reconciliation_notes": "Detected as already implemented via /orch-reconcile-queue"
+      "reset_at": "2025-11-24T19:23:40.913637Z",
+      "reset_from": "completed"
     }
   ]
 }
