@@ -1,0 +1,171 @@
+template_id: "gui-cross-platform-packaging"
+template_name: "Cross-Platform Application Packaging"
+category: "gui"
+difficulty: "medium"
+estimated_loc: "500-2000"
+
+keywords:
+  - "packaging"
+  - "distribution"
+  - "installer"
+  - "executable"
+  - "standalone"
+  - "pyinstaller"
+  - "bundle"
+  - "deploy"
+  - "release"
+
+parameters:
+  - name: "target_platforms"
+    type: "array"
+    options: ["windows", "macos", "linux"]
+  - name: "packaging_tool"
+    type: "string"
+    options: ["pyinstaller", "cx_freeze", "py2app", "cargo-bundle"]
+
+core_interfaces:
+  - name: "PackagingConfig"
+    methods:
+      - "def set_app_name(self, name: str)"
+      - "def set_icon(self, path: Path)"
+      - "def add_data_files(self, files: List[Path])"
+      - "def set_entry_point(self, module: str)"
+
+recommended_libraries:
+  rust:
+    - name: "cargo-bundle"
+      version: "0.6"
+      required: true
+      purpose: "Generate OS-specific app bundles"
+      registry_url: "https://crates.io/crates/cargo-bundle"
+    - name: "tauri"
+      version: "1.5"
+      required: false
+      purpose: "Build desktop apps with web frontends"
+      registry_url: "https://crates.io/crates/tauri"
+  python:
+    - name: "pyinstaller"
+      version: "6.3"
+      required: true
+      purpose: "Bundle Python apps into executables"
+      registry_url: "https://pypi.org/project/pyinstaller/"
+    - name: "cx-freeze"
+      version: "6.15"
+      required: false
+      purpose: "Alternative to PyInstaller"
+      registry_url: "https://pypi.org/project/cx-Freeze/"
+    - name: "py2app"
+      version: "0.28"
+      required: false
+      purpose: "macOS-specific bundling (.app)"
+      registry_url: "https://pypi.org/project/py2app/"
+    - name: "briefcase"
+      version: "0.3"
+      required: false
+      purpose: "BeeWare's packaging tool (all platforms)"
+      registry_url: "https://pypi.org/project/briefcase/"
+
+acceptance_criteria:
+  - "Generate standalone executables (no Python required)"
+  - "Bundle all dependencies (libraries, data files, icons)"
+  - "Platform-specific installers (MSI, DMG, DEB/RPM)"
+  - "Code signing support (Windows, macOS)"
+  - "Application icons on all platforms"
+  - "Auto-update mechanism (optional)"
+  - "Package size optimized (< 100MB for simple apps)"
+
+test_strategy:
+  unit_tests:
+    - "Build configuration validation"
+    - "Dependency detection"
+  integration_tests:
+    - "Full build pipeline (dev → package → test)"
+    - "Fresh install on clean OS"
+    - "Uninstall leaves no remnants"
+  platform_tests:
+    - "Windows: Run on Windows 10, 11"
+    - "macOS: Run on macOS 12+, test on Apple Silicon"
+    - "Linux: Test on Ubuntu, Fedora, Arch"
+  benchmarks:
+    - "Build time"
+    - "Package size vs features"
+
+implementation_hints:
+  - "PyInstaller: Use --onefile for single executable"
+  - "PyInstaller: Use --windowed to hide console on Windows"
+  - "Include hidden imports: --hidden-import module_name"
+  - "Add data files: --add-data 'src:dest'"
+  - "Specify icon: --icon=app.ico (Windows) or --icon=app.icns (macOS)"
+  - "Use .spec file for complex configurations"
+  - "Test on actual target OS (VMs or CI/CD)"
+  - "Sign binaries (codesign on macOS, signtool on Windows)"
+
+common_pitfalls:
+  - issue: "Missing DLL/dylib dependencies"
+    solution: "Use --copy-metadata, --collect-all for problematic packages"
+  - issue: "Large executable size (300MB+)"
+    solution: "Use --exclude-module to remove unused packages (e.g., matplotlib)"
+  - issue: "Antivirus false positives"
+    solution: "Code sign executable, submit to antivirus vendors"
+  - issue: "App fails on other machines"
+    solution: "Test on clean VM without dev tools installed"
+  - issue: "Data files not found at runtime"
+    solution: "Use sys._MEIPASS for PyInstaller, pkg_resources for general"
+  - issue: "macOS Gatekeeper blocking app"
+    solution: "Code sign with Apple Developer certificate, notarize"
+
+platform_specific:
+  windows:
+    - "Generate MSI installer with WiX or Inno Setup"
+    - "Sign with signtool.exe (requires code signing certificate)"
+    - "Icon: .ico format (multiple sizes: 16, 32, 48, 256)"
+  macos:
+    - "Create .app bundle with py2app or PyInstaller"
+    - "Code sign: codesign --deep --force --sign 'Developer ID' app.app"
+    - "Notarize: xcrun altool --notarize-app"
+    - "Icon: .icns format (1024x1024 with scaled versions)"
+  linux:
+    - "Create AppImage (portable) or DEB/RPM (distribution-specific)"
+    - "Use FPM (Effing Package Manager) for multiple formats"
+    - "Desktop entry: .desktop file in /usr/share/applications"
+    - "Icon: .png or .svg in /usr/share/icons"
+
+example_pyinstaller_spec: |
+  # app.spec
+  a = Analysis(
+      ['app.py'],
+      pathex=[],
+      binaries=[],
+      datas=[('assets', 'assets'), ('translations/*.qm', 'translations')],
+      hiddenimports=['PySide6.QtCore', 'PySide6.QtWidgets'],
+      hookspath=[],
+      hooksconfig={},
+      runtime_hooks=[],
+      excludes=['matplotlib', 'tkinter'],
+      win_no_prefer_redirects=False,
+      win_private_assemblies=False,
+      noarchive=False,
+  )
+  pyz = PYZ(a.pure, a.zipped_data)
+
+  exe = EXE(
+      pyz,
+      a.scripts,
+      a.binaries,
+      a.zipfiles,
+      a.datas,
+      [],
+      name='MyApp',
+      debug=False,
+      bootloader_ignore_signals=False,
+      strip=False,
+      upx=True,
+      upx_exclude=[],
+      runtime_tmpdir=None,
+      console=False,
+      icon='assets/icon.ico',
+  )
+
+related_templates:
+  - "template://gui/pyside6-application"
+  - "template://deployment/podman-containerization"

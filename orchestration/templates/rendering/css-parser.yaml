@@ -1,0 +1,95 @@
+template_id: "rendering-css-parser"
+template_name: "CSS Parser and Tokenizer"
+category: "rendering"
+difficulty: "hard"
+estimated_loc: "6000-10000"
+
+keywords:
+  - "css"
+  - "parser"
+  - "stylesheet"
+  - "selector"
+  - "style"
+  - "parsing"
+  - "tokenize"
+
+parameters:
+  - name: "css_version"
+    type: "string"
+    options: ["CSS2.1", "CSS3", "CSS4"]
+    default: "CSS3"
+  - name: "supported_modules"
+    type: "array"
+    options: ["selectors", "colors", "flexbox", "grid", "animations"]
+
+core_interfaces:
+  - name: "CssParser"
+    methods:
+      - "fn parse_stylesheet(input: &str) -> Result<Stylesheet, ParseError>"
+      - "fn parse_rule(input: &str) -> Result<Rule, ParseError>"
+      - "fn parse_declaration(input: &str) -> Result<Declaration, ParseError>"
+
+recommended_libraries:
+  rust:
+    - name: "cssparser"
+      version: "0.31"
+      required: true
+      purpose: "Low-level CSS tokenization"
+      registry_url: "https://crates.io/crates/cssparser"
+    - name: "selectors"
+      version: "0.25"
+      required: true
+      purpose: "CSS selector parsing"
+      registry_url: "https://crates.io/crates/selectors"
+    - name: "servo-arc"
+      version: "0.3"
+      required: false
+      purpose: "Atomic reference counting (Servo-compatible)"
+      registry_url: "https://crates.io/crates/servo-arc"
+  python:
+    - name: "tinycss2"
+      version: "1.2"
+      required: true
+      purpose: "CSS parser"
+      registry_url: "https://pypi.org/project/tinycss2/"
+    - name: "cssselect"
+      version: "1.2"
+      required: true
+      purpose: "CSS selector parsing"
+      registry_url: "https://pypi.org/project/cssselect/"
+
+acceptance_criteria:
+  - "Parses valid CSS without errors"
+  - "Handles malformed CSS gracefully (error recovery)"
+  - "Preserves source location for error reporting"
+  - "Performance: Parse 100KB CSS in < 50ms"
+
+test_strategy:
+  unit_tests:
+    - "Tokenizer for all CSS token types"
+    - "Rule parsing (style rules, @-rules)"
+    - "Declaration parsing (properties + values)"
+  integration_tests:
+    - "Full stylesheet parsing"
+    - "Error recovery on malformed input"
+  public_test_suites:
+    - name: "CSS WG Test Suite"
+      url: "https://github.com/web-platform-tests/wpt/tree/master/css"
+      target_pass_rate: 85
+
+implementation_hints:
+  - "Use cssparser crate for tokenization"
+  - "Implement error recovery following CSS spec"
+  - "Cache parsed stylesheets for performance"
+
+common_pitfalls:
+  - issue: "Not handling @charset rules"
+    solution: "Parse @charset first, update encoding"
+  - issue: "Memory leaks from circular references"
+    solution: "Use servo-arc for shared style data"
+  - issue: "Poor error recovery"
+    solution: "Follow CSS error handling spec"
+
+related_templates:
+  - "template://rendering/css-selector-engine"
+  - "template://rendering/css-cascade"

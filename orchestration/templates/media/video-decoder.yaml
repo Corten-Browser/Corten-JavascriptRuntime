@@ -1,0 +1,106 @@
+template_id: "media-video-decoder"
+template_name: "Video Codec Decoder"
+category: "media"
+difficulty: "expert"
+estimated_loc: "10000-20000"
+
+keywords:
+  - "video"
+  - "decoder"
+  - "codec"
+  - "h264"
+  - "h265"
+  - "vp9"
+  - "av1"
+  - "ffmpeg"
+
+parameters:
+  - name: "codecs"
+    type: "array"
+    options: ["H.264", "H.265/HEVC", "VP8", "VP9", "AV1"]
+  - name: "output_format"
+    type: "string"
+    options: ["YUV420p", "RGB24", "RGBA"]
+    default: "YUV420p"
+
+core_interfaces:
+  - name: "VideoDecoder"
+    methods:
+      - "fn new(codec: VideoCodec) -> Result<VideoDecoder, Error>"
+      - "async fn decode_frame(&mut self, packet: &Packet) -> Result<Frame, Error>"
+      - "fn flush(&mut self) -> Vec<Frame>"
+      - "fn configure(&mut self, config: DecoderConfig)"
+
+recommended_libraries:
+  rust:
+    - name: "ffmpeg-next"
+      version: "6.1"
+      required: true
+      purpose: "FFmpeg bindings for video decoding"
+      registry_url: "https://crates.io/crates/ffmpeg-next"
+    - name: "rav1e"
+      version: "0.7"
+      required: false
+      purpose: "Pure Rust AV1 encoder/decoder"
+      registry_url: "https://crates.io/crates/rav1e"
+    - name: "dav1d"
+      version: "0.10"
+      required: false
+      purpose: "Fast AV1 decoder (C library)"
+      registry_url: "https://crates.io/crates/dav1d"
+  python:
+    - name: "av"
+      version: "11.0"
+      required: true
+      purpose: "PyAV - FFmpeg bindings for Python"
+      registry_url: "https://pypi.org/project/av/"
+    - name: "opencv-python"
+      version: "4.9"
+      required: false
+      purpose: "Video processing (includes decoding)"
+      registry_url: "https://pypi.org/project/opencv-python/"
+
+acceptance_criteria:
+  - "Decode H.264 video streams"
+  - "Decode VP9 and AV1 streams"
+  - "Output YUV and RGB frames"
+  - "Handle different resolutions (SD, HD, 4K)"
+  - "Support hardware acceleration (if available)"
+  - "Performance: Decode 1080p@30fps in real-time"
+
+test_strategy:
+  unit_tests:
+    - "Codec initialization"
+    - "Frame decoding (single frame)"
+    - "Color space conversion"
+  integration_tests:
+    - "Full video stream decoding"
+    - "Multi-codec support"
+    - "Frame timestamp handling"
+  benchmarks:
+    - "Decode throughput (fps)"
+    - "Memory usage per frame"
+    - "Latency (packet → frame)"
+
+implementation_hints:
+  - "Use ffmpeg-next for broad codec support"
+  - "Enable hardware acceleration (VAAPI, NVDEC)"
+  - "Buffer decoded frames in circular buffer"
+  - "Handle B-frames (reordering)"
+
+common_pitfalls:
+  - issue: "Memory leaks from unreleased frames"
+    solution: "Implement Drop trait, release FFmpeg resources"
+  - issue: "Dropped frames under load"
+    solution: "Use frame buffer pool, prioritize I-frames"
+  - issue: "Incorrect timestamp calculation"
+    solution: "Use PTS from container, handle discontinuities"
+  - issue: "Hardware decoder not available"
+    solution: "Fallback to software decoder gracefully"
+
+depends_on:
+  - "template://media/media-streaming"
+
+related_templates:
+  - "template://media/audio-decoder"
+  - "template://rendering/paint-system"

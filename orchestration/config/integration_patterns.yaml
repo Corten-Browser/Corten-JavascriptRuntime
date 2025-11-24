@@ -1,0 +1,510 @@
+# Integration Failure Patterns
+# Part of v0.4.0 quality enhancement system
+#
+# This file contains common integration failure patterns, detection strategies,
+# and fix recommendations. Used by IntegrationPredictor to predict failures.
+
+version: "1.0.0"
+
+common_integration_failures:
+
+  # Data format and type mismatches
+  data_format_mismatch:
+    description: "Components use incompatible data formats"
+    detection_pattern: "different date/time/ID formats between components"
+    fix_strategy: "standardize on ISO8601 for dates, UUID for IDs"
+    test_generation: "create format validation tests"
+    severity: "critical"
+    examples:
+      - "Component A uses Unix timestamps, B uses ISO8601"
+      - "Component A uses integer IDs, B uses UUIDs"
+      - "Component A uses snake_case, B uses camelCase"
+    prevention:
+      - "Define data format standards in project documentation"
+      - "Use contract-first development"
+      - "Implement format validation at API boundaries"
+
+  enum_value_mismatch:
+    description: "Enums with same name but different values"
+    detection_pattern: "same enum name, different allowed values"
+    fix_strategy: "centralize enum definitions in shared library"
+    test_generation: "create enum validation tests"
+    severity: "critical"
+    examples:
+      - "Status enum: A=['active', 'inactive'], B=['enabled', 'disabled']"
+      - "Priority enum: A=[1,2,3], B=['low', 'medium', 'high']"
+    prevention:
+      - "Use shared enum definitions"
+      - "Version enums explicitly"
+      - "Document enum values in contracts"
+
+  null_handling_inconsistency:
+    description: "Inconsistent nullable field handling"
+    detection_pattern: "field nullable in one component, required in another"
+    fix_strategy: "standardize null handling across components"
+    test_generation: "create null handling tests"
+    severity: "warning"
+    examples:
+      - "Component A allows null email, B requires it"
+      - "Component A returns null for missing data, B returns empty string"
+    prevention:
+      - "Define null handling policy"
+      - "Use explicit null checks"
+      - "Document nullable fields in contracts"
+
+  # Error handling and propagation
+  missing_error_handling:
+    description: "Component calls dependency without error handling"
+    detection_pattern: "no try/catch on component calls"
+    fix_strategy: "add circuit breaker pattern"
+    test_generation: "create failure scenario tests"
+    severity: "critical"
+    examples:
+      - "Service A calls B without try/except"
+      - "No fallback when dependency fails"
+      - "Errors propagate without context"
+    prevention:
+      - "Use defensive programming"
+      - "Implement circuit breakers"
+      - "Add graceful degradation"
+
+  missing_retry_logic:
+    description: "No retry mechanism for transient failures"
+    detection_pattern: "direct calls without retry wrapper"
+    fix_strategy: "add exponential backoff retry mechanism"
+    test_generation: "create retry behavior tests"
+    severity: "warning"
+    examples:
+      - "Network call fails on temporary issue"
+      - "Database timeout not retried"
+      - "API rate limit not handled"
+    prevention:
+      - "Use retry libraries (tenacity, backoff)"
+      - "Implement exponential backoff"
+      - "Set max retry limits"
+
+  error_context_loss:
+    description: "Error context lost during propagation"
+    detection_pattern: "generic exceptions without wrapping"
+    fix_strategy: "preserve error context through exception chaining"
+    test_generation: "create error context tests"
+    severity: "warning"
+    examples:
+      - "catch Exception, raise generic error"
+      - "Lost original stack trace"
+      - "No correlation IDs"
+    prevention:
+      - "Use exception chaining (raise X from Y)"
+      - "Add correlation IDs"
+      - "Log errors at boundaries"
+
+  # Timeout and performance issues
+  timeout_cascade:
+    description: "Parent timeout too close to child timeout"
+    detection_pattern: "timeout_sum > parent_timeout"
+    fix_strategy: "adjust timeout hierarchy"
+    test_generation: "create timeout tests"
+    severity: "warning"
+    examples:
+      - "Service A timeout=10s, calls B with timeout=9s"
+      - "No buffer for network overhead"
+      - "Sequential calls exceed parent timeout"
+    prevention:
+      - "Parent timeout = sum(child timeouts) + overhead + buffer"
+      - "Use timeout budgets"
+      - "Monitor timeout metrics"
+
+  no_timeout_set:
+    description: "Component calls without timeout"
+    detection_pattern: "HTTP/RPC call without timeout parameter"
+    fix_strategy: "add explicit timeouts to all external calls"
+    test_generation: "create timeout tests"
+    severity: "critical"
+    examples:
+      - "requests.get() without timeout"
+      - "Database query without timeout"
+      - "gRPC call without deadline"
+    prevention:
+      - "Set default timeouts"
+      - "Use timeout decorators"
+      - "Enforce in code review"
+
+  blocking_io_in_async:
+    description: "Blocking I/O in async context"
+    detection_pattern: "sync calls in async function"
+    fix_strategy: "use async equivalents or run in executor"
+    test_generation: "create async behavior tests"
+    severity: "critical"
+    examples:
+      - "time.sleep() in async function"
+      - "requests.get() in asyncio context"
+      - "Blocking database calls in async handler"
+    prevention:
+      - "Use async libraries"
+      - "Run blocking calls in executor"
+      - "Use linting rules"
+
+  # Dependency and architecture issues
+  circular_dependency:
+    description: "Components have circular dependencies"
+    detection_pattern: "component cycle detected"
+    fix_strategy: "introduce event bus or mediator pattern"
+    test_generation: "create dependency tests"
+    severity: "critical"
+    examples:
+      - "A imports B, B imports A"
+      - "A calls B, B calls C, C calls A"
+      - "Mutual dependencies"
+    prevention:
+      - "Use dependency injection"
+      - "Introduce event bus"
+      - "Apply layered architecture"
+
+  missing_health_check:
+    description: "Component doesn't expose health endpoint"
+    detection_pattern: "no /health or /ready endpoint"
+    fix_strategy: "implement health check endpoints"
+    test_generation: "create health check tests"
+    severity: "warning"
+    examples:
+      - "No way to check if service is ready"
+      - "No dependency health checks"
+      - "No liveness probe"
+    prevention:
+      - "Implement /health endpoints"
+      - "Check dependency health"
+      - "Use standard health check format"
+
+  tight_coupling:
+    description: "Components tightly coupled through implementation details"
+    detection_pattern: "direct class imports across components"
+    fix_strategy: "communicate through contracts only"
+    test_generation: "create coupling tests"
+    severity: "warning"
+    examples:
+      - "Component A imports B's internal classes"
+      - "Shared mutable state"
+      - "Direct database access across boundaries"
+    prevention:
+      - "Use API contracts"
+      - "Hide implementation details"
+      - "Apply loose coupling principles"
+
+  # Data consistency issues
+  missing_transaction_boundary:
+    description: "Multi-component operation without transaction"
+    detection_pattern: "updates to multiple components without coordination"
+    fix_strategy: "implement saga pattern or 2PC"
+    test_generation: "create transaction tests"
+    severity: "critical"
+    examples:
+      - "Update A, then B - B fails, A not rolled back"
+      - "No compensation logic"
+      - "Inconsistent state across services"
+    prevention:
+      - "Use saga pattern"
+      - "Implement compensation"
+      - "Use event sourcing"
+
+  eventual_consistency_not_handled:
+    description: "Code assumes immediate consistency"
+    detection_pattern: "read immediately after write across components"
+    fix_strategy: "implement polling or event-based notification"
+    test_generation: "create consistency tests"
+    severity: "warning"
+    examples:
+      - "Write to A, immediately read from B"
+      - "No retry on stale reads"
+      - "Race conditions"
+    prevention:
+      - "Use event notifications"
+      - "Implement read-after-write checks"
+      - "Add retry logic"
+
+  # Security issues
+  credential_in_component:
+    description: "Component contains hardcoded credentials"
+    detection_pattern: "API keys, passwords in code"
+    fix_strategy: "use environment variables or secret management"
+    test_generation: "create security tests"
+    severity: "critical"
+    examples:
+      - "API_KEY = 'hardcoded-key'"
+      - "Database password in code"
+      - "AWS keys in repository"
+    prevention:
+      - "Use environment variables"
+      - "Use secret management (Vault, AWS Secrets Manager)"
+      - "Scan for secrets in CI/CD"
+
+  missing_authentication:
+    description: "Component-to-component calls not authenticated"
+    detection_pattern: "no auth headers in inter-component calls"
+    fix_strategy: "implement mutual TLS or JWT"
+    test_generation: "create authentication tests"
+    severity: "critical"
+    examples:
+      - "Service A calls B without credentials"
+      - "No API key validation"
+      - "Missing JWT verification"
+    prevention:
+      - "Implement mTLS"
+      - "Use service mesh"
+      - "Require authentication tokens"
+
+  # Resource management
+  connection_pool_exhaustion:
+    description: "Component doesn't use connection pooling"
+    detection_pattern: "new connection per request"
+    fix_strategy: "implement connection pooling"
+    test_generation: "create connection pool tests"
+    severity: "warning"
+    examples:
+      - "New DB connection every request"
+      - "No HTTP connection reuse"
+      - "File handles not closed"
+    prevention:
+      - "Use connection pools"
+      - "Implement connection limits"
+      - "Monitor connection metrics"
+
+  memory_leak_risk:
+    description: "Resources not properly released"
+    detection_pattern: "missing cleanup in error paths"
+    fix_strategy: "use context managers and proper cleanup"
+    test_generation: "create resource cleanup tests"
+    severity: "warning"
+    examples:
+      - "File not closed on exception"
+      - "Connection not released"
+      - "Cache grows unbounded"
+    prevention:
+      - "Use context managers (with)"
+      - "Implement try/finally"
+      - "Set resource limits"
+
+# Detection strategies
+detection_strategies:
+  static_analysis:
+    description: "Analyze code without execution"
+    techniques:
+      - "AST parsing for patterns"
+      - "Import graph analysis"
+      - "Contract schema comparison"
+    tools:
+      - "pylint"
+      - "mypy"
+      - "bandit"
+
+  contract_analysis:
+    description: "Compare API contracts for incompatibilities"
+    techniques:
+      - "Schema diff analysis"
+      - "Type compatibility checking"
+      - "Enum value comparison"
+    tools:
+      - "OpenAPI diff"
+      - "JSON Schema validator"
+
+  runtime_analysis:
+    description: "Detect issues during execution"
+    techniques:
+      - "Distributed tracing"
+      - "Error rate monitoring"
+      - "Timeout tracking"
+    tools:
+      - "OpenTelemetry"
+      - "Jaeger"
+      - "Prometheus"
+
+# Fix strategies by category
+fix_strategies:
+  data_format:
+    standardization:
+      - "Define project-wide data format standards"
+      - "Use ISO8601 for dates/times"
+      - "Use UUID for IDs"
+      - "Use consistent case conventions"
+
+    validation:
+      - "Validate at API boundaries"
+      - "Use schema validation (Pydantic, marshmallow)"
+      - "Implement format converters at boundaries"
+
+    documentation:
+      - "Document formats in OpenAPI specs"
+      - "Include format examples"
+      - "Maintain format registry"
+
+  error_handling:
+    defensive:
+      - "Use try/except for all external calls"
+      - "Implement circuit breakers"
+      - "Add fallback behavior"
+
+    retry:
+      - "Use exponential backoff"
+      - "Set max retry limits"
+      - "Implement idempotency"
+
+    observability:
+      - "Add correlation IDs"
+      - "Log errors with context"
+      - "Track error rates"
+
+  architecture:
+    decoupling:
+      - "Use event bus"
+      - "Implement mediator pattern"
+      - "Apply dependency inversion"
+
+    consistency:
+      - "Use saga pattern"
+      - "Implement compensation"
+      - "Use event sourcing"
+
+    resilience:
+      - "Implement health checks"
+      - "Add graceful degradation"
+      - "Use bulkheads"
+
+# Test generation templates
+test_templates:
+  data_format_test:
+    template: |
+      def test_{{format}}_compatibility():
+          """Test {{component_a}} and {{component_b}} use same {{format}} format."""
+          # Send data from A to B
+          # Verify B correctly parses format
+          pass
+
+  error_handling_test:
+    template: |
+      def test_error_handling_{{component_a}}_{{component_b}}():
+          """Test {{component_a}} handles {{component_b}} failures."""
+          # Simulate failure in B
+          # Verify A handles error gracefully
+          pass
+
+  timeout_test:
+    template: |
+      def test_timeout_cascade_{{component_a}}_{{component_b}}():
+          """Test timeout hierarchy between {{component_a}} and {{component_b}}."""
+          # Delay B response
+          # Verify A timeout > B timeout + overhead
+          pass
+
+  circular_dependency_test:
+    template: |
+      def test_no_circular_dependencies():
+          """Test no circular dependencies in component graph."""
+          # Build dependency graph
+          # Check for cycles
+          pass
+
+# Severity levels and impact
+severity_levels:
+  critical:
+    description: "Will cause runtime failures"
+    examples:
+      - "data_format_mismatch"
+      - "circular_dependency"
+      - "missing_error_handling"
+      - "no_timeout_set"
+    action: "Block integration until fixed"
+
+  warning:
+    description: "May cause issues under load or edge cases"
+    examples:
+      - "timeout_cascade"
+      - "missing_retry_logic"
+      - "null_handling_inconsistency"
+    action: "Fix before production deployment"
+
+  info:
+    description: "Best practice violations"
+    examples:
+      - "missing_health_check"
+      - "tight_coupling"
+    action: "Address in next iteration"
+
+# Recommended tools and libraries
+recommended_tools:
+  python:
+    error_handling:
+      - name: "tenacity"
+        purpose: "Retry with exponential backoff"
+        url: "https://github.com/jd/tenacity"
+
+      - name: "circuitbreaker"
+        purpose: "Circuit breaker pattern"
+        url: "https://github.com/fabfuel/circuitbreaker"
+
+    validation:
+      - name: "pydantic"
+        purpose: "Data validation and parsing"
+        url: "https://pydantic-docs.helpmanual.io/"
+
+      - name: "marshmallow"
+        purpose: "Schema validation"
+        url: "https://marshmallow.readthedocs.io/"
+
+    async:
+      - name: "asyncio"
+        purpose: "Async I/O"
+        url: "https://docs.python.org/3/library/asyncio.html"
+
+      - name: "aiohttp"
+        purpose: "Async HTTP client"
+        url: "https://docs.aiohttp.org/"
+
+    observability:
+      - name: "opentelemetry"
+        purpose: "Distributed tracing"
+        url: "https://opentelemetry.io/"
+
+      - name: "structlog"
+        purpose: "Structured logging"
+        url: "https://www.structlog.org/"
+
+# Integration best practices
+best_practices:
+  - id: "BP001"
+    title: "Use contract-first development"
+    description: "Define contracts before implementation"
+
+  - id: "BP002"
+    title: "Implement defensive error handling"
+    description: "Assume all external calls can fail"
+
+  - id: "BP003"
+    title: "Set explicit timeouts"
+    description: "Never make unbounded calls"
+
+  - id: "BP004"
+    title: "Use standardized data formats"
+    description: "ISO8601 for dates, UUID for IDs"
+
+  - id: "BP005"
+    title: "Implement health checks"
+    description: "Every component needs /health endpoint"
+
+  - id: "BP006"
+    title: "Add retry logic"
+    description: "Use exponential backoff for transient failures"
+
+  - id: "BP007"
+    title: "Monitor integration points"
+    description: "Track error rates, latency, timeouts"
+
+  - id: "BP008"
+    title: "Test failure scenarios"
+    description: "Test what happens when dependencies fail"
+
+  - id: "BP009"
+    title: "Use circuit breakers"
+    description: "Prevent cascade failures"
+
+  - id: "BP010"
+    title: "Document assumptions"
+    description: "Document timing, consistency, error handling"

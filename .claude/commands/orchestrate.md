@@ -6,6 +6,16 @@ description: "Autonomously orchestrate any change - automatically scales to task
 
 Execute any task with automatic complexity scaling from simple fixes to major enhancements.
 
+## Context Loading
+
+**At command start**, read orchestration rules from:
+- `orchestration/context/orchestration-rules.md` (if exists)
+
+**For sub-agents**, ensure Task prompts include:
+- `orchestration/context/component-rules.md` (generic component rules)
+- `components/[name]/component.yaml` (component metadata)
+- `components/[name]/CLAUDE.md` (component specifications)
+
 ## Overview
 
 This command automatically determines the right level of orchestration based on your request:
@@ -14,6 +24,313 @@ This command automatically determines the right level of orchestration based on 
 - **Level 3 (Full)**: Spec docs, architecture changes → 1-3 hours
 
 **You don't need to choose** - the system analyzes your request and scales appropriately.
+
+## Table of Contents
+
+- [Phase -1: Resume Workflow](#phase--1-resume-workflow-if---resume-flag-present)
+- [Phase 0: Scope Analysis](#phase-0-scope-analysis)
+- [Level 1: Direct Execution](#level-1-direct-execution)
+- [Level 2: Feature Orchestration](#level-2-feature-orchestration)
+- [Level 3: Full Orchestration](#level-3-full-orchestration)
+  - [Pre-Flight: Task Queue Initialization](#level-3-pre-flight-task-queue-initialization-mandatory)
+  - [Phase 1: Analysis & Architecture](#phase-1-analysis--architecture-think-hard---this-is-critical)
+  - [Phase 2: Component Creation](#phase-2-component-creation-execute-immediately)
+  - [Phase 3: Contracts & Setup](#phase-3-contracts--setup-execute-immediately)
+  - [Phase 4: Parallel Development](#phase-4-parallel-development-execute-immediately)
+  - [Phase 4.5: Contract Validation](#phase-45-contract-validation---pre-integration-gate-execute-immediately) *(via subagent)*
+  - [Phase 5: Integration Testing](#phase-5-integration-testing---absolute-gate-execute-immediately) *(via subagent)*
+  - [Phase 6: Completion Verification](#phase-6-completion-verification---zero-tolerance-execute-immediately) *(via subagent)*
+- [Execution Rules](#execution-rules-critical---read-carefully)
+
+
+
+## Command Usage
+
+```bash
+/orchestrate [flags] "task description"
+/orchestrate --help
+```
+
+## Flag Parsing
+
+**Before executing any phases, check for flags in user input.**
+
+### Check --help Flag
+
+If user input contains `--help`:
+1. Display help text below
+2. STOP (do not execute Phase 0 or any other phases)
+
+### Check --resume Flag
+
+If user input contains `--resume`:
+1. Skip to Phase -1: Resume Workflow (see Phase 3 implementation)
+2. Do not execute Phase 0 (Scope Analysis)
+
+### Check --level Flag
+
+If user input contains `--level=direct`, `--level=feature`, or `--level=full`:
+1. Parse specified level
+2. Skip Phase 0 (Scope Analysis)
+3. Execute specified level directly
+
+### Flag Precedence
+
+When multiple flags present:
+1. `--help` (highest - always takes precedence, stops execution)
+2. `--resume` (skips Phase 0, goes to resume workflow)
+3. `--level=X` (skips Phase 0, forces specific level)
+
+Examples:
+- `/orchestrate --help` → Display help, stop
+- `/orchestrate --resume` → Resume workflow
+- `/orchestrate --level=full "..."` → Force full orchestration
+- `/orchestrate --level=full --resume` → Resume at full orchestration level
+- `/orchestrate --help --resume` → Display help (help takes precedence)
+
+---
+
+## Help Text (displayed when --help flag present)
+
+### /orchestrate - Adaptive Orchestration Command
+
+**Purpose:** Autonomously orchestrate any task with automatic complexity scaling
+
+**Usage:**
+```bash
+/orchestrate "task description"                    # Auto-detect complexity
+/orchestrate --level=direct "task"                 # Force Level 1 (2-5 min)
+/orchestrate --level=feature "task"                # Force Level 2 (15-30 min)
+/orchestrate --level=full "task"                   # Force Level 3 (1-3 hours)
+/orchestrate --resume                              # Resume interrupted work
+/orchestrate --level=full --resume                 # Resume at specific level
+/orchestrate --help                                # Display this help
+```
+
+**Flags:**
+
+`--help`
+  Display this help message and exit
+  Takes precedence over all other flags
+
+`--level=direct | feature | full`
+  Force specific orchestration level, skip auto-detection
+  - direct:  Level 1 - Single file, simple changes (2-5 min)
+  - feature: Level 2 - Multi-component features (15-30 min)
+  - full:    Level 3 - Complete 6-phase workflow (1-3 hours)
+
+`--resume`
+  Resume interrupted orchestration from checkpoint or discovered state
+  Can combine with --level flag to resume at specific level
+
+**Execution Levels:**
+
+**Level 1 (Direct Execution)** - 2-5 minutes
+  When: Single file, < 100 lines, config changes, bug fixes, typos
+  Process: Edit → Test → Commit
+  Example: /orchestrate "fix timeout in config from 30 to 60"
+
+**Level 2 (Feature Orchestration)** - 15-30 minutes
+  When: 2-5 components, new feature, existing architecture
+  Process: Plan → Sub-Agents (parallel) → Integration → Verify
+  Example: /orchestrate "add password reset with email verification"
+
+**Level 3 (Full Orchestration)** - 1-3 hours
+  When: Spec document, new components, architecture changes, >5 components
+  Process: Complete 6-phase workflow (Phases 1-6)
+  Example: /orchestrate "implement social_features_spec.md"
+
+**Auto-Detection (Phase 0):**
+
+If no --level flag specified, analyzes request complexity:
+  - Specification document mentioned: +3 points
+  - Architecture refactoring keywords: +3 points
+  - New component or multiple components: +2 points
+  - Feature keywords (add, implement, create): +1 point
+  - Simple change keywords (fix typo, quick fix): -2 points
+
+Routing:
+  - Score < 2: Level 1 (Direct)
+  - Score 2-4: Level 2 (Feature)
+  - Score ≥ 5: Level 3 (Full)
+
+**Resume Capability:**
+
+If orchestration stops prematurely (crash, timeout, user interrupt):
+```bash
+/orchestrate --resume
+```
+
+System automatically:
+  1. Loads checkpoint (if exists) or discovers state from project
+  2. Shows resume summary with progress and blocking issues
+  3. Continues from last incomplete phase
+
+**Resume Examples:**
+
+Resume from checkpoint (preferred - most accurate):
+```bash
+# Orchestration interrupted during Phase 3
+/orchestrate --resume
+
+# Output shows:
+# Source: CHECKPOINT
+# Current Phase: 3
+# Completed: Phase 1, Phase 2
+# Remaining: Phase 3, 4, 5, 6
+# Continues from Phase 3...
+```
+
+Resume from state discovery (fallback - if no checkpoint):
+```bash
+# No checkpoint file exists, but work is in progress
+/orchestrate --resume
+
+# Output shows:
+# Source: DISCOVERY
+# Current Phase: 2 (estimated from git history and tests)
+# Components: auth-service, user-api, payment-gateway
+# Blocking Issues: [any discovered issues]
+# Continues from estimated phase...
+```
+
+Resume with level override:
+```bash
+# Resume but force full orchestration from Phase 1
+/orchestrate --resume --level=full
+
+# Ignores checkpoint's current_phase
+# Starts fresh from Phase 1 with discovered components
+```
+
+**Quality Standards (All Levels):**
+
+Required:
+  ✅ 100% test pass rate (unit, integration, contract, E2E)
+  ✅ TDD for new functionality (tests before code)
+  ✅ Conventional commit messages
+  ✅ Clean git status when complete
+
+Levels 2 & 3 additionally require:
+  ✅ 80%+ test coverage per component
+  ✅ All completion_verifier checks passing (11/11)
+  ✅ Contract validation passing (100%)
+  ✅ Integration coverage verified (100%)
+
+**Model Strategy:**
+
+Your model: Sonnet (default) or Opus (user choice)
+Sub-agent model: ALWAYS Sonnet (enforced via model="sonnet" parameter)
+
+All Task tool invocations MUST include:
+```python
+Task(
+    description="...",
+    prompt="...",
+    subagent_type="general-purpose",
+    model="sonnet"  # REQUIRED
+)
+```
+
+**Examples:**
+
+```bash
+# Auto-detect Level 1
+/orchestrate "fix typo in README"
+
+# Auto-detect Level 2
+/orchestrate "add two-factor authentication"
+
+# Auto-detect Level 3
+/orchestrate "implement payment_system_spec.md"
+
+# Force specific level
+/orchestrate --level=full "add caching layer"
+
+# Resume interrupted work (from checkpoint or discovery)
+/orchestrate --resume
+
+# Resume with level override (restart from Phase 1)
+/orchestrate --resume --level=full
+
+# Get help
+/orchestrate --help
+```
+
+**Documentation:**
+
+Full documentation: .claude/commands/orchestrate.md
+Project guidelines: CLAUDE.md
+Orchestration guide: docs/ORCHESTRATION-USAGE-GUIDE.md
+
+---
+
+**If --help flag NOT present, continue to next section (Phase -1 if --resume, otherwise Phase 0).**
+
+---
+
+
+## PHASE -1: RESUME WORKFLOW (if --resume flag present)
+
+**Only execute this phase if --resume flag is present in user input.**
+
+**If --resume flag NOT present, skip to Phase 0 (Scope Analysis).**
+
+### Resume via Internal Command
+
+**Launch the resume preparation subagent:**
+
+```python
+Task(
+    description="Prepare resume workflow",
+    prompt="""Execute the /orch-internal-resume command.
+
+Read and follow .claude/commands/orch-internal-resume.md completely.
+
+This command will:
+1. Check for existing resume context
+2. Load or generate resume context
+3. Display resume summary
+4. Determine execution path
+5. Initialize checkpoint system
+
+Report back with JSON:
+{
+    "resume_prepared": true/false,
+    "source": "checkpoint" or "discovery",
+    "current_phase": N,
+    "original_request": {...},
+    "components": [...],
+    "blocking_issues": [...],
+    "recommended_action": "resume from Phase N",
+    "resume_phase": N
+}""",
+    subagent_type="general-purpose",
+    model="sonnet"
+)
+```
+
+### After Subagent Returns
+
+**Process the resume response:**
+- If `resume_prepared` is false: Display error and stop
+- If `blocking_issues` not empty: Display issues to user
+- Use `resume_phase` to determine which phase to skip to
+- Set `resuming = True` and `current_phase = resume_phase`
+- Continue to the appropriate phase in Level 3
+
+**Phase Skipping Pattern:**
+
+Each phase (1-6) should check at start:
+
+```python
+# If resuming and current_phase > X, skip this phase
+if 'resuming' in globals() and resuming and current_phase > X:
+    print(f"⏭️  Skipping Phase {X} (already completed)")
+    # Continue to next phase
+```
+
+---
 
 ## PHASE 0: SCOPE ANALYSIS
 
@@ -183,7 +500,13 @@ Committing changes...
    ```python
    Task(
        description="Implement [feature] in [component]",
-       prompt="""Read components/[component]/CLAUDE.md.
+       prompt="""Read the following context files:
+       1. orchestration/context/component-rules.md (generic rules)
+       2. components/[component]/component.yaml (metadata)
+       3. components/[component]/CLAUDE.md (specifications)
+
+       If component.yaml doesn't exist, generate it first using:
+       python orchestration/context/component_yaml_generator.py components/[component]
 
        Implement [specific functionality] with strict TDD:
        - Write tests first
@@ -248,7 +571,10 @@ Phase 2: Launching sub-agents (parallel)...
 [Agent 1] auth-service:
 Task(
     description="Implement password reset in auth-service",
-    prompt="""Read components/auth-service/CLAUDE.md.
+    prompt="""Read the following context files:
+    1. orchestration/context/component-rules.md (generic rules)
+    2. components/auth_service/component.yaml (metadata)
+    3. components/auth_service/CLAUDE.md (specifications)
 
     Implement password reset endpoint with TDD:
     - POST /auth/reset-password (request reset)
@@ -298,366 +624,819 @@ Password reset feature fully implemented and tested.
 
 **When**: Specification document, new components, architecture changes, component splitting, >5 components
 
-**Process**: Complete orchestration workflow (all phases from orchestrate-full)
 
-### Execution Approach
+**This level executes the complete 6-phase workflow below.**
 
-**This level uses the FULL orchestration workflow from `/orchestrate-full`** but applied incrementally to existing project.
+**When triggered:**
+- Auto-detected (score ≥ 5 in Phase 0)
+- Explicit flag (--level=full)
+- Resume to phase 1-6 (--resume with current_phase 1-6)
 
-### Key Differences from orchestrate-full
+### Checkpoint Integration
 
-| Aspect | /orchestrate-full | /orchestrate (Level 3) |
-|--------|-------------------|------------------------|
-| **Starting Point** | Empty project | Existing project |
-| **Phase 1** | Design from scratch | Analyze current + plan changes |
-| **Phase 2** | Create all components | Create NEW + update existing |
-| **Scope** | Entire project | Spec document or major enhancement |
+When executing Level 3 (Phases 1-6), checkpoint system integrates automatically:
 
-### Execution Steps
+**At orchestration start:**
+```python
+from orchestration.checkpointing.orchestration_with_checkpoints import CheckpointedOrchestration
 
-Follow the complete workflow:
-
-**Phase 1: Analysis & Architecture**
-- Read specification document (if provided)
-- Analyze current architecture
-- Identify components to create/update/split
-- Plan contract changes
-- Document architecture decisions
-
-**Phase 2: Component Creation/Updates**
-- Create new components if needed
-- Split oversized components (>100K tokens)
-- Update existing component CLAUDE.md files
-- Create component directories and structure
-
-**Phase 3: Contracts & Setup**
-- Create/update API contracts in contracts/
-- Update shared libraries in shared-libs/
-- Validate all component configurations
-
-**Phase 4: Parallel Development**
-- Launch sub-agents for ALL affected components (new + updated)
-- Use `model="sonnet"` for all sub-agents
-- Enforce strict TDD
-- Monitor context limits
-- Each agent commits their work
-- Validate agent count against configured limits:
-  * Read orchestration/orchestration-config.json
-  * Default: max_parallel_agents = 5
-  * Warning threshold: warn_above = 7
-  * Recommended maximum: recommended_max = 10
-  * Absolute maximum: absolute_max = 15
-  * Use ContextWindowManager.validate_concurrent_agents() for validation
-  * If above absolute_max (15): ERROR - reduce count or queue work
-  * If above recommended_max (10): WARNING - show performance concerns
-  * If above warn_above (7): INFO - acceptable but monitor closely
-
-**Phase 4.5: Contract Validation**
-- Run contract tests for all components
-- Require 100% pass rate
-- Fix any API mismatches before integration
-
-**Phase 5: Integration Testing (Iterative)**
-- Run full integration test suite
-- Require 100% execution rate (no "NOT RUN")
-- Require 100% pass rate
-- If ANY failure: fix, re-run ENTIRE suite, verify 100%
-- Use integration_coverage_checker.py to verify
-
-**Phase 6: Completion Verification**
-- Run completion_verifier for ALL components (11/11 checks)
-- Verify project-type-specific UAT
-- Check integration execution coverage (100%)
-- Verify deployment readiness
-
-**Complete Workflow Reference**: See `claude-orchestration-system/.claude/commands/orchestrate-full.md` for full details on each phase.
-
-### Example Execution
-
-**User**: `/orchestrate "Implement social_features_spec.md"`
-
-**Your Response**:
+orchestrator = CheckpointedOrchestration(".")
+if not resuming:
+    orchestrator.start_orchestration(
+        user_prompt=user_request,
+        specification_files=specs_found,
+        components=planned_components
+    )
 ```
-Scope Analysis: Full Orchestration (Level 3)
-Complexity Score: 6
-Estimated Time: 1-3 hours
 
-Signals detected:
-  • Specification document mentioned (+3)
-  • Feature keyword: 'implement' (+1)
-  • Major feature set (from spec analysis) (+2)
+**At each phase transition:**
+```python
+orchestrator.complete_phase(
+    phase_number=X,
+    outputs={"phase_name": "...", ...}
+)
+```
 
-Reasoning: Specification document indicates major enhancement requiring full orchestration
+---
 
-Proceeding with Full Orchestration...
+## LEVEL 3 PRE-FLIGHT: TASK QUEUE INITIALIZATION (MANDATORY)
 
-Phase 1: Analyzing specification...
-→ Reading social_features_spec.md
-→ Features: friend lists, activity feed, notifications, messaging
+**This section runs ONLY for Level 3 orchestration, BEFORE Phase 1.**
 
-Architecture analysis:
-Current: 4 components (auth, user, db, notification)
-Planned: Add 2 new components, update 2 existing
+**Purpose**: Ensure the task queue is populated with features from ALL specification files before orchestration begins. This prevents the failure mode where specs exist but the queue is empty, causing orchestration to proceed without enforcement.
 
-Architecture plan:
-  NEW: social-graph component (friend relationships)
-  NEW: activity-feed component (event stream)
-  UPDATE: notification-service (social notifications)
-  UPDATE: database-manager (new tables)
+### Pre-Flight Skip Check (Resume Support)
 
-Phase 2: Creating new components...
-→ Creating social-graph component
-→ Creating activity-feed component
-→ Components ready with CLAUDE.md files
+```python
+# If resuming an orchestration that already completed pre-flight, skip
+if 'resuming' in globals() and resuming:
+    metadata_file = Path("orchestration/extraction_metadata.json")
+    if metadata_file.exists():
+        metadata = json.loads(metadata_file.read_text())
+        if metadata.get("llm_extraction_complete", False):
+            print("⏭️  Skipping Pre-Flight (extraction already complete)")
+            # Continue to Phase 1
+```
 
-Phase 3: Updating contracts...
-→ Creating contracts/social-graph-api.yaml
-→ Creating contracts/activity-feed-api.yaml
-→ Updating contracts/notification-service-api.yaml
+### Step 1: Check Extraction State
 
-Phase 4: Launching parallel development (4 components)...
-[Launch 3 agents initially, queue remaining work]
+Read `orchestration/extraction_metadata.json` to determine current state:
 
-[Agent 1] social-graph:
+```python
+from pathlib import Path
+import json
+
+metadata_file = Path("orchestration/extraction_metadata.json")
+
+if not metadata_file.exists():
+    extraction_state = "none"  # No extraction ever run
+elif not json.loads(metadata_file.read_text()).get("llm_extraction_complete", False):
+    extraction_state = "partial"  # Auto-init ran, LLM extraction pending
+else:
+    extraction_state = "complete"  # Both extractions complete
+```
+
+**Decision Logic:**
+- `extraction_state == "none"` → Run full extraction workflow (Steps 2-4)
+- `extraction_state == "partial"` → Run LLM extraction only (Step 4)
+- `extraction_state == "complete"` → Skip to Phase 1 (Step 5)
+
+### Step 2: Discover ALL Specification Files
+
+**Use the canonical spec discovery script** (single source of truth):
+
+```bash
+python3 orchestration/cli/spec_discovery.py
+```
+
+This script searches:
+- `specifications/` directory (all .md, .yaml, .yml, .json files, recursive)
+- `specs/` directory (all .md, .yaml, .yml, .json files, recursive)
+- `docs/` directory (files matching `*-spec*.md` or `*_spec*.md` pattern)
+
+**Check the output:**
+- If files found: Continue to Step 3
+- If no files found (exit code 1): Display warning and stop
+
+**If no spec files found:**
+```
+⚠️  WARNING: No specification files found
+
+Searched locations:
+  • specifications/ directory
+  • specs/ directory
+  • docs/*-spec*.md or docs/*_spec*.md pattern
+
+Level 3 orchestration requires specification documents.
+Either:
+  1. Add specification files to specifications/ directory
+  2. Use --level=feature for ad-hoc feature work
+  3. Use --level=direct for simple changes
+```
+
+### Step 3: Run Automated Extraction (auto_init)
+
+Run the automated regex-based extraction on ALL discovered spec files:
+
+```bash
+python3 orchestration/cli/auto_init.py
+```
+
+**Or programmatically:**
+```python
+import subprocess
+
+result = subprocess.run(
+    ["python3", "orchestration/cli/auto_init.py"],
+    capture_output=True,
+    text=True
+)
+
+if result.returncode != 0:
+    print("⚠️  Automated extraction encountered issues:")
+    print(result.stderr)
+    # Continue anyway - LLM extraction may succeed
+```
+
+**After auto_init completes:**
+- `orchestration/extraction_metadata.json` is created/updated
+- `orchestration/tasks/queue_state.json` may have features
+- `llm_extraction_complete` is `false` (LLM extraction still needed)
+
+### Step 4: Run LLM Feature Extraction (ALWAYS)
+
+**CRITICAL**: LLM extraction ALWAYS runs on first Level 3 orchestration, regardless of how many features auto_init found. This ensures maximum feature coverage.
+
+**Launch a dedicated subagent** to run `/orch-extract-features`:
+
+```
+Now launching LLM feature extraction subagent...
+
+This ensures ALL features from specifications are captured, including those
+that regex patterns missed.
+```
+
+**Use the Task tool to launch the subagent:**
+
+```python
 Task(
-    description="Implement social-graph component",
-    prompt="""Read components/social-graph/CLAUDE.md.
+    description="LLM feature extraction from specifications",
+    prompt="""Execute the /orch-extract-features command.
 
-    Implement complete social graph functionality per specification:
-    - Friend request management
-    - Friendship status tracking
-    - Graph queries (mutual friends, suggestions)
-    - Strict TDD, 80%+ coverage
-    - Commit: feat(social-graph): implement friend management""",
+This command will:
+1. Read orchestration/extraction_metadata.json to find spec files
+2. Detect implementation language from spec content
+3. Extract features using LLM intelligence (not regex)
+4. MERGE new features with existing queue (preserve existing IDs/statuses)
+5. Set llm_extraction_complete: true in extraction_metadata.json
+6. Commit results to git
+
+Follow the complete instructions in .claude/commands/orch-extract-features.md.
+
+IMPORTANT: This is the single source of truth for LLM extraction logic.
+Do not improvise - follow the documented steps exactly.
+
+Report back:
+- Number of features extracted
+- Any errors encountered
+- Confirmation that llm_extraction_complete is set to true""",
     subagent_type="general-purpose",
     model="sonnet"
 )
-
-[Agents 2-4 for other components...]
-
-[All agents complete]
-
-Phase 4.5: Contract validation...
-→ Running contract tests for all 4 components
-→ 100% pass rate achieved
-
-Phase 5: Integration testing...
-→ Running complete integration test suite
-→ First run: 18/20 passing (2 failures)
-→ Analyzing failures: API mismatch in activity-feed
-→ Fixing API mismatch...
-→ Re-running ENTIRE suite: 20/20 passing (100%)
-→ Verifying with integration_coverage_checker.py
-→ ✅ 100% execution, 100% pass
-
-Phase 6: Completion verification...
-→ social-graph: 11/11 checks passing
-→ activity-feed: 11/11 checks passing
-→ notification-service: 11/11 checks passing
-→ database-manager: 11/11 checks passing
-→ Integration coverage: 100%
-→ Test coverage: 85% (all components)
-
-✅ Complete (2.3 hours)
-Social features fully implemented per specification.
 ```
 
-### Guidelines
+**Why subagent instead of inline?**
+- Dedicated context window (21KB vs 85KB+ with full orchestrate.md)
+- Single source of truth (`orch-extract-features.md` defines all logic)
+- Better extraction results from focused context
+- Independently testable
 
-- **Full workflow** (all phases, no shortcuts)
-- **Architecture planning** (can create/split components)
-- **Parallel sub-agents** (respect concurrency limits)
-- **All quality gates** (100% everywhere)
-- **Iterative integration testing** (fix → re-run ALL → verify)
-- **Long duration** (1-3 hours for major features)
-- **Reference orchestrate-full.md** for complete phase details
+**After subagent completes, verify:**
+```python
+# Verify the flag is set
+metadata = json.loads(Path("orchestration/extraction_metadata.json").read_text())
+assert metadata.get("llm_extraction_complete") == True, "LLM extraction flag not set!"
+```
+
+### Step 5: Verify Queue is Populated
+
+Before proceeding to Phase 1, verify the task queue has features:
+
+```python
+queue_file = Path("orchestration/tasks/queue_state.json")
+
+if not queue_file.exists():
+    print("❌ ERROR: Task queue file does not exist after extraction")
+    print("   Expected: orchestration/tasks/queue_state.json")
+    sys.exit(1)
+
+queue = json.loads(queue_file.read_text())
+tasks = queue.get("tasks", [])
+
+if len(tasks) == 0:
+    print("❌ ERROR: Task queue is empty after extraction")
+    print("")
+    print("Specification files were found but no features could be extracted.")
+    print("This may indicate:")
+    print("  1. Spec files don't contain extractable features")
+    print("  2. Spec format is not recognized")
+    print("  3. Extraction encountered errors")
+    print("")
+    print("Please review your specification files and ensure they contain")
+    print("implementable features (checklists, deliverables, requirements).")
+    sys.exit(1)
+
+print(f"✅ Task queue initialized with {len(tasks)} features")
+print("")
+print("Pre-flight complete. Proceeding to Phase 1 (Architecture)...")
+```
+
+### Pre-Flight Summary Output
+
+After successful pre-flight, display:
+
+```
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  LEVEL 3 PRE-FLIGHT COMPLETE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Specification Discovery:
+  ✅ Found [N] specification files
+
+Extraction Results:
+  • Automated extraction: [X] features
+  • LLM extraction: [Y] features added
+  • Total features: [Z] features
+
+Task Queue Status:
+  ✅ Queue initialized: orchestration/tasks/queue_state.json
+  ✅ Features ready: [Z] pending tasks
+
+Extraction Tracking:
+  ✅ llm_extraction_complete: true
+  ✅ Subsequent Level 3 runs will skip extraction
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  Proceeding to Phase 1: Analysis & Architecture
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+```
 
 ---
 
-## EXECUTION RULES (ALL LEVELS)
+## PHASE 1: ANALYSIS & ARCHITECTURE (Think hard - this is critical)
 
-These rules apply regardless of orchestration level:
-
-### Continuous Execution
-
-**Execute continuously to 100% completion** - Do NOT stop at:
-- ❌ Integration test failures (fix them)
-- ❌ API mismatches (fix them)
-- ❌ "95% complete" (finish remaining 5%)
-- ❌ "Should I continue?" (YES, always)
-
-**ONLY stop if**:
-- ✅ 100% complete (all tests passing, all quality checks pass)
-- ✅ Specification contradiction (unresolvable ambiguity)
-- ✅ Missing credentials (user must provide)
-- ✅ User explicitly requests pause
-
-### Quality Standards
-
-**All levels must achieve**:
-- 100% test pass rate (unit, integration, contract, E2E)
-- 100% integration test execution rate (no "NOT RUN")
-- TDD for new functionality (tests before code)
-- Conventional commit messages
-- Clean git status when complete
-
-**Level 2 & 3 must also achieve**:
-- 80%+ test coverage per component
-- All completion_verifier checks passing (11/11)
-- Contract validation passing (100%)
-- Integration coverage verified
-
-### Model Selection
-
-**CRITICAL**: Always use `model="sonnet"` when launching Task tools:
+**Phase Skip Check (Resume Support):**
 ```python
-Task(
-    description="...",
-    prompt="...",
-    subagent_type="general-purpose",
-    model="sonnet"  # REQUIRED
+# If resuming and current_phase > 1, skip this phase
+if 'resuming' in globals() and resuming and current_phase > 1:
+    print("⏭️  Skipping Phase 1 (already completed)")
+    # Continue to Phase 2
+```
+
+Think hard about the optimal architecture considering:
+- Component boundaries and token budgets
+- Dependency relationships
+- Contract interfaces
+- Scalability and maintainability
+
+- **IMMEDIATE: Check all existing component sizes**
+  * If ANY component > 100,000 tokens: Schedule for splitting
+  * If ANY component > 120,000 tokens: STOP - split BEFORE proceeding
+- Read all specification documents
+- Analyze requirements, features, architecture
+- Design multi-component architecture with:
+  * Component boundaries (keep each <80k tokens optimal, NEVER >120k)
+  * Technology stack per component
+  * Inter-component contracts
+  * Shared libraries
+  * Dependency graph
+- Document the architecture plan
+- **Checkpoint:** Save Phase 1 completion
+  ```python
+  orchestrator.complete_phase(
+      phase_number=1,
+      outputs={
+          "phase_name": "Analysis & Architecture",
+          "components_planned": planned_components,
+          "architecture_documented": True
+      }
+  )
+  ```
+- PROCEED IMMEDIATELY to Phase 2 (do not wait for approval)
+
+## PHASE 2: COMPONENT CREATION (Execute immediately)
+
+**Phase Skip Check (Resume Support):**
+```python
+# If resuming and current_phase > 2, skip this phase
+if 'resuming' in globals() and resuming and current_phase > 2:
+    print("⏭️  Skipping Phase 2 (already completed)")
+    # Continue to Phase 3
+```
+- Create all necessary components using dynamic component creation workflow
+- For each component:
+  * Create directory structure
+  * Generate CLAUDE.md from template with component-specific instructions
+  * Create README.md
+  * Component files tracked in single project git repository
+- After ALL components created, display:
+  ```
+  ✅ Components created: [list component names]
+
+  Proceeding immediately to Phase 3 (contracts & setup)...
+  ```
+- **Checkpoint:** Save Phase 2 completion
+  ```python
+  orchestrator.complete_phase(
+      phase_number=2,
+      outputs={
+          "phase_name": "Component Creation",
+          "components_created": component_names,
+          "all_components_ready": True
+      }
+  )
+  ```
+- PROCEED IMMEDIATELY to Phase 3 (no restart, no pauses)
+
+## PHASE 3: CONTRACTS & SETUP (Execute immediately)
+
+**Phase Skip Check (Resume Support):**
+```python
+# If resuming and current_phase > 3, skip this phase
+if 'resuming' in globals() and resuming and current_phase > 3:
+    print("⏭️  Skipping Phase 3 (already completed)")
+    # Continue to Phase 4
+```
+- Create all API contracts in contracts/ directory
+- Define shared libraries in shared-libs/
+- Validate all component configurations
+- **Checkpoint:** Save Phase 3 completion
+  ```python
+  orchestrator.complete_phase(
+      phase_number=3,
+      outputs={
+          "phase_name": "Contracts & Setup",
+          "contracts_created": True,
+          "shared_libs_defined": True
+      }
+  )
+  ```
+
+## PHASE 4: PARALLEL DEVELOPMENT (Execute immediately)
+
+**Phase Skip Check (Resume Support):**
+```python
+# If resuming and current_phase > 4, skip this phase
+if 'resuming' in globals() and resuming and current_phase > 4:
+    print("⏭️  Skipping Phase 4 (already completed)")
+    # Continue to Phase 4.5
+```
+- **PRE-FLIGHT CHECKS (MANDATORY before launching EACH agent):**
+  * Verify component size < 90,000 tokens (adjusted for ~10,400 token CLAUDE.md overhead)
+  * If component > 90,000 tokens: Split FIRST, then launch agent
+  * Estimate task will not exceed 110,000 tokens
+  * Ensure total context needed < 130,000 tokens (emergency limit)
+- **Read agent limits from orchestration/config/orchestration.json:**
+  * max_parallel_agents: 5 (default maximum)
+  * warn_above: 7 (show info message)
+  * recommended_max: 10 (performance sweet spot)
+  * absolute_max: 15 (hard cap - error if exceeded)
+- **Validate agent count before launching:**
+  * Use: `# Agent limits configured in orchestration/config/orchestration.json`
+  * Call: `# Read agent limits from orchestration-config.json if validation needed`
+  * Check result['valid'] - if False, reduce count or queue work
+  * Display result['message'] and result['recommendation'] to user
+- Use Task tool to launch component agents in parallel
+- Respect validated concurrency limit (queue overflow work if needed)
+- **Each Task tool invocation MUST include:**
+  * `model="sonnet"` parameter (REQUIRED - forces Sonnet for coding)
+  * Component-specific prompt (use template from CLAUDE.md)
+  * Instruction to read components/X/CLAUDE.md
+  * Directory isolation enforcement (work ONLY in components/X/)
+  * Complete task requirements per specifications
+- **Example Task invocation (complex logic - thinking enabled):**
+  ```python
+  Task(
+      description="Implement auth-service component",
+      prompt="""Read the following context files:
+      1. orchestration/context/component-rules.md (generic rules)
+      2. components/auth_service/component.yaml (metadata)
+      3. components/auth_service/CLAUDE.md (specifications)
+
+      Think about security implications, token management, and session handling.
+
+      Implement authentication system with JWT, refresh tokens, and session management.
+      Follow TDD, achieve 80%+ coverage.""",
+      subagent_type="general-purpose",
+      model="sonnet"
+  )
+  ```
+
+- **Example Task invocation (routine work - thinking disabled):**
+  ```python
+  Task(
+      description="Implement user CRUD operations",
+      prompt="""Read components/user-api/CLAUDE.md.
+
+      Implement standard CRUD endpoints for user management.
+      Follow existing repository patterns, write tests.""",
+      subagent_type="general-purpose",
+      model="sonnet"
+  )
+  ```
+- Each component agent:
+  * Implements full feature set per specs
+  * Follows TDD (tests before code)
+  * Achieves 80%+ test coverage
+  * Maintains quality standards
+  * Commits work via retry wrapper: python orchestration/cli/git_retry.py "component-name" "message"
+- Monitor agent progress and collect results
+- Verify agents stayed within boundaries
+- Run quality verification on completed work
+- **CONTINUOUS MONITORING:**
+  * If any component approaches 100,000: Pause, split, resume
+  * NEVER allow component to exceed 120,000 tokens
+  * Abort operations that would exceed context limits
+
+**Phase 4 Completion Gate [v0.8.0]:**
+
+Before proceeding to Phase 4.5, verify:
+- ✅ All components implemented (100% of planned components)
+- ✅ All component tests passing (100% pass rate per component)
+- ✅ All agents completed and reported success
+- ✅ No components exceed size limits (< 120K tokens)
+- ✅ Quality verification passed for all components
+
+**If ANY item is ✗, DO NOT proceed. FIX IT FIRST.**
+
+**Do NOT**:
+- ❌ Create status report with "X% complete"
+- ❌ Stop and wait for user approval
+- ❌ Ask "should I continue to contract validation?"
+
+**Correct behavior**: Continue fixing until ALL items are ✅, then proceed to Phase 4.5 automatically.
+
+**Checkpoint:** Save Phase 4 completion
+```python
+orchestrator.complete_phase(
+    phase_number=4,
+    outputs={
+        "phase_name": "Parallel Development",
+        "all_components_complete": True,
+        "test_pass_rate": "100%"
+    }
 )
 ```
 
-Never omit the model parameter - sub-agents must use Sonnet for cost efficiency.
+## PHASE 4.5: CONTRACT VALIDATION - PRE-INTEGRATION GATE (Execute immediately)
+
+**Phase Skip Check (Resume Support):**
+```python
+# Note: Phase 4.5 is critical validation - generally should not be skipped
+# But if resuming from Phase 5+, we can skip
+if 'resuming' in globals() and resuming and current_phase > 4.5:
+    print("⏭️  Skipping Phase 4.5 (already completed)")
+    # Continue to Phase 5
+```
+
+**PURPOSE**: Catch API mismatches BEFORE running integration tests
+
+### Contract Validation via Internal Command
+
+**Launch the contract validation subagent:**
+
+```python
+Task(
+    description="Phase 4.5 contract validation",
+    prompt="""Execute the /orch-internal-contracts command.
+
+Read and follow .claude/commands/orch-internal-contracts.md completely.
+
+This is a PRE-INTEGRATION GATE. Do not proceed to Phase 5 if contracts fail.
+
+This command will:
+1. Run contract tests for each component
+2. Run contract validation tool
+3. Check for common API mismatches
+4. Optionally run active contract method validation
+
+Report back with JSON:
+{
+    "phase": 4.5,
+    "validation_passed": true/false,
+    "results_by_component": {"comp1": "pass", "comp2": "fail"},
+    "violations": [...],
+    "can_proceed": true/false
+}""",
+    subagent_type="general-purpose",
+    model="sonnet"
+)
+```
+
+### After Subagent Returns
+
+**Process the contract validation response:**
+- If `validation_passed` is false: Display violations and STOP
+- If `violations` not empty: Fix components and re-run
+- Only proceed to Phase 5 when `can_proceed` is true
+
+**Checkpoint:** Save Phase 4.5 completion
+```python
+orchestrator.complete_phase(
+    phase_number=4.5,
+    outputs={
+        "phase_name": "Contract Validation",
+        "contract_tests_passed": True,
+        "api_compliance_verified": True
+    }
+)
+```
+
+## PHASE 5: INTEGRATION TESTING - ABSOLUTE GATE (Execute immediately)
+
+**Phase Skip Check (Resume Support):**
+```python
+# If resuming and current_phase > 5, skip this phase
+if 'resuming' in globals() and resuming and current_phase > 5:
+    print("⏭️  Skipping Phase 5 (already completed)")
+    # Continue to Phase 6
+```
+
+**MANDATORY REQUIREMENT:**
+- Integration tests MUST achieve 100% pass rate
+- Integration tests MUST achieve 100% execution rate (no "NOT RUN")
+- Even ONE failure = STOP - DO NOT PROCEED
+- No exceptions, no overrides, no justifications
+
+### Integration Testing via Internal Command
+
+**Launch the integration testing subagent:**
+
+```python
+Task(
+    description="Phase 5 integration testing",
+    prompt="""Execute the /orch-internal-integration command.
+
+Read and follow .claude/commands/orch-internal-integration.md completely.
+
+CRITICAL: This is an ITERATIVE process. Fix failures and re-run until 100%.
+Do NOT report partial results. Keep working until 100% or permanently blocked.
+
+This command will:
+1. Validate integration tests (no-mocking policy)
+2. Run all integration tests
+3. Iteratively fix failures and re-run ENTIRE suite
+4. Verify 100% execution AND 100% pass rate
+
+Report back with JSON:
+{
+    "phase": 5,
+    "execution_rate": "100%",
+    "pass_rate": "100%",
+    "not_run_count": 0,
+    "total_tests": N,
+    "failures": [],
+    "can_proceed": true/false
+}""",
+    subagent_type="general-purpose",
+    model="sonnet"
+)
+```
+
+### After Subagent Returns
+
+**Process the integration testing response:**
+- If `can_proceed` is false: Display failures, launch fix agents, re-run Phase 5
+- If `execution_rate` < 100%: BLOCKING - fix and re-test
+- If `pass_rate` < 100%: BLOCKING - fix and re-test
+- Only proceed to Phase 6 when `can_proceed` is true
+
+**ABSOLUTE GATE**: Do not proceed to PHASE 6 until 100% integration pass rate achieved
+
+**Checkpoint:** Save Phase 5 completion
+```python
+orchestrator.complete_phase(
+    phase_number=5,
+    outputs={
+        "phase_name": "Integration Testing",
+        "integration_test_pass_rate": "100%",
+        "integration_test_execution_rate": "100%"
+    }
+)
+```
+
+## PHASE 6: COMPLETION VERIFICATION - ZERO TOLERANCE (Execute immediately)
+
+**Phase Skip Check (Resume Support):**
+```python
+# If resuming and current_phase > 6, skip this phase
+# (Though if current_phase > 6, project is complete)
+if 'resuming' in globals() and resuming and current_phase > 6:
+    print("⏭️  Skipping Phase 6 (already completed)")
+    print("✅ Project complete!")
+    # Skip to completion
+```
+
+### Completion Verification via Internal Command
+
+**Launch the completion verification subagent:**
+
+```python
+Task(
+    description="Phase 6 completion verification",
+    prompt="""Execute the /orch-internal-verify command.
+
+Read and follow .claude/commands/orch-internal-verify.md completely.
+
+CRITICAL: Include ACTUAL terminal output from UAT execution.
+Do NOT summarize - paste real output to prove verification happened.
+
+This command will:
+1. Run automated verification (completion_verifier.py for all components)
+2. Detect project type (CLI/Library/API/GUI)
+3. Execute type-specific User Acceptance Testing with REAL commands
+4. Verify all test pass rates (100% required)
+5. Run final acceptance gate
+6. Generate completion report
+
+Report back with JSON:
+{
+    "phase": 6,
+    "verification_passed": true/false,
+    "checks": {
+        "completion_verifier": "11/11 for all components",
+        "uat_type": "CLI|Library|API|GUI",
+        "uat_passed": true/false,
+        "test_pass_rate": "100%",
+        "test_execution_rate": "100%"
+    },
+    "failing_checks": [],
+    "uat_output": "[ACTUAL TERMINAL OUTPUT]",
+    "completion_report": "[MARKDOWN CONTENT]",
+    "can_proceed": true/false,
+    "project_complete": true/false
+}""",
+    subagent_type="general-purpose",
+    model="sonnet"
+)
+```
+
+### After Subagent Returns
+
+**Process the verification response:**
+- If `verification_passed` is false: Display failing_checks and fix issues
+- If `uat_passed` is false: Re-run UAT after fixes
+- If `project_complete` is true: Display completion report and announce success
+- Verify `uat_output` contains actual terminal output (not summaries)
+
+**Checkpoint:** Save Phase 6 completion (FINAL CHECKPOINT)
+```python
+orchestrator.complete_phase(
+    phase_number=6,
+    outputs={
+        "phase_name": "Completion Verification",
+        "all_checks_passed": True,
+        "project_complete": True,
+        "test_pass_rate": "100%",
+        "test_coverage": coverage_percentage
+    }
+)
+
+print("✅ All phases complete!")
+print("✅ Checkpoint saved - orchestration can be safely resumed if interrupted")
+```
 
 ---
 
-## EXAMPLES
+## EXECUTION RULES (CRITICAL - READ CAREFULLY):
 
-### Example 1: Simple Fix (Level 1)
+### Continuous Execution - NO PREMATURE STOPS
 
-**User**: `/orchestrate "Fix typo in auth-service README: 'authetication' → 'authentication'"`
+**THE IRON LAW**: Execute continuously from start to finish. Do NOT stop until 100% complete.
 
-**Execution**:
+**ONLY Stop When**:
+1. ALL phases complete (Phase 1-6, 100% passing tests, docs generated)
+2. Specification contains unresolvable contradiction
+3. User explicitly requests pause ("stop and wait for instructions")
+4. External system permanently unavailable AND blocking
+
+**NEVER Stop When**:
+❌ Integration tests failing (fix them)
+❌ API mismatches found (fix them)
+❌ 95% complete (finish the remaining 5%)
+❌ "User might want to know" (they want 100% complete)
+❌ "Should I continue?" (YES, always continue)
+❌ Tempted to create "status report" before 100% (DON'T)
+
+### The 95% Completion Anti-Pattern (AVOID)
+
+**Music Analyzer Failure #3 Scenario**:
 ```
-Scope Analysis: Direct Execution (Level 1)
-Score: -2 (simple change keyword)
-Time: 2-5 minutes
-
-Executing directly...
-
-File: components/auth-service/README.md
-Line 12: authetication → authentication
-
-No tests needed (documentation)
-
-Committed: docs(auth): fix typo in README
-
-✅ Complete (30 seconds)
-```
-
----
-
-### Example 2: Multi-Component Feature (Level 2)
-
-**User**: `/orchestrate "Add two-factor authentication"`
-
-**Execution**:
-```
-Scope Analysis: Feature Orchestration (Level 2)
-Score: 2 (feature keyword + moderate complexity)
-Time: 15-30 minutes
-
-Affected: auth-service, user-service, email-service
-
-[Create todo list with 5 phases]
-
-Phase 1: Analysis complete
-Phase 2: Launching 3 sub-agents (parallel)
-[Agents implement 2FA in each component]
-Phase 3: Integration tests 100% pass
-Phase 4: Quality verified (11/11 all components)
-
-✅ Complete (28 minutes)
+Orchestrator reached Phase 5, integration tests failing (0/4 passing)
+→ Created status report: "95% complete, integration fixes remaining"
+→ STOPPED and waited for user input
+→ WRONG - Should have fixed failures and continued to 100%
 ```
 
----
-
-### Example 3: Major Enhancement (Level 3)
-
-**User**: `/orchestrate "Implement payment_system_spec.md"`
-
-**Execution**:
+**What Should Have Happened**:
 ```
-Scope Analysis: Full Orchestration (Level 3)
-Score: 7 (spec doc + major scope)
-Time: 1-3 hours
-
-Reading spec: Payment processing, subscriptions, refunds
-
-Phase 1: Architecture (create 3 new components)
-Phase 2: Component creation
-Phase 3: Contracts setup
-Phase 4: Parallel development (6 components)
-Phase 4.5: Contract validation (100%)
-Phase 5: Integration testing (iterative to 100%)
-Phase 6: Completion verification (all pass)
-
-✅ Complete (2.1 hours)
+Orchestrator reached Phase 5, integration tests failing (0/4 passing)
+→ Analyzed failures: API mismatches (RhythmAnalyzer, BenefitScorer)
+→ Launched agents to fix API mismatches
+→ Re-ran integration tests (100% passing)
+→ Proceeded to Phase 6 (completion verification)
+→ Generated final documentation
+→ THEN reported: "Project 100% complete and deployment-ready"
 ```
 
----
+### Fix vs Ask Decision Framework
 
-## TROUBLESHOOTING
+**Fix Autonomously** (99% of cases):
+- API signature mismatches
+- Type errors (str vs int, dict vs object)
+- Missing optional parameters
+- Component communication errors
+- Integration test failures
+- Import errors
+- Configuration issues
+- Performance optimizations
 
-### Wrong Level Detected
+**Ask User** (1% of cases):
+- Specification contradicts itself fundamentally
+- Business logic has multiple valid interpretations
+- Security/privacy policy decisions
+- User preference required (UI colors, workflow order)
+- External API credentials needed
 
-**User can override**:
+**Rule of Thumb**: If the error message tells you what's wrong, FIX IT. Don't ask.
+
+### Examples of Autonomous Fixing
+
+**Scenario 1: API Mismatch**
 ```
-/orchestrate --level=direct "..."
-/orchestrate --level=feature "..."
-/orchestrate --level=full "..."
+ERROR: RhythmAnalyzer.analyze() missing required argument 'config'
+ERROR: BenefitScorer expected dict, got RhythmAnalysisResult object
+
+❌ WRONG Response:
+"Integration tests failing due to API mismatches. Should I fix these or wait for your review?"
+
+✅ CORRECT Response:
+"Integration tests failing - API mismatches detected. Fixing:
+1. Adding optional config parameter to RhythmAnalyzer.analyze()
+2. Updating BenefitScorer to accept dict or convert from object
+3. Re-running integration suite..."
+[Continues working until 100% pass rate achieved]
 ```
 
-### Unclear Request
-
-**If scope is ambiguous, ask ONE clarifying question**:
+**Scenario 2: Import Error**
 ```
-"Your request could be interpreted as [interpretation 1] or [interpretation 2].
+ERROR: ImportError: cannot import name 'AudioProcessor'
 
-Which did you mean?
-1. [Option 1] - Would use Level [X]
-2. [Option 2] - Would use Level [Y]
-"
+❌ WRONG Response:
+"Component import failing. Please advise on module structure."
+
+✅ CORRECT Response:
+"Import error detected - fixing module exports and re-testing..."
+[Fixes import, continues working]
 ```
 
-### Integration Tests Failing (Level 2 & 3)
+**Scenario 3: 95% Complete**
+```
+Status: Phases 1-4 complete, Phase 5 has 2 failing integration tests
 
-**Never proceed with failures**:
-1. Analyze error messages
-2. Fix issues autonomously
-3. Re-run ENTIRE integration suite
-4. Verify 100% execution + 100% pass
-5. Only then proceed
+❌ WRONG Response:
+"Project 95% complete. Integration fixes remaining. Ready for your review."
+[STOPS]
 
-### Component Too Large (Level 3)
+✅ CORRECT Response:
+"Phase 5 integration tests failing - analyzing and fixing..."
+[Fixes tests, completes Phase 6, generates docs, THEN reports 100%]
+```
 
-**If component exceeds 100K tokens**:
-1. Use component splitting workflow
-2. Create new components from oversized one
-3. Update contracts
-4. Re-run integration tests
+### Trust Your Judgment
 
----
+From CLAUDE.md:
+> "Make ALL architectural and implementation decisions autonomously based on specifications"
+> "Trust your architectural judgment"
+> "Break and improve code freely (0.x.x pre-release policy)"
 
-## WHEN TO USE /orchestrate vs /orchestrate-full
+**This means**:
+- You CAN fix API mismatches
+- You CAN modify component interfaces
+- You CAN refactor to make tests pass
+- You CAN make implementation decisions
+- You DON'T need permission to fix technical issues
 
-| Situation | Command | Reason |
-|-----------|---------|--------|
-| **New project from scratch** | `/orchestrate-full` | Creates entire project structure |
-| **Add feature to existing project** | `/orchestrate` | Adapts to existing architecture |
-| **Fix bug** | `/orchestrate` | Auto-detects as Level 1 |
-| **Implement spec doc** | `/orchestrate` | Auto-detects as Level 3 |
-| **"Just build X"** | `/orchestrate-full` | Starting from nothing |
-| **"Add X to the project"** | `/orchestrate` | Working with existing code |
+**API mismatches are implementation details, not specification ambiguities.**
 
----
+### Additional Execution Guidelines
 
-BEGIN EXECUTION NOW
+- Make ALL architectural and implementation decisions autonomously based on specifications
+- Do NOT ask for plan approval - create plan and execute immediately
+- Do NOT ask for implementation approval - implement based on specs
+- Use Task tool for parallel component agent execution
+- ONLY ask questions if specifications are genuinely ambiguous or contradictory
+- Break and improve code freely (0.x.x pre-release policy)
+- Prefer clean code over backwards compatibility
+- Trust your architectural judgment
 
-1. Analyze user request (Phase 0)
-2. Determine orchestration level
-3. Announce analysis result
-4. Execute with appropriate level's process
-5. Continue to 100% completion

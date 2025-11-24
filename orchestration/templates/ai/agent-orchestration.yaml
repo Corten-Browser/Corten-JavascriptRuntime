@@ -1,0 +1,183 @@
+template_id: "ai-agent-orchestration"
+template_name: "Multi-Agent Orchestration System"
+category: "ai"
+difficulty: "expert"
+estimated_loc: "6000-12000"
+
+keywords:
+  - "agent"
+  - "orchestration"
+  - "multi-agent"
+  - "task delegation"
+  - "coordination"
+  - "workflow"
+  - "ai agent"
+  - "autonomous"
+  - "llm agent"
+
+parameters:
+  - name: "coordination_pattern"
+    type: "string"
+    options: ["centralized", "decentralized", "hierarchical"]
+    default: "centralized"
+  - name: "features"
+    type: "array"
+    options: ["task_queue", "state_management", "agent_communication", "error_recovery"]
+
+core_interfaces:
+  - name: "Orchestrator"
+    methods:
+      - "async fn spawn_agent(&mut self, agent_type: AgentType, task: Task) -> AgentId"
+      - "async fn delegate_task(&mut self, task: Task) -> Result<AgentId, Error>"
+      - "async fn collect_results(&mut self) -> Vec<AgentResult>"
+      - "fn get_agent_status(&self, agent_id: AgentId) -> AgentStatus"
+  - name: "Agent"
+    methods:
+      - "async fn execute(&mut self, task: Task) -> Result<AgentResult, Error>"
+      - "async fn communicate(&self, message: Message, target: AgentId)"
+      - "fn get_capabilities(&self) -> Vec<Capability>"
+
+recommended_libraries:
+  rust:
+    - name: "tokio"
+      version: "1.35"
+      required: true
+      purpose: "Async runtime for concurrent agents"
+      registry_url: "https://crates.io/crates/tokio"
+    - name: "async-channel"
+      version: "2.1"
+      required: true
+      purpose: "Message passing between agents"
+      registry_url: "https://crates.io/crates/async-channel"
+    - name: "serde"
+      version: "1.0"
+      required: true
+      purpose: "Serialize agent state and messages"
+      registry_url: "https://crates.io/crates/serde"
+  python:
+    - name: "asyncio"
+      version: "builtin"
+      required: true
+      purpose: "Async/await for concurrent agents"
+      registry_url: "https://docs.python.org/3/library/asyncio.html"
+    - name: "celery"
+      version: "5.3"
+      required: false
+      purpose: "Distributed task queue (for production)"
+      registry_url: "https://pypi.org/project/celery/"
+    - name: "ray"
+      version: "2.9"
+      required: false
+      purpose: "Distributed computing framework"
+      registry_url: "https://pypi.org/project/ray/"
+    - name: "langgraph"
+      version: "0.0.18"
+      required: false
+      purpose: "LangChain's graph-based agent orchestration"
+      registry_url: "https://pypi.org/project/langgraph/"
+
+acceptance_criteria:
+  - "Spawn multiple agents concurrently"
+  - "Delegate tasks based on agent capabilities"
+  - "Inter-agent communication (message passing)"
+  - "Task queue with priority"
+  - "Agent state persistence (checkpointing)"
+  - "Error recovery (retry failed tasks)"
+  - "Graceful shutdown (cancel running agents)"
+  - "Performance: Coordinate 10+ concurrent agents"
+
+test_strategy:
+  unit_tests:
+    - "Task delegation logic"
+    - "Agent capability matching"
+    - "Message routing"
+    - "State serialization/deserialization"
+  integration_tests:
+    - "Multi-agent workflow (research task with 5 agents)"
+    - "Error recovery (agent failure, retry)"
+    - "Concurrent task execution"
+  stress_tests:
+    - "Scale to 50+ concurrent agents"
+    - "High message throughput (100 msg/sec)"
+  benchmarks:
+    - "Task delegation latency"
+    - "Message passing overhead"
+
+implementation_hints:
+  - "Use task queue pattern (producer-consumer)"
+  - "Assign agent IDs (UUID or sequential)"
+  - "Implement agent registry (track capabilities, status)"
+  - "Use channels for inter-agent communication"
+  - "Checkpoint agent state periodically (for recovery)"
+  - "Implement timeout for long-running agents"
+  - "Use structured logging (trace agent actions)"
+  - "Consider using actor model (one task per agent)"
+
+common_pitfalls:
+  - issue: "Deadlock from circular dependencies"
+    solution: "Design acyclic task graph, use timeouts"
+  - issue: "Agent state inconsistency"
+    solution: "Use transactional updates, checkpointing"
+  - issue: "Memory leaks from unclosed agents"
+    solution: "Implement proper shutdown, cancel tasks"
+  - issue: "Poor load balancing"
+    solution: "Implement work-stealing queue or round-robin"
+  - issue: "Lost messages between agents"
+    solution: "Use reliable message queue (acknowledge receipt)"
+  - issue: "No visibility into agent progress"
+    solution: "Implement status reporting (heartbeat, progress %)"
+
+orchestration_patterns:
+  centralized:
+    description: "Single orchestrator delegates all tasks"
+    pros: "Simple, easy to debug, centralized control"
+    cons: "Single point of failure, scaling bottleneck"
+  decentralized:
+    description: "Agents coordinate peer-to-peer"
+    pros: "No bottleneck, resilient to failures"
+    cons: "Complex, harder to debug"
+  hierarchical:
+    description: "Tree of orchestrators (meta-agents)"
+    pros: "Scales well, natural task decomposition"
+    cons: "More complex than centralized"
+
+example_workflow: |
+  # Research Agent System (Python)
+
+  class Orchestrator:
+      def __init__(self):
+          self.agents = {}
+          self.task_queue = asyncio.Queue()
+
+      async def research_topic(self, topic: str):
+          # Spawn specialized agents
+          search_agent = await self.spawn_agent(SearchAgent)
+          analysis_agent = await self.spawn_agent(AnalysisAgent)
+          writer_agent = await self.spawn_agent(WriterAgent)
+
+          # Delegate tasks
+          search_results = await search_agent.search(topic)
+          analysis = await analysis_agent.analyze(search_results)
+          report = await writer_agent.write_report(analysis)
+
+          return report
+
+  class SearchAgent(Agent):
+      async def search(self, topic: str):
+          # Perform web search, return results
+          pass
+
+  class AnalysisAgent(Agent):
+      async def analyze(self, data):
+          # Use LLM to analyze data
+          pass
+
+  class WriterAgent(Agent):
+      async def write_report(self, analysis):
+          # Generate final report
+          pass
+
+related_templates:
+  - "template://ai/llm-client-integration"
+  - "template://data/data-validation"
+  - "template://quality/logging-observability"

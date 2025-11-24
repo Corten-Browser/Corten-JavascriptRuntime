@@ -1,0 +1,137 @@
+template_id: "scientific-data-analysis"
+template_name: "Scientific Data Analysis and Statistics"
+category: "scientific"
+difficulty: "medium"
+estimated_loc: "3000-6000"
+
+keywords:
+  - "data analysis"
+  - "statistics"
+  - "statistical"
+  - "hypothesis"
+  - "regression"
+  - "correlation"
+  - "data science"
+  - "analysis"
+  - "pandas"
+  - "dataframe"
+
+parameters:
+  - name: "analysis_type"
+    type: "array"
+    options: ["descriptive", "inferential", "regression", "time_series"]
+  - name: "data_scale"
+    type: "string"
+    options: ["small", "medium", "large"]
+    default: "medium"
+
+core_interfaces:
+  - name: "DataAnalyzer"
+    methods:
+      - "fn load_data(&mut self, path: &Path) -> Result<DataFrame, Error>"
+      - "fn describe(&self) -> Statistics"
+      - "fn correlation(&self, method: CorrelationMethod) -> Matrix"
+      - "fn test_hypothesis(&self, test: HypothesisTest) -> TestResult"
+  - name: "StatisticalTest"
+    methods:
+      - "fn t_test(&self, sample1: &[f64], sample2: &[f64]) -> TTestResult"
+      - "fn anova(&self, groups: &[&[f64]]) -> AnovaResult"
+      - "fn chi_square(&self, observed: &[f64], expected: &[f64]) -> ChiSquareResult"
+
+recommended_libraries:
+  rust:
+    - name: "polars"
+      version: "0.36"
+      required: true
+      purpose: "Fast DataFrame library (pandas alternative)"
+      registry_url: "https://crates.io/crates/polars"
+    - name: "linfa"
+      version: "0.7"
+      required: true
+      purpose: "Machine learning and statistical algorithms"
+      registry_url: "https://crates.io/crates/linfa"
+    - name: "statrs"
+      version: "0.16"
+      required: true
+      purpose: "Statistical distributions and tests"
+      registry_url: "https://crates.io/crates/statrs"
+    - name: "ndarray-stats"
+      version: "0.5"
+      required: false
+      purpose: "Statistical functions for ndarray"
+      registry_url: "https://crates.io/crates/ndarray-stats"
+  python:
+    - name: "pandas"
+      version: "2.1"
+      required: true
+      purpose: "DataFrame manipulation and analysis"
+      registry_url: "https://pypi.org/project/pandas/"
+    - name: "scipy"
+      version: "1.11"
+      required: true
+      purpose: "scipy.stats for statistical tests"
+      registry_url: "https://pypi.org/project/scipy/"
+    - name: "statsmodels"
+      version: "0.14"
+      required: true
+      purpose: "Advanced statistical models (ANOVA, regression)"
+      registry_url: "https://pypi.org/project/statsmodels/"
+    - name: "scikit-learn"
+      version: "1.3"
+      required: false
+      purpose: "Machine learning algorithms"
+      registry_url: "https://pypi.org/project/scikit-learn/"
+
+acceptance_criteria:
+  - "Load CSV/Excel/Parquet data files"
+  - "Compute descriptive statistics (mean, median, std, quartiles)"
+  - "Perform hypothesis tests (t-test, ANOVA, chi-square)"
+  - "Calculate correlations (Pearson, Spearman, Kendall)"
+  - "Handle missing data (imputation, removal)"
+  - "Regression analysis (linear, polynomial)"
+  - "Performance: Process 1M rows in < 10 seconds"
+
+test_strategy:
+  unit_tests:
+    - "Statistical calculations (mean, variance, etc.)"
+    - "Hypothesis test implementations"
+    - "Correlation coefficient calculations"
+    - "Missing data handling strategies"
+  integration_tests:
+    - "End-to-end analysis pipeline"
+    - "Multiple data formats (CSV, Parquet, Excel)"
+    - "Large dataset processing"
+  validation_tests:
+    - "Compare results with R/SPSS on standard datasets"
+    - "Known statistical results (Fisher's iris dataset)"
+  benchmarks:
+    - "DataFrame operations vs data size"
+    - "Statistical test performance"
+
+implementation_hints:
+  - "Use polars for Rust (faster than pandas in many cases)"
+  - "pandas + scipy.stats for Python (mature ecosystem)"
+  - "Implement data pipeline pattern (load → clean → analyze → report)"
+  - "Cache intermediate results for large datasets"
+  - "Use lazy evaluation (polars LazyFrame, pandas query)"
+  - "Export results to multiple formats (CSV, JSON, Excel)"
+
+common_pitfalls:
+  - issue: "Multiple testing without correction"
+    solution: "Apply Bonferroni or FDR correction for multiple comparisons"
+  - issue: "Ignoring assumptions (normality, homoscedasticity)"
+    solution: "Test assumptions first (Shapiro-Wilk, Levene's test)"
+  - issue: "Confusion between correlation and causation"
+    solution: "Document that correlation ≠ causation in outputs"
+  - issue: "Memory errors on large datasets"
+    solution: "Use chunked reading, lazy evaluation, or streaming"
+  - issue: "Missing data handled incorrectly"
+    solution: "Explicit strategy: remove, impute (mean/median/forward fill)"
+
+depends_on:
+  - "template://data/data-validation"
+
+related_templates:
+  - "template://scientific/scientific-visualization"
+  - "template://scientific/numerical-simulation"
+  - "template://data/database-abstraction"

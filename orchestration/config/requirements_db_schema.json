@@ -1,0 +1,172 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Requirements Traceability Database Schema",
+  "description": "JSON schema for the requirements traceability database (requirements_db.json)",
+  "type": "object",
+  "patternProperties": {
+    "^REQ-\\d+$": {
+      "type": "object",
+      "required": ["requirement", "implementations", "tests"],
+      "properties": {
+        "requirement": {
+          "type": "object",
+          "required": ["id", "text", "source", "priority", "category", "status", "created_at"],
+          "properties": {
+            "id": {
+              "type": "string",
+              "pattern": "^REQ-\\d+$",
+              "description": "Unique requirement identifier (e.g., REQ-001)"
+            },
+            "text": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Full text of the requirement"
+            },
+            "source": {
+              "type": "string",
+              "pattern": "^.+:line:\\d+$",
+              "description": "Source file and line number (e.g., 'spec.md:line:42')"
+            },
+            "priority": {
+              "type": "string",
+              "enum": ["MUST", "SHOULD", "MAY"],
+              "description": "Requirement priority level"
+            },
+            "category": {
+              "type": "string",
+              "description": "Functional category (e.g., 'authentication', 'payment', 'security')"
+            },
+            "status": {
+              "type": "string",
+              "enum": ["pending", "implemented", "tested", "complete"],
+              "description": "Current implementation status"
+            },
+            "created_at": {
+              "type": "string",
+              "format": "date-time",
+              "description": "ISO 8601 timestamp when requirement was added"
+            }
+          }
+        },
+        "implementations": {
+          "type": "array",
+          "description": "List of code locations implementing this requirement",
+          "items": {
+            "type": "object",
+            "required": ["file", "line", "function", "description"],
+            "properties": {
+              "file": {
+                "type": "string",
+                "description": "Relative path to source file"
+              },
+              "line": {
+                "type": "integer",
+                "minimum": 1,
+                "description": "Line number in source file"
+              },
+              "function": {
+                "type": ["string", "null"],
+                "description": "Function/method name if applicable"
+              },
+              "description": {
+                "type": "string",
+                "description": "Brief description of implementation"
+              }
+            }
+          }
+        },
+        "tests": {
+          "type": "array",
+          "description": "List of tests validating this requirement",
+          "items": {
+            "type": "object",
+            "required": ["file", "line", "test_name", "status"],
+            "properties": {
+              "file": {
+                "type": "string",
+                "description": "Relative path to test file"
+              },
+              "line": {
+                "type": "integer",
+                "minimum": 1,
+                "description": "Line number in test file"
+              },
+              "test_name": {
+                "type": "string",
+                "description": "Name of the test function/method"
+              },
+              "status": {
+                "type": "string",
+                "enum": ["passing", "failing", "not_run"],
+                "description": "Test execution status"
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "additionalProperties": false,
+  "examples": [
+    {
+      "REQ-001": {
+        "requirement": {
+          "id": "REQ-001",
+          "text": "User MUST be able to login with email and password",
+          "source": "docs/requirements.md:line:15",
+          "priority": "MUST",
+          "category": "authentication",
+          "status": "complete",
+          "created_at": "2025-11-11T16:00:00Z"
+        },
+        "implementations": [
+          {
+            "file": "components/auth/src/login.py",
+            "line": 42,
+            "function": "authenticate_user",
+            "description": "Implements REQ-001"
+          }
+        ],
+        "tests": [
+          {
+            "file": "components/auth/tests/test_login.py",
+            "line": 15,
+            "test_name": "test_req_001_login_with_valid_credentials",
+            "status": "passing"
+          },
+          {
+            "file": "components/auth/tests/test_login.py",
+            "line": 28,
+            "test_name": "test_req_001_login_with_invalid_credentials",
+            "status": "passing"
+          }
+        ]
+      },
+      "REQ-002": {
+        "requirement": {
+          "id": "REQ-002",
+          "text": "System SHOULD send email confirmation after registration",
+          "source": "docs/requirements.md:line:23",
+          "priority": "SHOULD",
+          "category": "authentication",
+          "status": "implemented",
+          "created_at": "2025-11-11T16:00:00Z"
+        },
+        "implementations": [
+          {
+            "file": "components/auth/src/registration.py",
+            "line": 78,
+            "function": "send_confirmation_email",
+            "description": "Implements REQ-002"
+          }
+        ],
+        "tests": []
+      }
+    }
+  ],
+  "definitions": {
+    "requirement_trace": {
+      "description": "Complete traceability information for a single requirement"
+    }
+  }
+}

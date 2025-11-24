@@ -1,0 +1,132 @@
+{
+  "version": "0.14.0",
+  "orchestration": {
+    "max_parallel_agents": 5,
+    "recommended_max": 10,
+    "warn_above": 7,
+    "absolute_max": 15,
+    "queue_overflow": true,
+    "execution_mode": "task-tool",
+    "isolation_method": "instruction-based"
+  },
+  "context_limits": {
+    "optimal_tokens": 70000,
+    "warning_tokens": 90000,
+    "split_trigger_tokens": 110000,
+    "emergency_tokens": 130000,
+    "approximation_ratio": 10,
+    "_comment": "Adjusted for ~10,400 token CLAUDE.md overhead (1,061 lines)"
+  },
+  "autonomous_operations": {
+    "auto_split_enabled": true,
+    "pre_flight_checks": true,
+    "context_safety_margin": 20000,
+    "split_planning_buffer": 40000,
+    "abort_if_insufficient_context": true,
+    "_comment": "Autonomous management without user intervention"
+  },
+  "quality_standards": {
+    "min_test_coverage": 80,
+    "enforce_tdd": true,
+    "enforce_bdd": true,
+    "quality_gates_required": true,
+    "gates": [
+      "test_coverage",
+      "linting",
+      "formatting",
+      "complexity",
+      "security",
+      "documentation",
+      "contract_compliance",
+      "integration_tests",
+      "feature_coverage"
+    ]
+  },
+  "breaking_changes": {
+    "policy": "encouraged",
+    "lifecycle_state": "pre-release",
+    "allow_major_version_transition": false,
+    "require_user_approval_for_1_0": true
+  },
+  "component_defaults": {
+    "auto_split_enabled": true,
+    "local_git_required": true,
+    "claude_md_required": true,
+    "readme_required": true,
+    "initial_token_budget": 70000
+  },
+  "naming_validation": {
+    "enabled": true,
+    "auto_fix": "prompt",
+    "block_on_violations": true,
+    "run_on_startup": true,
+    "pre_commit_hook": {
+      "enabled": true,
+      "block_commit": false,
+      "show_details": true
+    },
+    "_policy_options": "always | prompt | never",
+    "_comment": "v1.7.2: Component naming convention enforcement (lowercase, underscores only)"
+  },
+  "verification": {
+    "readme_accuracy_testing": {
+      "enabled": true,
+      "blocking": true,
+      "extract_from_sections": [
+        "Quick Start",
+        "Installation",
+        "Usage",
+        "Examples",
+        "API"
+      ],
+      "shell_code_blocks": ["bash", "shell", "console", "sh"],
+      "python_code_blocks": ["python", "py"],
+      "test_doctest": true,
+      "timeout_seconds": 10,
+      "max_examples_per_type": 10,
+      "skip_markers": [
+        "<!-- skip-test -->",
+        "<!-- no-test -->",
+        "# doctest: +SKIP",
+        "# pragma: no readme test"
+      ]
+    },
+    "feature_coverage_testing": {
+      "enabled": true,
+      "blocking": true,
+      "manifest_version": "2.0",
+      "require_features_for_types": [
+        "cli_application",
+        "library",
+        "web_server",
+        "gui_application"
+      ],
+      "smoke_test_timeout_seconds": 10,
+      "test_scenario_timeout_seconds": 30,
+      "_comment": "v0.13.0: Tests ALL declared features from component.yaml user_facing_features"
+    },
+    "phase_gate_enforcement": {
+      "enabled": true,
+      "blocking": true,
+      "gates": {
+        "phase_5": {
+          "name": "Integration",
+          "script": "orchestration/phase_gates/phase_5_integration.py",
+          "required": true,
+          "enforces": "100% integration test pass rate",
+          "blocks_on": ["any failing tests", "pass rate < 100%"]
+        },
+        "phase_6": {
+          "name": "Verification",
+          "script": "orchestration/phase_gates/phase_6_verification.py",
+          "required": true,
+          "enforces": "All verification checks passing",
+          "blocks_on": ["completion_verifier not 13/13", "blocking issues"]
+        }
+      },
+      "state_file": "orchestration/orchestration-state.json",
+      "timeout_seconds": 600,
+      "_comment": "v0.14.0: Programmatic enforcement to prevent premature stopping"
+    }
+  }
+}

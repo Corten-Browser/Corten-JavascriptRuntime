@@ -1,0 +1,109 @@
+template_id: "javascript-wasm-support"
+template_name: "WebAssembly Runtime Integration"
+category: "javascript"
+difficulty: "expert"
+estimated_loc: "8000-15000"
+
+keywords:
+  - "wasm"
+  - "webassembly"
+  - "module"
+  - "instantiate"
+  - "memory"
+  - "imports"
+  - "exports"
+
+parameters:
+  - name: "features"
+    type: "array"
+    options: ["simd", "threads", "bulk_memory", "reference_types"]
+  - name: "runtime"
+    type: "string"
+    options: ["wasmtime", "wasmer", "v8"]
+    default: "wasmtime"
+
+core_interfaces:
+  - name: "WasmRuntime"
+    methods:
+      - "fn instantiate_module(&mut self, wasm_bytes: &[u8], imports: Imports) -> Result<Instance, Error>"
+      - "fn call_function(&mut self, instance: &Instance, fn_name: &str, args: &[Value]) -> Result<Value, Error>"
+      - "fn get_memory(&self, instance: &Instance) -> &[u8]"
+      - "fn create_imports(&mut self) -> ImportsBuilder"
+
+recommended_libraries:
+  rust:
+    - name: "wasmtime"
+      version: "16.0"
+      required: true
+      purpose: "Fast and secure WebAssembly runtime"
+      registry_url: "https://crates.io/crates/wasmtime"
+    - name: "wasmer"
+      version: "4.2"
+      required: false
+      purpose: "Alternative WebAssembly runtime"
+      registry_url: "https://crates.io/crates/wasmer"
+    - name: "wasm-bindgen"
+      version: "0.2"
+      required: false
+      purpose: "Rust-WASM interop"
+      registry_url: "https://crates.io/crates/wasm-bindgen"
+  python:
+    - name: "wasmtime"
+      version: "16.0"
+      required: true
+      purpose: "Wasmtime bindings for Python"
+      registry_url: "https://pypi.org/project/wasmtime/"
+    - name: "wasmer"
+      version: "1.1"
+      required: false
+      purpose: "Wasmer bindings for Python"
+      registry_url: "https://pypi.org/project/wasmer/"
+
+acceptance_criteria:
+  - "Instantiate WASM modules from bytes"
+  - "Call exported WASM functions"
+  - "Provide host imports (functions, memory, tables)"
+  - "Access WASM linear memory"
+  - "Handle traps and errors gracefully"
+  - "Support WASI (WebAssembly System Interface)"
+  - "Performance: Instantiate module in < 50ms"
+
+test_strategy:
+  unit_tests:
+    - "Module instantiation (valid/invalid modules)"
+    - "Function calls (various argument types)"
+    - "Memory access (read/write)"
+  integration_tests:
+    - "Full WASM execution pipeline"
+    - "Host function imports"
+    - "WASI filesystem operations"
+  public_test_suites:
+    - name: "WebAssembly Spec Tests"
+      url: "https://github.com/WebAssembly/spec/tree/main/test"
+      target_pass_rate: 90
+  benchmarks:
+    - "Module instantiation time"
+    - "Function call overhead"
+    - "Memory access latency"
+
+implementation_hints:
+  - "Use wasmtime for production (fast, secure, well-tested)"
+  - "Implement sandboxing (WASM can't access host resources by default)"
+  - "Provide Web API imports (console, fetch, etc.)"
+  - "Support WASI for filesystem/network access"
+
+common_pitfalls:
+  - issue: "Module instantiation fails silently"
+    solution: "Validate module with wasmparser first"
+  - issue: "Memory access out of bounds"
+    solution: "Always bounds-check before memory access"
+  - issue: "Trap handling crashes host"
+    solution: "Use wasmtime's trap handling, don't panic"
+  - issue: "Slow startup time"
+    solution: "Use AOT compilation (cranelift) or caching"
+
+depends_on:
+  - "template://javascript/js-runtime-integration"
+
+related_templates:
+  - "template://javascript/event-loop"

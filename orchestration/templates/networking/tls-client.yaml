@@ -1,0 +1,96 @@
+template_id: "networking-tls-client"
+template_name: "TLS/SSL Client Implementation"
+category: "networking"
+difficulty: "hard"
+estimated_loc: "3000-6000"
+
+keywords:
+  - "tls"
+  - "ssl"
+  - "https"
+  - "encryption"
+  - "certificate"
+  - "handshake"
+  - "security"
+
+parameters:
+  - name: "tls_versions"
+    type: "array"
+    options: ["TLS 1.2", "TLS 1.3"]
+  - name: "certificate_validation"
+    type: "boolean"
+    default: true
+
+core_interfaces:
+  - name: "TlsConnector"
+    methods:
+      - "async fn connect(&self, domain: &str, stream: TcpStream) -> Result<TlsStream, Error>"
+      - "fn set_certificate_verifier(&mut self, verifier: CertVerifier)"
+      - "fn add_root_certificate(&mut self, cert: Certificate)"
+
+recommended_libraries:
+  rust:
+    - name: "rustls"
+      version: "0.22"
+      required: true
+      purpose: "Modern TLS library (pure Rust)"
+      registry_url: "https://crates.io/crates/rustls"
+    - name: "tokio-rustls"
+      version: "0.25"
+      required: true
+      purpose: "Async TLS for Tokio"
+      registry_url: "https://crates.io/crates/tokio-rustls"
+    - name: "webpki-roots"
+      version: "0.26"
+      required: true
+      purpose: "Root certificate bundle"
+      registry_url: "https://crates.io/crates/webpki-roots"
+  python:
+    - name: "ssl"
+      version: "builtin"
+      required: true
+      purpose: "Standard library TLS support"
+      registry_url: "https://docs.python.org/3/library/ssl.html"
+    - name: "certifi"
+      version: "2024.2"
+      required: true
+      purpose: "Root certificates"
+      registry_url: "https://pypi.org/project/certifi/"
+
+acceptance_criteria:
+  - "TLS 1.2 and 1.3 handshake successful"
+  - "Certificate chain validation"
+  - "Hostname verification"
+  - "Cipher suite negotiation"
+  - "Encrypted data transfer"
+  - "Performance: < 50ms handshake latency"
+
+test_strategy:
+  unit_tests:
+    - "Certificate parsing and validation"
+    - "Cipher suite selection"
+  integration_tests:
+    - "Full TLS handshake with test server"
+    - "Certificate verification (valid/invalid/expired)"
+    - "SNI (Server Name Indication) support"
+  benchmarks:
+    - "Handshake latency (p50/p95/p99)"
+    - "Throughput for encrypted data transfer"
+
+implementation_hints:
+  - "Use rustls for modern, safe TLS"
+  - "Include webpki-roots for certificate validation"
+  - "Support ALPN for protocol negotiation"
+  - "Implement proper error handling for cert errors"
+
+common_pitfalls:
+  - issue: "Not verifying certificates"
+    solution: "Always enable cert verification in production"
+  - issue: "Using outdated TLS versions"
+    solution: "Disable TLS 1.0/1.1, use only 1.2+"
+  - issue: "Ignoring hostname verification"
+    solution: "Verify cert matches requested hostname"
+
+related_templates:
+  - "template://networking/http-client"
+  - "template://networking/websocket"

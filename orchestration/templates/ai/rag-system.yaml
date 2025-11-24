@@ -1,0 +1,188 @@
+template_id: "ai-rag-system"
+template_name: "Retrieval-Augmented Generation (RAG) System"
+category: "ai"
+difficulty: "hard"
+estimated_loc: "4000-8000"
+
+keywords:
+  - "rag"
+  - "retrieval"
+  - "vector"
+  - "embedding"
+  - "semantic search"
+  - "vector database"
+  - "knowledge base"
+  - "context"
+  - "augmented"
+
+parameters:
+  - name: "vector_db"
+    type: "string"
+    options: ["qdrant", "weaviate", "pinecone", "chroma", "faiss"]
+    default: "qdrant"
+  - name: "embedding_model"
+    type: "string"
+    options: ["openai_ada", "sentence_transformers", "cohere"]
+    default: "sentence_transformers"
+  - name: "features"
+    type: "array"
+    options: ["hybrid_search", "reranking", "metadata_filtering", "multi_query"]
+
+core_interfaces:
+  - name: "RAGSystem"
+    methods:
+      - "async fn ingest(&mut self, documents: Vec<Document>) -> Result<(), Error>"
+      - "async fn retrieve(&self, query: &str, k: usize) -> Vec<Document>"
+      - "async fn generate(&self, query: &str, context: Vec<Document>) -> String"
+  - name: "VectorStore"
+    methods:
+      - "async fn add_embeddings(&mut self, embeddings: Vec<Embedding>, metadata: Vec<Metadata>)"
+      - "async fn search(&self, query_embedding: Embedding, k: usize) -> Vec<SearchResult>"
+      - "async fn delete(&mut self, ids: Vec<String>)"
+
+recommended_libraries:
+  rust:
+    - name: "qdrant-client"
+      version: "1.7"
+      required: true
+      purpose: "Qdrant vector database client"
+      registry_url: "https://crates.io/crates/qdrant-client"
+    - name: "fastembed"
+      version: "3.0"
+      required: false
+      purpose: "Fast embedding generation"
+      registry_url: "https://crates.io/crates/fastembed"
+    - name: "reqwest"
+      version: "0.11"
+      required: true
+      purpose: "HTTP client for embedding APIs"
+      registry_url: "https://crates.io/crates/reqwest"
+  python:
+    - name: "langchain"
+      version: "0.1.0"
+      required: true
+      purpose: "RAG orchestration framework"
+      registry_url: "https://pypi.org/project/langchain/"
+    - name: "chromadb"
+      version: "0.4"
+      required: false
+      purpose: "Lightweight vector database"
+      registry_url: "https://pypi.org/project/chromadb/"
+    - name: "qdrant-client"
+      version: "1.7"
+      required: false
+      purpose: "Qdrant vector database client"
+      registry_url: "https://pypi.org/project/qdrant-client/"
+    - name: "sentence-transformers"
+      version: "2.2"
+      required: true
+      purpose: "Generate embeddings locally"
+      registry_url: "https://pypi.org/project/sentence-transformers/"
+    - name: "pinecone-client"
+      version: "3.0"
+      required: false
+      purpose: "Pinecone cloud vector database"
+      registry_url: "https://pypi.org/project/pinecone-client/"
+
+acceptance_criteria:
+  - "Ingest documents and generate embeddings"
+  - "Store embeddings in vector database"
+  - "Semantic search (find similar documents)"
+  - "Retrieve top-k most relevant documents"
+  - "Generate answers using retrieved context"
+  - "Metadata filtering (date, source, etc.)"
+  - "Hybrid search (vector + keyword)"
+  - "Performance: Search 100k documents in < 100ms"
+
+test_strategy:
+  unit_tests:
+    - "Document chunking strategies"
+    - "Embedding generation"
+    - "Similarity scoring"
+    - "Metadata filtering"
+  integration_tests:
+    - "Full RAG pipeline (ingest → retrieve → generate)"
+    - "Vector database operations (add, search, delete)"
+  evaluation_tests:
+    - "Retrieval accuracy (precision@k, recall@k)"
+    - "Answer quality (RAGAS metrics)"
+    - "Latency benchmarks"
+  benchmarks:
+    - "Embedding generation time"
+    - "Vector search latency vs database size"
+
+implementation_hints:
+  - "Chunk documents (500-1000 tokens per chunk)"
+  - "Generate embeddings in batches (reduce API calls)"
+  - "Use sentence-transformers for local embeddings (no API cost)"
+  - "Implement hybrid search: vector (70%) + BM25 keyword (30%)"
+  - "Add reranking step (Cohere, cross-encoder model)"
+  - "Store document metadata (source, date, author)"
+  - "Use prompt template: 'Answer based on: {context} Question: {query}'"
+  - "Cache embeddings (avoid recomputing for same text)"
+
+common_pitfalls:
+  - issue: "Poor retrieval accuracy"
+    solution: "Improve chunking (add overlap), use better embedding model"
+  - issue: "Slow embedding generation"
+    solution: "Batch embeddings, use local model (sentence-transformers)"
+  - issue: "High API costs (OpenAI embeddings)"
+    solution: "Use local models (all-MiniLM-L6-v2, ~400 tokens/sec)"
+  - issue: "Context too long for LLM"
+    solution: "Retrieve fewer chunks (k=3-5), summarize long chunks"
+  - issue: "Hallucinations despite context"
+    solution: "Improve prompt: 'Only use provided context, say I don't know if not found'"
+  - issue: "Outdated information"
+    solution: "Implement document update/delete, add timestamp filtering"
+
+rag_pipeline_steps:
+  - step: "1. Document Loading"
+    description: "Load docs from PDFs, websites, databases"
+  - step: "2. Chunking"
+    description: "Split into semantic chunks (500-1000 tokens)"
+  - step: "3. Embedding"
+    description: "Generate vector embeddings for each chunk"
+  - step: "4. Storage"
+    description: "Store embeddings + metadata in vector DB"
+  - step: "5. Query Embedding"
+    description: "Convert user query to embedding"
+  - step: "6. Retrieval"
+    description: "Search vector DB for similar chunks (top-k)"
+  - step: "7. Reranking"
+    description: "Optional: rerank results with cross-encoder"
+  - step: "8. Generation"
+    description: "Send query + context to LLM, generate answer"
+
+example_code: |
+  # Python RAG with LangChain
+  from langchain.embeddings import SentenceTransformerEmbeddings
+  from langchain.vectorstores import Chroma
+  from langchain.text_splitter import RecursiveCharacterTextSplitter
+  from langchain.chains import RetrievalQA
+  from langchain.llms import OpenAI
+
+  # 1. Load and chunk documents
+  splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
+  chunks = splitter.split_documents(documents)
+
+  # 2. Generate embeddings
+  embeddings = SentenceTransformerEmbeddings(model_name="all-MiniLM-L6-v2")
+
+  # 3. Store in vector DB
+  vectorstore = Chroma.from_documents(chunks, embeddings)
+
+  # 4. Create RAG chain
+  qa = RetrievalQA.from_chain_type(
+      llm=OpenAI(),
+      retriever=vectorstore.as_retriever(search_kwargs={"k": 5}),
+      return_source_documents=True
+  )
+
+  # 5. Query
+  result = qa("What is the main finding?")
+  print(result["result"])
+
+related_templates:
+  - "template://ai/llm-client-integration"
+  - "template://data/data-validation"
+  - "template://scientific/data-analysis"

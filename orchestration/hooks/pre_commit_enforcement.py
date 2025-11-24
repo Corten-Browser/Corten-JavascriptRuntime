@@ -13,10 +13,18 @@ import sys
 from pathlib import Path
 from datetime import datetime
 
+# Add parent to path for imports
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+
+from orchestration.core.paths import DataPaths
+
+# Global paths instance
+_paths = DataPaths()
+
 
 def load_config() -> dict:
     """Load enforcement configuration."""
-    config_file = Path("orchestration/enforcement_config.json")
+    config_file = _paths.enforcement_config
     if config_file.exists():
         return json.loads(config_file.read_text())
     return {"blocking_mode": True, "auto_init_queue": True}
@@ -24,7 +32,7 @@ def load_config() -> dict:
 
 def load_spec_manifest() -> dict:
     """Load spec manifest."""
-    manifest_file = Path("orchestration/spec_manifest.json")
+    manifest_file = _paths.spec_manifest
     if manifest_file.exists():
         return json.loads(manifest_file.read_text())
     return {"spec_file": None, "queue_initialized": False}
@@ -32,7 +40,7 @@ def load_spec_manifest() -> dict:
 
 def load_queue_state() -> dict:
     """Load task queue state."""
-    queue_file = Path("orchestration/task_queue/queue_state.json")
+    queue_file = _paths.queue_state
     if queue_file.exists():
         try:
             return json.loads(queue_file.read_text())
@@ -43,7 +51,7 @@ def load_queue_state() -> dict:
 
 def load_completion_state() -> dict:
     """Load completion/verification state."""
-    state_file = Path("orchestration/verification/state/completion_state.json")
+    state_file = _paths.completion_state
     if state_file.exists():
         try:
             return json.loads(state_file.read_text())
@@ -116,7 +124,7 @@ def auto_initialize_queue():
             # Update manifest
             manifest["queue_initialized"] = True
             manifest["last_sync"] = datetime.now().isoformat()
-            Path("orchestration/spec_manifest.json").write_text(
+            _paths.spec_manifest.write_text(
                 json.dumps(manifest, indent=2)
             )
             print("  Auto-initialized task queue from spec")
@@ -211,7 +219,7 @@ def check_for_stubs_in_diff() -> bool:
 
 def log_activity(event_type: str, details: dict):
     """Log activity for monitoring."""
-    log_file = Path("orchestration/monitoring/activity_log.json")
+    log_file = _paths.activity_log
     if not log_file.exists():
         return
 

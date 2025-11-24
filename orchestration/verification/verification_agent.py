@@ -11,9 +11,16 @@ import sys
 from pathlib import Path
 from datetime import datetime
 
-from .rationalization_detector import run_rationalization_check
-from .stub_detector import scan_for_stubs
-from .smoke_tests import run_smoke_tests
+# Add parent to path for imports
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+
+from orchestration.core.paths import DataPaths
+from .quality.rationalization_detector import run_rationalization_check
+from .quality.stub_detector import scan_for_stubs
+from .quality.smoke_tests import run_smoke_tests
+
+# Global paths instance
+_paths = DataPaths()
 
 
 class VerificationAgent:
@@ -92,7 +99,7 @@ class VerificationAgent:
         print("-" * 70)
         try:
             sys.path.insert(0, str(Path(__file__).parent.parent))
-            from task_queue.queue import TaskQueue
+            from tasks.queue import TaskQueue
             queue = TaskQueue()
             queue_complete = queue.is_complete()
             self.results["task_queue"] = {
@@ -114,7 +121,7 @@ class VerificationAgent:
         # Check 5: Gate Execution History
         print("CHECK 5: Gate Execution History")
         print("-" * 70)
-        gate_log = Path("orchestration/automated_gates/execution_log.json")
+        gate_log = _paths.gate_execution_log
         if gate_log.exists():
             try:
                 log = json.loads(gate_log.read_text())
@@ -165,7 +172,7 @@ class VerificationAgent:
 
     def _save_results(self):
         """Save verification results to file."""
-        output_file = Path("orchestration/verification/verification_results.json")
+        output_file = _paths.verification_results
         output_file.parent.mkdir(parents=True, exist_ok=True)
 
         full_results = {
@@ -179,7 +186,7 @@ class VerificationAgent:
 
     def _update_completion_authority(self):
         """Update the central completion authority state."""
-        state_file = Path("orchestration/verification/state/completion_state.json")
+        state_file = _paths.completion_state
         state_file.parent.mkdir(parents=True, exist_ok=True)
 
         # Determine check results

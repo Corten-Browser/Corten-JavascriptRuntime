@@ -79,3 +79,8 @@ orchestration/monitoring/activity_log.json
 orchestration/monitoring/alerts.json
 orchestration/verification/state/*
 !orchestration/verification/state/.gitkeep
+# Orchestration runtime data (local only)
+orchestration/data/logs/*
+orchestration/data/checkpoints/*
+orchestration/data/reports/*
+!orchestration/data/*/.gitkeep

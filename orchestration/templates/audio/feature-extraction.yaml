@@ -1,0 +1,180 @@
+template_id: "audio-feature-extraction"
+template_name: "Audio Feature Extraction for ML"
+category: "audio"
+difficulty: "hard"
+estimated_loc: "3000-7000"
+
+keywords:
+  - "feature extraction"
+  - "mfcc"
+  - "chroma"
+  - "tempo"
+  - "pitch"
+  - "spectral"
+  - "music analysis"
+  - "audio features"
+  - "mel"
+
+parameters:
+  - name: "feature_types"
+    type: "array"
+    options: ["mfcc", "chroma", "spectral_centroid", "tempo", "zero_crossing_rate", "spectral_rolloff"]
+  - name: "use_case"
+    type: "string"
+    options: ["music_classification", "speech_recognition", "genre_detection", "mood_analysis"]
+
+core_interfaces:
+  - name: "FeatureExtractor"
+    methods:
+      - "fn extract_mfcc(&self, audio: &[f32], sr: u32, n_mfcc: usize) -> Matrix<f32>"
+      - "fn extract_chroma(&self, audio: &[f32], sr: u32) -> Matrix<f32>"
+      - "fn extract_tempo(&self, audio: &[f32], sr: u32) -> f32"
+      - "fn extract_all(&self, audio: &[f32], sr: u32) -> FeatureVector"
+  - name: "FeatureVector"
+    fields:
+      - "mfcc: Vec<f32>"
+      - "chroma: Vec<f32>"
+      - "spectral_centroid: f32"
+      - "tempo: f32"
+      - "zero_crossing_rate: f32"
+
+recommended_libraries:
+  rust:
+    - name: "aubio-rs"
+      version: "0.2"
+      required: false
+      purpose: "Audio feature extraction (tempo, pitch, onset)"
+      registry_url: "https://crates.io/crates/aubio-rs"
+  python:
+    - name: "librosa"
+      version: "0.10"
+      required: true
+      purpose: "Comprehensive audio feature extraction"
+      registry_url: "https://pypi.org/project/librosa/"
+    - name: "essentia"
+      version: "2.1b6"
+      required: false
+      purpose: "Music information retrieval (MIR) features"
+      registry_url: "https://pypi.org/project/essentia/"
+    - name: "madmom"
+      version: "0.16"
+      required: false
+      purpose: "Music processing (beat tracking, onset detection)"
+      registry_url: "https://pypi.org/project/madmom/"
+    - name: "opensmile"
+      version: "2.5"
+      required: false
+      purpose: "Speech and emotion recognition features"
+      registry_url: "https://pypi.org/project/opensmile/"
+
+acceptance_criteria:
+  - "Extract MFCCs (Mel-Frequency Cepstral Coefficients)"
+  - "Extract chroma features (pitch class profiles)"
+  - "Detect tempo (BPM)"
+  - "Extract spectral features (centroid, rolloff, flux)"
+  - "Detect key and mode (major/minor)"
+  - "Compute zero-crossing rate"
+  - "Handle variable-length audio (compute statistics)"
+  - "Performance: Extract all features from 5-min song in < 5 seconds"
+
+test_strategy:
+  unit_tests:
+    - "MFCC shape (n_mfcc × n_frames)"
+    - "Chroma shape (12 pitch classes × n_frames)"
+    - "Tempo detection accuracy (known BPM songs)"
+  integration_tests:
+    - "Feature extraction pipeline"
+    - "Feature normalization and scaling"
+  validation_tests:
+    - "Compare with reference implementations"
+    - "Test on diverse music genres"
+  benchmarks:
+    - "Feature extraction time vs audio length"
+    - "Memory usage per feature type"
+
+implementation_hints:
+  - "Use librosa for Python (most mature, well-tested)"
+  - "MFCCs: n_mfcc=13-20 for speech, 20-40 for music"
+  - "Chroma: 12 bins (one per semitone), normalize"
+  - "Aggregate time-varying features: mean, std, min, max, median"
+  - "Normalize features (z-score or min-max scaling)"
+  - "For ML: create feature vectors from statistics"
+  - "Use delta and delta-delta MFCCs for temporal info"
+
+common_pitfalls:
+  - issue: "Features not normalized (different scales)"
+    solution: "Apply z-score normalization: (x - mean) / std"
+  - issue: "High dimensionality from raw features"
+    solution: "Aggregate with mean/std or use PCA dimensionality reduction"
+  - issue: "Tempo detection fails on complex music"
+    solution: "Use onset strength + autocorrelation (librosa.beat.tempo)"
+  - issue: "MFCCs sensitive to volume"
+    solution: "Normalize audio before feature extraction"
+  - issue: "Variable-length features incompatible with ML models"
+    solution: "Use fixed-length statistics (mean, std, quantiles)"
+  - issue: "Chroma octave errors"
+    solution: "Use harmonic-percussive separation first"
+
+feature_descriptions:
+  mfcc:
+    description: "Mel-Frequency Cepstral Coefficients - capture timbral texture"
+    use_case: "Speech recognition, genre classification, instrument recognition"
+    typical_values: "13-40 coefficients"
+  chroma:
+    description: "Pitch class profiles - 12 semitones, octave-invariant"
+    use_case: "Key detection, chord recognition, cover song identification"
+    typical_values: "12 bins (C, C#, D, ..., B)"
+  spectral_centroid:
+    description: "Center of mass of spectrum - brightness of sound"
+    use_case: "Timbre analysis, brightness measurement"
+    typical_values: "1000-8000 Hz for music"
+  tempo:
+    description: "Beats per minute (BPM)"
+    use_case: "Music organization, DJ mixing, beat matching"
+    typical_values: "60-180 BPM for most music"
+  zero_crossing_rate:
+    description: "Rate of sign changes in signal - noisiness"
+    use_case: "Percussiveness detection, voiced/unvoiced speech"
+    typical_values: "0-0.5 (normalized)"
+
+example_usage: |
+  # Python with librosa
+  import librosa
+  import numpy as np
+
+  # Load audio
+  audio, sr = librosa.load("song.mp3", sr=22050)
+
+  # Extract MFCCs
+  mfccs = librosa.feature.mfcc(y=audio, sr=sr, n_mfcc=20)
+  mfcc_mean = np.mean(mfccs, axis=1)  # Aggregate over time
+  mfcc_std = np.std(mfccs, axis=1)
+
+  # Extract chroma
+  chroma = librosa.feature.chroma_stft(y=audio, sr=sr)
+  chroma_mean = np.mean(chroma, axis=1)
+
+  # Detect tempo
+  tempo, beats = librosa.beat.beat_track(y=audio, sr=sr)
+  print(f"Tempo: {tempo:.1f} BPM")
+
+  # Spectral features
+  spectral_centroid = librosa.feature.spectral_centroid(y=audio, sr=sr)
+  spectral_rolloff = librosa.feature.spectral_rolloff(y=audio, sr=sr)
+  zero_crossing_rate = librosa.feature.zero_crossing_rate(audio)
+
+  # Create feature vector for ML
+  features = np.concatenate([
+      mfcc_mean, mfcc_std,
+      chroma_mean,
+      [np.mean(spectral_centroid), np.mean(spectral_rolloff)],
+      [np.mean(zero_crossing_rate)],
+      [tempo]
+  ])
+  print(f"Feature vector shape: {features.shape}")
+
+related_templates:
+  - "template://audio/signal-processing"
+  - "template://audio/audio-file-io"
+  - "template://scientific/data-analysis"
+  - "template://ai/llm-client-integration"

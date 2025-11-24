@@ -1,0 +1,98 @@
+template_id: "rendering-css-selector-engine"
+template_name: "CSS Selector Matching Engine"
+category: "rendering"
+difficulty: "hard"
+estimated_loc: "5000-8000"
+
+keywords:
+  - "selector"
+  - "css"
+  - "matching"
+  - "querySelector"
+  - "querySelectorAll"
+  - "specificity"
+
+parameters:
+  - name: "selector_level"
+    type: "string"
+    options: ["Selectors Level 3", "Selectors Level 4"]
+    default: "Selectors Level 3"
+  - name: "features"
+    type: "array"
+    options: ["pseudo_classes", "pseudo_elements", "combinators", "attribute_selectors"]
+
+core_interfaces:
+  - name: "SelectorEngine"
+    methods:
+      - "fn parse_selector(input: &str) -> Result<Selector, ParseError>"
+      - "fn matches(&self, selector: &Selector, element: &Element) -> bool"
+      - "fn query_selector(&self, root: &Element, selector: &str) -> Option<ElementRef>"
+      - "fn query_selector_all(&self, root: &Element, selector: &str) -> Vec<ElementRef>"
+      - "fn compute_specificity(selector: &Selector) -> Specificity"
+
+recommended_libraries:
+  rust:
+    - name: "selectors"
+      version: "0.25"
+      required: true
+      purpose: "CSS selector parsing and matching"
+      registry_url: "https://crates.io/crates/selectors"
+    - name: "cssparser"
+      version: "0.31"
+      required: true
+      purpose: "CSS tokenization"
+      registry_url: "https://crates.io/crates/cssparser"
+  python:
+    - name: "cssselect"
+      version: "1.2"
+      required: true
+      purpose: "CSS selector parsing"
+      registry_url: "https://pypi.org/project/cssselect/"
+    - name: "lxml"
+      version: "5.1"
+      required: true
+      purpose: "XML/HTML tree matching"
+      registry_url: "https://pypi.org/project/lxml/"
+
+acceptance_criteria:
+  - "Parse all CSS3 selector syntax"
+  - "Match basic selectors (tag, class, id)"
+  - "Match combinators (descendant, child, sibling)"
+  - "Match pseudo-classes (:hover, :nth-child, etc.)"
+  - "Compute selector specificity correctly"
+  - "Performance: Match 10,000 elements in < 100ms"
+
+test_strategy:
+  unit_tests:
+    - "Selector parsing (all syntax variants)"
+    - "Specificity calculation"
+    - "Basic matching (tag/class/id)"
+  integration_tests:
+    - "querySelector with complex selectors"
+    - "querySelectorAll performance"
+  public_test_suites:
+    - name: "CSS Selectors WPT"
+      url: "https://github.com/web-platform-tests/wpt/tree/master/css/selectors"
+      target_pass_rate: 90
+
+implementation_hints:
+  - "Use selectors crate for robust parsing"
+  - "Implement specificity per CSS spec (a,b,c) tuple"
+  - "Cache parsed selectors for performance"
+  - "Support :not(), :is(), :where() pseudo-classes"
+
+common_pitfalls:
+  - issue: "Incorrect specificity calculation"
+    solution: "Follow CSS spec exactly: (inline, ids, classes, elements)"
+  - issue: "Poor performance on complex selectors"
+    solution: "Use bloom filters for tag/class/id matching"
+  - issue: "Not handling invalid selectors"
+    solution: "Return parse error, don't panic"
+
+depends_on:
+  - "template://dom/dom-tree"
+  - "template://rendering/css-parser"
+
+related_templates:
+  - "template://rendering/css-cascade"
+  - "template://dom/element-interface"

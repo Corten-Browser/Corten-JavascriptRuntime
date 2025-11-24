@@ -1,0 +1,137 @@
+template_id: "scientific-numerical-simulation"
+template_name: "Numerical Simulation and ODE/PDE Solvers"
+category: "scientific"
+difficulty: "hard"
+estimated_loc: "5000-10000"
+
+keywords:
+  - "simulation"
+  - "ode"
+  - "pde"
+  - "differential equation"
+  - "numerical"
+  - "solver"
+  - "time-stepping"
+  - "integration"
+  - "scientific"
+  - "modeling"
+
+parameters:
+  - name: "equation_type"
+    type: "string"
+    options: ["ODE", "PDE", "DAE"]
+    default: "ODE"
+  - name: "solver_method"
+    type: "string"
+    options: ["explicit_euler", "rk4", "adaptive_rk", "implicit_methods"]
+    default: "adaptive_rk"
+  - name: "features"
+    type: "array"
+    options: ["state_snapshots", "event_detection", "parameter_sweeps", "sensitivity_analysis"]
+
+core_interfaces:
+  - name: "Simulator"
+    methods:
+      - "fn step(&mut self, dt: f64) -> Result<State, Error>"
+      - "fn solve(&mut self, t_span: (f64, f64), dt: f64) -> Result<Vec<State>, Error>"
+      - "fn get_state(&self) -> &State"
+      - "fn set_state(&mut self, state: State)"
+  - name: "ODESolver"
+    methods:
+      - "fn integrate(&self, f: DynFn, y0: Vector, t_span: (f64, f64)) -> Solution"
+      - "fn with_adaptive_step(&mut self, tolerance: f64)"
+
+recommended_libraries:
+  rust:
+    - name: "nalgebra"
+      version: "0.32"
+      required: true
+      purpose: "Linear algebra (vectors, matrices)"
+      registry_url: "https://crates.io/crates/nalgebra"
+    - name: "ndarray"
+      version: "0.15"
+      required: true
+      purpose: "N-dimensional arrays for state storage"
+      registry_url: "https://crates.io/crates/ndarray"
+    - name: "ode_solvers"
+      version: "0.4"
+      required: true
+      purpose: "ODE integration (Runge-Kutta, Dormand-Prince)"
+      registry_url: "https://crates.io/crates/ode_solvers"
+    - name: "peroxide"
+      version: "0.34"
+      required: false
+      purpose: "Alternative numerical library with ODE solvers"
+      registry_url: "https://crates.io/crates/peroxide"
+  python:
+    - name: "scipy"
+      version: "1.11"
+      required: true
+      purpose: "scipy.integrate for ODE/PDE solvers"
+      registry_url: "https://pypi.org/project/scipy/"
+    - name: "numpy"
+      version: "1.26"
+      required: true
+      purpose: "Numerical arrays and operations"
+      registry_url: "https://pypi.org/project/numpy/"
+    - name: "numba"
+      version: "0.58"
+      required: false
+      purpose: "JIT compilation for performance"
+      registry_url: "https://pypi.org/project/numba/"
+    - name: "diffeqpy"
+      version: "2.3"
+      required: false
+      purpose: "Python wrapper for Julia DifferentialEquations.jl"
+      registry_url: "https://pypi.org/project/diffeqpy/"
+
+acceptance_criteria:
+  - "Solve systems of ODEs (n ≥ 100 equations)"
+  - "Adaptive time-stepping (error tolerance control)"
+  - "State snapshot/checkpoint system"
+  - "Event detection (zero-crossings, thresholds)"
+  - "Parameter sweep support (vary initial conditions)"
+  - "Conservation laws verified (energy, mass, etc.)"
+  - "Performance: 10,000 time steps in < 5 seconds"
+
+test_strategy:
+  unit_tests:
+    - "Individual solver methods (Euler, RK4, RK45)"
+    - "State initialization and updates"
+    - "Time-stepping logic"
+    - "Event detection algorithms"
+  integration_tests:
+    - "Full simulation runs (t=0 to t=100)"
+    - "Conservation law verification"
+    - "Comparison with analytical solutions (where available)"
+  benchmarks:
+    - "Performance vs state size (n=10, 100, 1000)"
+    - "Adaptive vs fixed time-stepping overhead"
+  validation_tests:
+    - "Standard test problems (Van der Pol, Lorenz, SIR model)"
+    - "Convergence analysis (error vs dt)"
+
+implementation_hints:
+  - "Use ode_solvers crate for Rust (implements Dormand-Prince)"
+  - "scipy.integrate.solve_ivp for Python (RK45, LSODA, BDF)"
+  - "Store state history efficiently (preallocate arrays)"
+  - "Implement callback system for event detection"
+  - "Use sparse matrices for large PDE systems"
+  - "Add progress reporting for long simulations"
+
+common_pitfalls:
+  - issue: "Stiff equations causing instability"
+    solution: "Use implicit solvers (LSODA, BDF) for stiff systems"
+  - issue: "Memory exhaustion from storing all states"
+    solution: "Store snapshots at intervals, not every step"
+  - issue: "Poor performance on large systems"
+    solution: "Use sparse matrices, numba JIT, or Rust implementation"
+  - issue: "Numerical drift breaking conservation laws"
+    solution: "Use symplectic integrators for Hamiltonian systems"
+  - issue: "Time-step too large causing instability"
+    solution: "Implement adaptive stepping with error tolerance"
+
+related_templates:
+  - "template://scientific/data-analysis"
+  - "template://scientific/scientific-visualization"
+  - "template://data/data-validation"

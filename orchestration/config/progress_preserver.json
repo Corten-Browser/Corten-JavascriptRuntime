@@ -1,0 +1,24 @@
+{
+  "auto_commit": true,
+  "auto_push": true,
+  "push_on_phase_complete": true,
+  "push_on_component_complete": true,
+  "push_on_checkpoint": false,
+  "max_retry_attempts": 5,
+  "retry_delay_seconds": 2,
+  "include_checkpoint_state": true,
+  "commit_message_prefix": "wip:",
+  "branch_prefix": "orchestration/",
+  "_documentation": {
+    "auto_commit": "Automatically commit at natural boundaries (phases, components)",
+    "auto_push": "Push to remote after commits (disable for offline work)",
+    "push_on_phase_complete": "Push after each phase completion",
+    "push_on_component_complete": "Push after each component completion",
+    "push_on_checkpoint": "Push on session checkpoints (can be frequent, disabled by default)",
+    "max_retry_attempts": "Number of retries for git operations",
+    "retry_delay_seconds": "Base delay between retries (exponential backoff applied)",
+    "include_checkpoint_state": "Include checkpoint JSON files in commits",
+    "commit_message_prefix": "Prefix for WIP commits (wip:, chore:, etc.)",
+    "branch_prefix": "Prefix for orchestration branches"
+  }
+}

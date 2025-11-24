@@ -10,6 +10,14 @@ import sys
 import json
 from pathlib import Path
 
+# Add parent to path for imports
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+
+from orchestration.core.paths import DataPaths
+
+# Global paths instance
+_paths = DataPaths()
+
 # Files that indicate completion intent
 COMPLETION_FILES = [
     "COMPLETION-REPORT.md",
@@ -30,7 +38,7 @@ def get_staged_files() -> list[str]:
 
 def check_completion_authorized() -> tuple[bool, str]:
     """Check if completion is authorized by verification system."""
-    state_file = Path("orchestration/verification/state/completion_state.json")
+    state_file = _paths.completion_state
 
     if not state_file.exists():
         return False, "No verification state found. Run verification first:\n  python orchestration/verification/run_full_verification.py"

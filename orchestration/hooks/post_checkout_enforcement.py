@@ -8,10 +8,18 @@ import sys
 from pathlib import Path
 from datetime import datetime
 
+# Add parent to path for imports
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+
+from orchestration.core.paths import DataPaths
+
+# Global paths instance
+_paths = DataPaths()
+
 
 def log_activity(event_type: str, details: dict):
     """Log activity."""
-    log_file = Path("orchestration/monitoring/activity_log.json")
+    log_file = _paths.activity_log
     if not log_file.exists():
         return
 
@@ -31,7 +39,7 @@ def log_activity(event_type: str, details: dict):
 def resync_state():
     """Re-sync enforcement state after checkout."""
     # Update last activity timestamp
-    manifest_file = Path("orchestration/spec_manifest.json")
+    manifest_file = _paths.spec_manifest
     if manifest_file.exists():
         try:
             manifest = json.loads(manifest_file.read_text())

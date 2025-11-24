@@ -1,0 +1,116 @@
+template_id: "rendering-paint-system"
+template_name: "Paint and Display System"
+category: "rendering"
+difficulty: "expert"
+estimated_loc: "10000-18000"
+
+keywords:
+  - "paint"
+  - "draw"
+  - "render"
+  - "canvas"
+  - "graphics"
+  - "rasterize"
+  - "compositor"
+
+parameters:
+  - name: "backend"
+    type: "string"
+    options: ["skia", "cairo", "webrender", "custom"]
+    default: "skia"
+  - name: "features"
+    type: "array"
+    options: ["layers", "transparency", "filters", "clipping", "transforms"]
+
+core_interfaces:
+  - name: "PaintEngine"
+    methods:
+      - "fn paint_tree(&mut self, root: &LayoutBox, viewport: Rect)"
+      - "fn paint_box(&mut self, layout_box: &LayoutBox, ctx: &mut PaintContext)"
+      - "fn apply_clip(&mut self, clip_rect: Rect)"
+      - "fn apply_transform(&mut self, transform: Matrix)"
+  - name: "Canvas"
+    methods:
+      - "fn fill_rect(&mut self, rect: Rect, color: Color)"
+      - "fn stroke_rect(&mut self, rect: Rect, color: Color, width: f32)"
+      - "fn draw_text(&mut self, text: &str, position: Point, font: &Font, color: Color)"
+      - "fn draw_image(&mut self, image: &Image, dest_rect: Rect)"
+
+recommended_libraries:
+  rust:
+    - name: "skia-safe"
+      version: "0.70"
+      required: true
+      purpose: "Skia 2D graphics engine bindings"
+      registry_url: "https://crates.io/crates/skia-safe"
+    - name: "tiny-skia"
+      version: "0.11"
+      required: false
+      purpose: "Pure Rust Skia subset (smaller binary)"
+      registry_url: "https://crates.io/crates/tiny-skia"
+    - name: "webrender"
+      version: "0.62"
+      required: false
+      purpose: "GPU-accelerated rendering (Firefox's engine)"
+      registry_url: "https://crates.io/crates/webrender"
+  python:
+    - name: "cairo"
+      version: "1.26"
+      required: true
+      purpose: "2D graphics library"
+      registry_url: "https://pycairo.readthedocs.io/"
+    - name: "Pillow"
+      version: "10.2"
+      required: true
+      purpose: "Image processing"
+      registry_url: "https://pypi.org/project/Pillow/"
+
+acceptance_criteria:
+  - "Paint backgrounds (solid colors, gradients, images)"
+  - "Paint borders (all sides, rounded corners)"
+  - "Paint text with correct fonts and colors"
+  - "Handle transparency and opacity"
+  - "Apply CSS transforms (rotate, scale, translate)"
+  - "Clip content to bounds"
+  - "Performance: Paint 1,000 boxes in < 16ms (60 FPS)"
+
+test_strategy:
+  unit_tests:
+    - "Rectangle painting (fill, stroke)"
+    - "Text rendering (fonts, colors)"
+    - "Transform application (matrix operations)"
+  integration_tests:
+    - "Full page painting"
+    - "Layer composition"
+    - "Clipping and overflow handling"
+  visual_regression_tests:
+    - "Screenshot comparison with reference images"
+    - "Pixel-perfect rendering tests"
+  benchmarks:
+    - "Paint time vs DOM complexity"
+    - "Frame rate (FPS) on complex pages"
+
+implementation_hints:
+  - "Use Skia for production-quality rendering"
+  - "Implement paint layers (z-index ordering)"
+  - "Use dirty rectangles for incremental repaint"
+  - "Implement GPU acceleration if available"
+
+common_pitfalls:
+  - issue: "Slow full-page repaints"
+    solution: "Track dirty regions, repaint only changed areas"
+  - issue: "Text rendering quality issues"
+    solution: "Enable font hinting and subpixel antialiasing"
+  - issue: "Layer ordering bugs (z-index)"
+    solution: "Build stacking context tree before painting"
+  - issue: "Memory leaks from cached surfaces"
+    solution: "Implement LRU cache with size limits"
+
+depends_on:
+  - "template://rendering/layout-engine"
+  - "template://fonts/text-shaping"
+  - "template://fonts/font-rasterization"
+
+related_templates:
+  - "template://rendering/css-cascade"
+  - "template://shell/window-management"

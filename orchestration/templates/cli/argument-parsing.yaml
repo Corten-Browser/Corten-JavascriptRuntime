@@ -1,0 +1,188 @@
+template_id: "cli-argument-parsing"
+template_name: "Command-Line Argument Parsing"
+category: "cli"
+difficulty: "easy"
+estimated_loc: "500-2000"
+
+keywords:
+  - "cli"
+  - "command line"
+  - "arguments"
+  - "options"
+  - "flags"
+  - "argparse"
+  - "clap"
+  - "click"
+  - "subcommand"
+
+parameters:
+  - name: "cli_style"
+    type: "string"
+    options: ["simple", "subcommands", "interactive"]
+    default: "simple"
+  - name: "features"
+    type: "array"
+    options: ["subcommands", "flags", "options", "positional_args", "help_generation"]
+
+core_interfaces:
+  - name: "CLI"
+    methods:
+      - "fn parse_args() -> Config"
+      - "fn add_subcommand(name: &str, description: &str)"
+      - "fn add_flag(short: char, long: &str, help: &str)"
+      - "fn add_option(short: char, long: &str, default: T, help: &str)"
+
+recommended_libraries:
+  rust:
+    - name: "clap"
+      version: "4.4"
+      required: true
+      purpose: "Command-line argument parser (derive API)"
+      registry_url: "https://crates.io/crates/clap"
+  python:
+    - name: "click"
+      version: "8.1"
+      required: true
+      purpose: "Composable command-line interface toolkit"
+      registry_url: "https://pypi.org/project/click/"
+    - name: "typer"
+      version: "0.9"
+      required: false
+      purpose: "Modern CLI framework (built on click, type hints)"
+      registry_url: "https://pypi.org/project/typer/"
+    - name: "argparse"
+      version: "builtin"
+      required: false
+      purpose: "Standard library argument parser"
+      registry_url: "https://docs.python.org/3/library/argparse.html"
+
+acceptance_criteria:
+  - "Parse positional arguments"
+  - "Parse optional arguments (--flag, -f)"
+  - "Support subcommands (app init, app run)"
+  - "Auto-generate help text (--help)"
+  - "Validate argument types and values"
+  - "Provide clear error messages for invalid input"
+  - "Environment variable support"
+  - "Performance: Parse arguments in < 10ms"
+
+test_strategy:
+  unit_tests:
+    - "Argument parsing (various combinations)"
+    - "Type validation (int, float, path, etc.)"
+    - "Default value handling"
+    - "Required vs optional arguments"
+  integration_tests:
+    - "Full CLI workflow with subcommands"
+    - "Help text generation"
+    - "Error message clarity"
+  user_tests:
+    - "Manual testing with real users"
+    - "Check for confusing error messages"
+
+implementation_hints:
+  - "Use clap derive API for Rust (declarative, type-safe)"
+  - "Use click for Python (decorators, composable)"
+  - "Use typer for Python if you prefer type hints"
+  - "Group related options (e.g., --verbose, --quiet)"
+  - "Use short (-v) and long (--verbose) forms"
+  - "Provide sensible defaults"
+  - "Use enums for limited choices"
+  - "Add examples in help text"
+
+common_pitfalls:
+  - issue: "Confusing error messages"
+    solution: "Add custom validation with clear messages"
+  - issue: "Too many options (overwhelming users)"
+    solution: "Use subcommands to organize functionality"
+  - issue: "Inconsistent flag naming"
+    solution: "Follow conventions: --verbose/-v, --output/-o"
+  - issue: "No validation causing runtime errors"
+    solution: "Validate at parse time (type, range, path exists)"
+  - issue: "Poor help text"
+    solution: "Write descriptive help, add examples section"
+
+cli_patterns:
+  simple:
+    example: "app --input file.txt --output result.txt"
+    use_case: "Single-purpose tools"
+  subcommands:
+    example: "git add file.txt; git commit -m 'message'"
+    use_case: "Multi-purpose tools (git, docker, cargo)"
+  interactive:
+    example: "app → prompt for each option"
+    use_case: "User-friendly wizards"
+
+example_rust_clap: |
+  use clap::Parser;
+
+  #[derive(Parser)]
+  #[command(name = "myapp")]
+  #[command(about = "My awesome CLI app", long_about = None)]
+  struct Cli {
+      /// Input file path
+      #[arg(short, long)]
+      input: PathBuf,
+
+      /// Output file path
+      #[arg(short, long, default_value = "output.txt")]
+      output: PathBuf,
+
+      /// Verbose mode
+      #[arg(short, long)]
+      verbose: bool,
+
+      /// Number of threads
+      #[arg(short = 'j', long, default_value_t = 4)]
+      threads: usize,
+  }
+
+  fn main() {
+      let cli = Cli::parse();
+      println!("Input: {:?}", cli.input);
+      println!("Output: {:?}", cli.output);
+  }
+
+example_python_click: |
+  import click
+
+  @click.command()
+  @click.option('--input', '-i', type=click.Path(exists=True), required=True,
+                help='Input file path')
+  @click.option('--output', '-o', default='output.txt',
+                help='Output file path')
+  @click.option('--verbose', '-v', is_flag=True,
+                help='Verbose output')
+  @click.option('--threads', '-j', default=4, type=int,
+                help='Number of threads')
+  def main(input, output, verbose, threads):
+      """My awesome CLI app"""
+      click.echo(f"Input: {input}")
+      click.echo(f"Output: {output}")
+
+  if __name__ == '__main__':
+      main()
+
+example_python_typer: |
+  import typer
+  from pathlib import Path
+
+  app = typer.Typer()
+
+  @app.command()
+  def main(
+      input: Path = typer.Option(..., help="Input file path"),
+      output: Path = typer.Option("output.txt", help="Output file path"),
+      verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
+      threads: int = typer.Option(4, "--threads", "-j", help="Number of threads")
+  ):
+      """My awesome CLI app"""
+      print(f"Input: {input}")
+      print(f"Output: {output}")
+
+  if __name__ == "__main__":
+      app()
+
+related_templates:
+  - "template://cli/progress-feedback"
+  - "template://gui/qt-internationalization"

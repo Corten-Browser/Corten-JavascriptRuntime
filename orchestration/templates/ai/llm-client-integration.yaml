@@ -1,0 +1,172 @@
+template_id: "ai-llm-client-integration"
+template_name: "LLM API Client Integration"
+category: "ai"
+difficulty: "medium"
+estimated_loc: "2000-5000"
+
+keywords:
+  - "llm"
+  - "openai"
+  - "anthropic"
+  - "claude"
+  - "gpt"
+  - "ai"
+  - "language model"
+  - "chat"
+  - "completion"
+  - "api"
+
+parameters:
+  - name: "providers"
+    type: "array"
+    options: ["openai", "anthropic", "cohere", "huggingface", "local"]
+  - name: "features"
+    type: "array"
+    options: ["streaming", "function_calling", "retry_logic", "rate_limiting", "caching"]
+
+core_interfaces:
+  - name: "LLMClient"
+    methods:
+      - "async fn complete(&self, prompt: &str, config: Config) -> Result<String, Error>"
+      - "async fn chat(&self, messages: Vec<Message>, config: Config) -> Result<String, Error>"
+      - "async fn stream(&self, prompt: &str) -> impl Stream<Item=String>"
+      - "fn with_retry(&mut self, max_retries: u32)"
+  - name: "Message"
+    fields:
+      - "role: Role"  # system, user, assistant
+      - "content: String"
+
+recommended_libraries:
+  rust:
+    - name: "reqwest"
+      version: "0.11"
+      required: true
+      purpose: "HTTP client for API requests"
+      registry_url: "https://crates.io/crates/reqwest"
+    - name: "async-openai"
+      version: "0.17"
+      required: false
+      purpose: "OpenAI API client"
+      registry_url: "https://crates.io/crates/async-openai"
+    - name: "tokenizers"
+      version: "0.15"
+      required: false
+      purpose: "Token counting (HuggingFace tokenizers)"
+      registry_url: "https://crates.io/crates/tokenizers"
+    - name: "tokio"
+      version: "1.35"
+      required: true
+      purpose: "Async runtime"
+      registry_url: "https://crates.io/crates/tokio"
+  python:
+    - name: "openai"
+      version: "1.6"
+      required: true
+      purpose: "Official OpenAI Python client"
+      registry_url: "https://pypi.org/project/openai/"
+    - name: "anthropic"
+      version: "0.8"
+      required: true
+      purpose: "Official Anthropic (Claude) client"
+      registry_url: "https://pypi.org/project/anthropic/"
+    - name: "litellm"
+      version: "1.16"
+      required: false
+      purpose: "Unified interface for multiple LLM providers"
+      registry_url: "https://pypi.org/project/litellm/"
+    - name: "tiktoken"
+      version: "0.5"
+      required: false
+      purpose: "Token counting (OpenAI tokenizer)"
+      registry_url: "https://pypi.org/project/tiktoken/"
+
+acceptance_criteria:
+  - "Send prompts to LLM APIs (OpenAI, Anthropic)"
+  - "Handle streaming responses (token-by-token)"
+  - "Implement retry logic (exponential backoff)"
+  - "Rate limiting (requests per minute)"
+  - "Function calling / tool use support"
+  - "Token counting (estimate cost)"
+  - "Error handling (rate limits, timeouts, API errors)"
+  - "Performance: < 100ms overhead per request"
+
+test_strategy:
+  unit_tests:
+    - "Message formatting"
+    - "Retry logic (mock failures)"
+    - "Rate limiter behavior"
+    - "Token counting accuracy"
+  integration_tests:
+    - "Full request/response with real APIs"
+    - "Streaming response handling"
+    - "Function calling workflow"
+  mocking_tests:
+    - "Mock API responses for deterministic tests"
+    - "Use httpx_mock (Python) or mockito (Rust)"
+  benchmarks:
+    - "Request overhead (time to first token)"
+    - "Streaming throughput (tokens/sec)"
+
+implementation_hints:
+  - "Use official SDKs (openai, anthropic) when available"
+  - "Implement exponential backoff: delay = base * 2^attempt + jitter"
+  - "Cache responses for identical prompts (use content hash)"
+  - "Stream responses for better UX (show tokens as they arrive)"
+  - "Count tokens before sending (avoid exceeding context limits)"
+  - "Set timeouts (API calls can hang indefinitely)"
+  - "Log all requests/responses for debugging"
+
+common_pitfalls:
+  - issue: "Rate limit errors (429)"
+    solution: "Implement token bucket rate limiter, respect Retry-After header"
+  - issue: "Context length exceeded (400 error)"
+    solution: "Count tokens before sending, truncate if necessary"
+  - issue: "Hanging requests"
+    solution: "Set timeout (30-60s), implement cancel mechanism"
+  - issue: "High API costs"
+    solution: "Cache responses, use cheaper models (gpt-3.5 vs gpt-4)"
+  - issue: "Streaming not working"
+    solution: "Check Content-Type: text/event-stream, handle SSE format"
+  - issue: "Function calling results ignored"
+    solution: "Parse function call, execute, send result back in new message"
+
+example_usage: |
+  # Python with OpenAI
+  from openai import AsyncOpenAI
+
+  client = AsyncOpenAI(api_key="sk-...")
+
+  async def chat(messages):
+      response = await client.chat.completions.create(
+          model="gpt-4",
+          messages=messages,
+          stream=True
+      )
+      async for chunk in response:
+          if chunk.choices[0].delta.content:
+              print(chunk.choices[0].delta.content, end='')
+
+  # Python with Anthropic
+  from anthropic import AsyncAnthropic
+
+  client = AsyncAnthropic(api_key="sk-ant-...")
+
+  async def chat(messages):
+      async with client.messages.stream(
+          model="claude-3-opus-20240229",
+          messages=messages,
+          max_tokens=1024
+      ) as stream:
+          async for text in stream.text_stream:
+              print(text, end='', flush=True)
+
+security_notes:
+  - "Never hardcode API keys (use environment variables)"
+  - "Don't log sensitive prompt content"
+  - "Sanitize user input (avoid prompt injection)"
+  - "Implement input validation (max length, allowed characters)"
+
+related_templates:
+  - "template://ai/agent-orchestration"
+  - "template://ai/rag-system"
+  - "template://data/data-validation"

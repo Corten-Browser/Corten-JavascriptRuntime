@@ -1,0 +1,106 @@
+template_id: "rendering-layout-engine"
+template_name: "Layout Engine (Box Model and Positioning)"
+category: "rendering"
+difficulty: "expert"
+estimated_loc: "15000-25000"
+
+keywords:
+  - "layout"
+  - "box model"
+  - "positioning"
+  - "flexbox"
+  - "grid"
+  - "flow"
+  - "reflow"
+
+parameters:
+  - name: "layout_modes"
+    type: "array"
+    options: ["block_flow", "inline_flow", "flexbox", "grid", "table", "absolute", "fixed"]
+  - name: "features"
+    type: "array"
+    options: ["floats", "z_index", "transforms", "overflow"]
+
+core_interfaces:
+  - name: "LayoutEngine"
+    methods:
+      - "fn compute_layout(&mut self, root: &StyledNode) -> LayoutBox"
+      - "fn reflow(&mut self, dirty_nodes: &[NodeId])"
+      - "fn get_bounding_box(&self, node: NodeId) -> Rect"
+  - name: "LayoutBox"
+    methods:
+      - "fn dimensions(&self) -> Dimensions"
+      - "fn content_box(&self) -> Rect"
+      - "fn padding_box(&self) -> Rect"
+      - "fn border_box(&self) -> Rect"
+      - "fn margin_box(&self) -> Rect"
+
+recommended_libraries:
+  rust:
+    - name: "taffy"
+      version: "0.3"
+      required: true
+      purpose: "Flexbox and Grid layout"
+      registry_url: "https://crates.io/crates/taffy"
+    - name: "euclid"
+      version: "0.22"
+      required: false
+      purpose: "Geometric primitives"
+      registry_url: "https://crates.io/crates/euclid"
+  python:
+    - name: "cssutils"
+      version: "2.9"
+      required: true
+      purpose: "CSS property computation"
+      registry_url: "https://pypi.org/project/cssutils/"
+
+acceptance_criteria:
+  - "Compute box model (content, padding, border, margin)"
+  - "Support block and inline layout"
+  - "Implement flexbox layout algorithm"
+  - "Implement CSS Grid layout"
+  - "Handle absolute/fixed positioning"
+  - "Support floats and clearing"
+  - "Performance: Layout 1,000 nodes in < 50ms"
+
+test_strategy:
+  unit_tests:
+    - "Box model dimension calculation"
+    - "Margin collapse rules"
+    - "Flex container sizing"
+    - "Grid track sizing"
+  integration_tests:
+    - "Full page layout with mixed modes"
+    - "Nested flex containers"
+    - "Complex grid layouts"
+  public_test_suites:
+    - name: "CSS WG Layout Tests"
+      url: "https://github.com/web-platform-tests/wpt/tree/master/css/css-layout"
+      target_pass_rate: 75
+  benchmarks:
+    - "Layout time vs DOM tree size"
+    - "Reflow performance (dirty subtree)"
+
+implementation_hints:
+  - "Use taffy crate for flex/grid (battle-tested)"
+  - "Implement incremental layout (dirty bit propagation)"
+  - "Cache computed values to avoid recalculation"
+  - "Use constraint solving for complex layouts"
+
+common_pitfalls:
+  - issue: "Not handling margin collapse"
+    solution: "Implement CSS margin collapse rules correctly"
+  - issue: "Infinite layout loops"
+    solution: "Detect cycles, set maximum iteration count"
+  - issue: "Memory leaks from layout cache"
+    solution: "Invalidate cache on DOM mutations"
+  - issue: "Incorrect flex basis calculation"
+    solution: "Follow CSS Flexbox spec exactly"
+
+depends_on:
+  - "template://dom/dom-tree"
+  - "template://rendering/css-cascade"
+
+related_templates:
+  - "template://rendering/paint-system"
+  - "template://rendering/css-parser"

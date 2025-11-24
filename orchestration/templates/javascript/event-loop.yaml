@@ -1,0 +1,97 @@
+template_id: "javascript-event-loop"
+template_name: "JavaScript Event Loop and Async Runtime"
+category: "javascript"
+difficulty: "expert"
+estimated_loc: "5000-10000"
+
+keywords:
+  - "event loop"
+  - "async"
+  - "promise"
+  - "microtask"
+  - "macrotask"
+  - "setTimeout"
+  - "queueMicrotask"
+
+parameters:
+  - name: "task_queues"
+    type: "array"
+    options: ["macrotasks", "microtasks", "animation_frames"]
+  - name: "integration"
+    type: "string"
+    options: ["tokio", "async-std", "custom"]
+    default: "tokio"
+
+core_interfaces:
+  - name: "EventLoop"
+    methods:
+      - "fn new() -> EventLoop"
+      - "fn run(&mut self)"
+      - "fn queue_task(&mut self, task: Task, queue_type: TaskQueue)"
+      - "fn process_microtasks(&mut self)"
+  - name: "TaskScheduler"
+    methods:
+      - "fn schedule_timeout(&mut self, callback: Callback, delay_ms: u64) -> TimerId"
+      - "fn schedule_interval(&mut self, callback: Callback, interval_ms: u64) -> TimerId"
+      - "fn cancel_timer(&mut self, timer_id: TimerId)"
+
+recommended_libraries:
+  rust:
+    - name: "tokio"
+      version: "1.35"
+      required: true
+      purpose: "Async runtime for event loop"
+      registry_url: "https://crates.io/crates/tokio"
+    - name: "futures"
+      version: "0.3"
+      required: true
+      purpose: "Future trait and combinators"
+      registry_url: "https://crates.io/crates/futures"
+  python:
+    - name: "asyncio"
+      version: "builtin"
+      required: true
+      purpose: "Standard library event loop"
+      registry_url: "https://docs.python.org/3/library/asyncio.html"
+
+acceptance_criteria:
+  - "Execute macrotasks (setTimeout, setInterval)"
+  - "Execute microtasks (Promise.then, queueMicrotask)"
+  - "Correct task ordering (microtasks before macrotasks)"
+  - "Handle nested timers correctly"
+  - "Cancel timers with clearTimeout/clearInterval"
+  - "Performance: Process 10,000 tasks in < 100ms"
+
+test_strategy:
+  unit_tests:
+    - "Task queue operations"
+    - "Timer scheduling and cancellation"
+    - "Microtask vs macrotask ordering"
+  integration_tests:
+    - "Full event loop cycle"
+    - "Nested setTimeout behavior"
+    - "Promise resolution order"
+  public_test_suites:
+    - name: "WPT Timers Tests"
+      url: "https://github.com/web-platform-tests/wpt/tree/master/html/webappapis/timers"
+      target_pass_rate: 90
+
+implementation_hints:
+  - "Integrate with tokio runtime for async I/O"
+  - "Process all microtasks before next macrotask"
+  - "Use priority queue for timer scheduling"
+  - "Implement task cancellation with generation IDs"
+
+common_pitfalls:
+  - issue: "Microtasks not running before macrotasks"
+    solution: "Drain microtask queue completely before next macrotask"
+  - issue: "Timer drift over long periods"
+    solution: "Use absolute time for next fire, not relative"
+  - issue: "Infinite microtask recursion"
+    solution: "Set maximum microtask iterations per loop"
+  - issue: "Memory leaks from uncancelled timers"
+    solution: "Clean up timer state on cancel"
+
+related_templates:
+  - "template://javascript/js-runtime-integration"
+  - "template://networking/http-client"

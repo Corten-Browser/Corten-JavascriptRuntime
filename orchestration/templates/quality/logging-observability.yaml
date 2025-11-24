@@ -1,0 +1,206 @@
+template_id: "quality-logging-observability"
+template_name: "Structured Logging and Observability"
+category: "quality"
+difficulty: "medium"
+estimated_loc: "1000-2500"
+
+keywords:
+  - "logging"
+  - "log"
+  - "structured logging"
+  - "observability"
+  - "tracing"
+  - "monitoring"
+  - "debug"
+  - "telemetry"
+
+parameters:
+  - name: "log_format"
+    type: "string"
+    options: ["json", "text", "colored"]
+    default: "json"
+  - name: "features"
+    type: "array"
+    options: ["structured", "context", "filtering", "rotation", "sampling"]
+
+core_interfaces:
+  - name: "Logger"
+    methods:
+      - "fn trace(&self, message: &str, fields: Fields)"
+      - "fn debug(&self, message: &str, fields: Fields)"
+      - "fn info(&self, message: &str, fields: Fields)"
+      - "fn warn(&self, message: &str, fields: Fields)"
+      - "fn error(&self, message: &str, fields: Fields)"
+  - name: "LogConfig"
+    fields:
+      - "level: LogLevel"
+      - "format: LogFormat"
+      - "output: LogOutput"
+
+recommended_libraries:
+  rust:
+    - name: "tracing"
+      version: "0.1"
+      required: true
+      purpose: "Structured, async-aware logging framework"
+      registry_url: "https://crates.io/crates/tracing"
+    - name: "tracing-subscriber"
+      version: "0.3"
+      required: true
+      purpose: "Utilities for tracing (formatting, filtering)"
+      registry_url: "https://crates.io/crates/tracing-subscriber"
+    - name: "log"
+      version: "0.4"
+      required: false
+      purpose: "Logging facade (simpler alternative)"
+      registry_url: "https://crates.io/crates/log"
+    - name: "env_logger"
+      version: "0.11"
+      required: false
+      purpose: "Logger configured via environment variables"
+      registry_url: "https://crates.io/crates/env_logger"
+  python:
+    - name: "structlog"
+      version: "23.3"
+      required: true
+      purpose: "Structured logging for Python"
+      registry_url: "https://pypi.org/project/structlog/"
+    - name: "loguru"
+      version: "0.7"
+      required: false
+      purpose: "Simplified logging with sane defaults"
+      registry_url: "https://pypi.org/project/loguru/"
+    - name: "python-json-logger"
+      version: "2.0"
+      required: false
+      purpose: "JSON formatter for standard logging"
+      registry_url: "https://pypi.org/project/python-json-logger/"
+
+acceptance_criteria:
+  - "Multiple log levels (trace, debug, info, warn, error)"
+  - "Structured logging (key-value pairs, not just strings)"
+  - "Context propagation (request ID, user ID)"
+  - "Log filtering by level and module"
+  - "Multiple outputs (stdout, file, syslog)"
+  - "JSON formatting for machine parsing"
+  - "Log rotation (size or time-based)"
+  - "Performance: < 1µs overhead per log call"
+
+test_strategy:
+  unit_tests:
+    - "Log level filtering"
+    - "Output formatting (JSON, text)"
+    - "Context field addition"
+  integration_tests:
+    - "Full application logging"
+    - "Log aggregation (e.g., to ELK stack)"
+  benchmarks:
+    - "Logging overhead (disabled, enabled)"
+    - "Structured vs simple logging cost"
+
+implementation_hints:
+  - "Use tracing for Rust (async-aware, span tracking)"
+  - "Use structlog for Python (structured, flexible)"
+  - "Log structured data, not formatted strings"
+  - "Use log levels correctly: trace=very detailed, debug=dev info, info=notable events, warn=problems, error=failures"
+  - "Add context fields (request_id, user_id, session_id)"
+  - "Configure log levels via environment variables"
+  - "Use JSON for production (machine-readable)"
+  - "Use colored/pretty format for development"
+
+common_pitfalls:
+  - issue: "Logging sensitive data (passwords, tokens)"
+    solution: "Filter sensitive fields, use [REDACTED] placeholder"
+  - issue: "Too much logging (performance impact)"
+    solution: "Use appropriate levels, disable trace/debug in production"
+  - issue: "Inconsistent log format"
+    solution: "Use structured logging with consistent field names"
+  - issue: "Lost log context in async code"
+    solution: "Use tracing spans (Rust) or context managers (Python)"
+  - issue: "Log files growing unbounded"
+    solution: "Enable log rotation (size or time-based)"
+  - issue: "No correlation between related logs"
+    solution: "Add correlation IDs (request_id, trace_id)"
+
+log_levels:
+  trace:
+    description: "Very detailed, high-volume"
+    use_case: "Function entry/exit, loop iterations"
+    production: "Disabled"
+  debug:
+    description: "Detailed diagnostic info"
+    use_case: "Variable values, decision branches"
+    production: "Disabled or sampled"
+  info:
+    description: "Notable events"
+    use_case: "Request started, job completed, config loaded"
+    production: "Enabled"
+  warn:
+    description: "Recoverable problems"
+    use_case: "Deprecated API used, fallback triggered"
+    production: "Enabled"
+  error:
+    description: "Failures requiring attention"
+    use_case: "Request failed, exception caught"
+    production: "Enabled"
+
+example_python_structlog: |
+  import structlog
+
+  # Configure structlog
+  structlog.configure(
+      processors=[
+          structlog.processors.TimeStamper(fmt="iso"),
+          structlog.stdlib.add_log_level,
+          structlog.processors.JSONRenderer()
+      ],
+      context_class=dict,
+      logger_factory=structlog.PrintLoggerFactory(),
+  )
+
+  log = structlog.get_logger()
+
+  # Structured logging
+  log.info("user_login", user_id=123, ip_address="192.168.1.1")
+  log.error("database_error", error="connection refused", retry_count=3)
+
+  # Context binding
+  log = log.bind(request_id="abc-123")
+  log.info("processing_started")
+  log.info("processing_completed", duration_ms=150)
+
+example_rust_tracing: |
+  use tracing::{info, warn, error, instrument};
+  use tracing_subscriber;
+
+  fn main() {
+      // Initialize tracing
+      tracing_subscriber::fmt()
+          .with_max_level(tracing::Level::INFO)
+          .json()
+          .init();
+
+      // Structured logging
+      info!(user_id = 123, ip_address = "192.168.1.1", "user_login");
+      error!(error = "connection refused", retry_count = 3, "database_error");
+
+      // Spans for context
+      let span = tracing::info_span!("request", request_id = "abc-123");
+      let _enter = span.enter();
+
+      info!("processing_started");
+      info!(duration_ms = 150, "processing_completed");
+  }
+
+  // Instrument functions automatically
+  #[instrument]
+  async fn process_request(user_id: u64) -> Result<(), Error> {
+      info!("processing user request");
+      // Function arguments automatically added to span
+      Ok(())
+  }
+
+related_templates:
+  - "template://ai/agent-orchestration"
+  - "template://deployment/podman-containerization"
+  - "template://cli/progress-feedback"

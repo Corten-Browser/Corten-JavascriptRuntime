@@ -1,0 +1,113 @@
+template_id: "javascript-js-runtime-integration"
+template_name: "JavaScript Runtime Integration"
+category: "javascript"
+difficulty: "expert"
+estimated_loc: "10000-20000"
+
+keywords:
+  - "javascript"
+  - "js"
+  - "runtime"
+  - "v8"
+  - "spidermonkey"
+  - "execution"
+  - "bindings"
+
+parameters:
+  - name: "js_engine"
+    type: "string"
+    options: ["V8", "SpiderMonkey", "JavaScriptCore"]
+    default: "V8"
+  - name: "features"
+    type: "array"
+    options: ["es6_modules", "async_await", "web_apis", "console", "timers"]
+
+core_interfaces:
+  - name: "JsRuntime"
+    methods:
+      - "fn new() -> Result<JsRuntime, Error>"
+      - "fn execute_script(&mut self, source: &str, filename: &str) -> Result<Value, Error>"
+      - "fn call_function(&mut self, fn_name: &str, args: &[Value]) -> Result<Value, Error>"
+      - "fn register_function(&mut self, name: &str, callback: NativeFunction)"
+  - name: "JsContext"
+    methods:
+      - "fn create_object(&mut self) -> JsObject"
+      - "fn create_array(&mut self) -> JsArray"
+      - "fn throw_exception(&mut self, message: &str)"
+
+recommended_libraries:
+  rust:
+    - name: "v8"
+      version: "0.84"
+      required: true
+      purpose: "V8 JavaScript engine bindings"
+      registry_url: "https://crates.io/crates/v8"
+    - name: "deno_core"
+      version: "0.248"
+      required: false
+      purpose: "High-level V8 runtime (used by Deno)"
+      registry_url: "https://crates.io/crates/deno_core"
+    - name: "rusty_v8"
+      version: "0.84"
+      required: false
+      purpose: "Alternative V8 bindings"
+      registry_url: "https://crates.io/crates/rusty_v8"
+  python:
+    - name: "PyV8"
+      version: "1.0"
+      required: false
+      purpose: "V8 bindings for Python (archived)"
+      registry_url: "https://github.com/emmetio/pyv8-binaries"
+    - name: "PyMiniRacer"
+      version: "0.11"
+      required: true
+      purpose: "V8 wrapper for Python"
+      registry_url: "https://pypi.org/project/PyMiniRacer/"
+
+acceptance_criteria:
+  - "Execute JavaScript code successfully"
+  - "Call JavaScript functions from host language"
+  - "Call host functions from JavaScript"
+  - "Handle exceptions in both directions"
+  - "Support ES6+ syntax"
+  - "Implement Web APIs (console, setTimeout, fetch)"
+  - "Performance: Execute 10,000 simple functions in < 100ms"
+
+test_strategy:
+  unit_tests:
+    - "Script execution (basic JS code)"
+    - "Function calls (JS → Host, Host → JS)"
+    - "Value conversion (primitives, objects, arrays)"
+    - "Exception handling"
+  integration_tests:
+    - "Full Web API implementation"
+    - "ES6 modules loading"
+    - "Async/await execution"
+  public_test_suites:
+    - name: "Test262 (ECMAScript Conformance)"
+      url: "https://github.com/tc39/test262"
+      target_pass_rate: 85
+
+implementation_hints:
+  - "Use deno_core for easier V8 integration"
+  - "Implement JsRuntime with proper isolate management"
+  - "Use v8::HandleScope for memory management"
+  - "Register Web APIs as global functions"
+
+common_pitfalls:
+  - issue: "Memory leaks from V8 handles"
+    solution: "Use HandleScope and EscapableHandleScope correctly"
+  - issue: "Crashes from invalid isolate access"
+    solution: "Never share isolates across threads"
+  - issue: "Not handling async operations"
+    solution: "Integrate with event loop (tokio/async-std)"
+  - issue: "Security: unrestricted file/network access"
+    solution: "Implement sandbox with permission system"
+
+depends_on:
+  - "template://javascript/event-loop"
+
+related_templates:
+  - "template://javascript/v8-bindings"
+  - "template://javascript/wasm-support"
+  - "template://dom/dom-tree"

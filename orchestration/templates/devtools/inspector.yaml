@@ -1,0 +1,96 @@
+template_id: "devtools-inspector"
+template_name: "DOM and CSS Inspector"
+category: "devtools"
+difficulty: "hard"
+estimated_loc: "8000-12000"
+
+keywords:
+  - "inspector"
+  - "devtools"
+  - "dom"
+  - "css"
+  - "elements"
+  - "styles"
+  - "highlight"
+
+parameters:
+  - name: "features"
+    type: "array"
+    options: ["dom_tree_view", "css_styles", "computed_styles", "box_model", "element_highlight"]
+
+core_interfaces:
+  - name: "Inspector"
+    methods:
+      - "fn inspect_element(&self, node_id: NodeId) -> ElementInfo"
+      - "fn get_computed_styles(&self, node_id: NodeId) -> ComputedStyles"
+      - "fn get_matched_rules(&self, node_id: NodeId) -> Vec<MatchedRule>"
+      - "fn highlight_element(&mut self, node_id: NodeId, highlight_config: HighlightConfig)"
+      - "fn get_box_model(&self, node_id: NodeId) -> BoxModel"
+
+recommended_libraries:
+  rust:
+    - name: "serde_json"
+      version: "1.0"
+      required: true
+      purpose: "Serialize inspector data for protocol"
+      registry_url: "https://crates.io/crates/serde_json"
+    - name: "tokio-tungstenite"
+      version: "0.21"
+      required: true
+      purpose: "WebSocket for DevTools protocol"
+      registry_url: "https://crates.io/crates/tokio-tungstenite"
+  python:
+    - name: "websockets"
+      version: "12.0"
+      required: true
+      purpose: "WebSocket server for protocol"
+      registry_url: "https://pypi.org/project/websockets/"
+    - name: "pychrome"
+      version: "0.2"
+      required: false
+      purpose: "Chrome DevTools Protocol library"
+      registry_url: "https://pypi.org/project/pychrome/"
+
+acceptance_criteria:
+  - "Display DOM tree hierarchy"
+  - "Show computed styles for selected element"
+  - "Display matched CSS rules with specificity"
+  - "Show box model visualization"
+  - "Highlight elements on page"
+  - "Update view on DOM mutations"
+  - "Performance: Serialize DOM tree in < 100ms"
+
+test_strategy:
+  unit_tests:
+    - "Element info serialization"
+    - "Computed style calculation"
+    - "Matched rule collection"
+  integration_tests:
+    - "Full inspector UI rendering"
+    - "Live updates on DOM mutations"
+    - "Element highlighting"
+  benchmarks:
+    - "DOM tree serialization time"
+    - "Style recalculation on change"
+
+implementation_hints:
+  - "Implement Chrome DevTools Protocol (CDP)"
+  - "Use WebSocket for bidirectional communication"
+  - "Cache computed styles for performance"
+  - "Implement incremental DOM tree updates"
+
+common_pitfalls:
+  - issue: "Slow DOM tree serialization"
+    solution: "Serialize on-demand (lazy load children)"
+  - issue: "Styles not updating on CSS changes"
+    solution: "Invalidate cache on stylesheet mutations"
+  - issue: "Highlight flicker on scroll"
+    solution: "Use absolute positioning, update on scroll"
+
+depends_on:
+  - "template://dom/dom-tree"
+  - "template://rendering/css-cascade"
+
+related_templates:
+  - "template://devtools/debugger"
+  - "template://devtools/profiler"

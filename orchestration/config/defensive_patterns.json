@@ -1,0 +1,328 @@
+{
+  "patterns": {
+    "null_safety": {
+      "description": "Detect unchecked None/null references",
+      "severity": "critical",
+      "patterns": [
+        {
+          "id": "unchecked_attribute_access",
+          "description": "Attribute access without None check",
+          "pattern": "\\b(\\w+)\\.(\\w+)\\(",
+          "ast_check": "attribute_without_none_check",
+          "fix_template": "if {var} is not None:\n    {original_line}",
+          "example_violation": "user.get_name()",
+          "example_fix": "if user is not None:\n    user.get_name()"
+        },
+        {
+          "id": "unchecked_dict_access",
+          "description": "Dictionary access without key check",
+          "pattern": "\\b(\\w+)\\[(['\"])([^'\"]+)\\2\\]",
+          "ast_check": "subscript_without_key_check",
+          "fix_template": "{dict}.get({key}, {default})",
+          "example_violation": "data['name']",
+          "example_fix": "data.get('name', None)"
+        },
+        {
+          "id": "unchecked_list_access",
+          "description": "List access without bounds check",
+          "pattern": "\\b(\\w+)\\[(\\d+)\\]",
+          "ast_check": "list_subscript_without_bounds",
+          "fix_template": "if len({list}) > {index}:\n    {original_line}",
+          "example_violation": "items[0]",
+          "example_fix": "if len(items) > 0:\n    items[0]"
+        }
+      ]
+    },
+    "collection_safety": {
+      "description": "Detect unvalidated collection access",
+      "severity": "warning",
+      "patterns": [
+        {
+          "id": "iteration_without_empty_check",
+          "description": "Iteration without checking if collection is empty",
+          "pattern": "for \\w+ in (\\w+):",
+          "ast_check": "for_loop_without_empty_check",
+          "fix_template": "if {collection}:\n    {original_block}",
+          "example_violation": "for item in items:\n    process(item)",
+          "example_fix": "if items:\n    for item in items:\n        process(item)"
+        },
+        {
+          "id": "first_element_access",
+          "description": "First element access without empty check",
+          "pattern": "\\b(\\w+)\\[0\\]",
+          "ast_check": "first_element_without_check",
+          "fix_template": "if {list}:\n    {original_line}",
+          "example_violation": "first = items[0]",
+          "example_fix": "first = items[0] if items else None"
+        },
+        {
+          "id": "pop_without_check",
+          "description": "Pop operation without empty check",
+          "pattern": "\\b(\\w+)\\.pop\\(",
+          "ast_check": "pop_without_empty_check",
+          "fix_template": "if {list}:\n    {original_line}",
+          "example_violation": "item = stack.pop()",
+          "example_fix": "if stack:\n    item = stack.pop()"
+        }
+      ]
+    },
+    "external_call_safety": {
+      "description": "Detect unsafe external calls",
+      "severity": "critical",
+      "patterns": [
+        {
+          "id": "requests_without_timeout",
+          "description": "HTTP request without timeout parameter",
+          "pattern": "requests\\.(get|post|put|delete|patch)\\([^)]*\\)",
+          "ast_check": "requests_missing_timeout",
+          "fix_template": "{original_call}, timeout=30)",
+          "example_violation": "requests.get(url)",
+          "example_fix": "requests.get(url, timeout=30)"
+        },
+        {
+          "id": "urllib_without_timeout",
+          "description": "urllib request without timeout",
+          "pattern": "urllib\\.request\\.urlopen\\([^)]*\\)",
+          "ast_check": "urlopen_missing_timeout",
+          "fix_template": "{original_call}, timeout=30)",
+          "example_violation": "urllib.request.urlopen(url)",
+          "example_fix": "urllib.request.urlopen(url, timeout=30)"
+        },
+        {
+          "id": "socket_without_timeout",
+          "description": "Socket operation without timeout",
+          "pattern": "socket\\.socket\\([^)]*\\)",
+          "ast_check": "socket_missing_timeout",
+          "fix_template": "sock = {original_call}\nsock.settimeout(30)",
+          "example_violation": "sock = socket.socket()",
+          "example_fix": "sock = socket.socket()\nsock.settimeout(30)"
+        },
+        {
+          "id": "database_query_without_timeout",
+          "description": "Database query without timeout",
+          "pattern": "(cursor|conn)\\.execute\\([^)]*\\)",
+          "ast_check": "db_execute_missing_timeout",
+          "fix_template": "{original_call}  # Add connection timeout in DB config",
+          "example_violation": "cursor.execute(query)",
+          "example_fix": "cursor.execute(query)  # Ensure connection has timeout"
+        }
+      ]
+    },
+    "timeout_presence": {
+      "description": "Verify timeout parameters on I/O operations",
+      "severity": "critical",
+      "patterns": [
+        {
+          "id": "open_without_timeout",
+          "description": "File operations that might block",
+          "pattern": "open\\([^)]*\\)",
+          "ast_check": "blocking_io_check",
+          "fix_template": "Use context manager: with open(...) as f:",
+          "example_violation": "f = open(file)",
+          "example_fix": "with open(file) as f:\n    data = f.read()"
+        },
+        {
+          "id": "subprocess_without_timeout",
+          "description": "Subprocess call without timeout",
+          "pattern": "subprocess\\.(run|call|check_output)\\([^)]*\\)",
+          "ast_check": "subprocess_missing_timeout",
+          "fix_template": "{original_call}, timeout=30)",
+          "example_violation": "subprocess.run(['cmd'])",
+          "example_fix": "subprocess.run(['cmd'], timeout=30)"
+        }
+      ]
+    },
+    "type_safety": {
+      "description": "Detect unsafe type conversions",
+      "severity": "warning",
+      "patterns": [
+        {
+          "id": "unchecked_int_conversion",
+          "description": "int() conversion without validation",
+          "pattern": "int\\((\\w+)\\)",
+          "ast_check": "int_conversion_without_try",
+          "fix_template": "try:\n    {original_line}\nexcept ValueError:\n    # Handle invalid input",
+          "example_violation": "age = int(user_input)",
+          "example_fix": "try:\n    age = int(user_input)\nexcept ValueError:\n    age = None"
+        },
+        {
+          "id": "unchecked_float_conversion",
+          "description": "float() conversion without validation",
+          "pattern": "float\\((\\w+)\\)",
+          "ast_check": "float_conversion_without_try",
+          "fix_template": "try:\n    {original_line}\nexcept ValueError:\n    # Handle invalid input",
+          "example_violation": "price = float(value)",
+          "example_fix": "try:\n    price = float(value)\nexcept ValueError:\n    price = 0.0"
+        },
+        {
+          "id": "unchecked_json_parse",
+          "description": "JSON parsing without error handling",
+          "pattern": "json\\.loads\\((\\w+)\\)",
+          "ast_check": "json_loads_without_try",
+          "fix_template": "try:\n    {original_line}\nexcept json.JSONDecodeError:\n    # Handle invalid JSON",
+          "example_violation": "data = json.loads(text)",
+          "example_fix": "try:\n    data = json.loads(text)\nexcept json.JSONDecodeError:\n    data = {}"
+        }
+      ]
+    },
+    "bounds_safety": {
+      "description": "Detect missing bounds checking on numeric operations",
+      "severity": "warning",
+      "patterns": [
+        {
+          "id": "division_without_zero_check",
+          "description": "Division without zero check",
+          "pattern": "(\\w+)\\s*/\\s*(\\w+)",
+          "ast_check": "division_without_zero_check",
+          "fix_template": "if {divisor} != 0:\n    {original_line}",
+          "example_violation": "result = a / b",
+          "example_fix": "result = a / b if b != 0 else 0"
+        },
+        {
+          "id": "modulo_without_zero_check",
+          "description": "Modulo operation without zero check",
+          "pattern": "(\\w+)\\s*%\\s*(\\w+)",
+          "ast_check": "modulo_without_zero_check",
+          "fix_template": "if {divisor} != 0:\n    {original_line}",
+          "example_violation": "remainder = a % b",
+          "example_fix": "remainder = a % b if b != 0 else 0"
+        },
+        {
+          "id": "array_slice_without_check",
+          "description": "Array slicing without bounds validation",
+          "pattern": "(\\w+)\\[(\\w+):(\\w+)\\]",
+          "ast_check": "slice_without_bounds_check",
+          "fix_template": "Use min/max: {list}[max(0, {start}):min(len({list}), {end})]",
+          "example_violation": "subset = items[start:end]",
+          "example_fix": "subset = items[max(0, start):min(len(items), end)]"
+        }
+      ]
+    },
+    "exception_handling": {
+      "description": "Verify appropriate exception handling",
+      "severity": "critical",
+      "patterns": [
+        {
+          "id": "bare_except",
+          "description": "Bare except clause catches everything",
+          "pattern": "except:\\s*$",
+          "ast_check": "bare_except_clause",
+          "fix_template": "except Exception as e:",
+          "example_violation": "except:\n    pass",
+          "example_fix": "except Exception as e:\n    logger.error(f'Error: {e}')"
+        },
+        {
+          "id": "silent_exception",
+          "description": "Exception caught but not logged",
+          "pattern": "except .+:\\s*pass",
+          "ast_check": "silent_exception_handler",
+          "fix_template": "except {exception} as e:\n    logger.error(f'Error: {e}')",
+          "example_violation": "except ValueError:\n    pass",
+          "example_fix": "except ValueError as e:\n    logger.error(f'Validation error: {e}')"
+        },
+        {
+          "id": "io_without_exception",
+          "description": "I/O operation without exception handling",
+          "pattern": "(open|read|write)\\(",
+          "ast_check": "io_without_try_catch",
+          "fix_template": "try:\n    {original_block}\nexcept IOError as e:\n    # Handle I/O error",
+          "example_violation": "data = file.read()",
+          "example_fix": "try:\n    data = file.read()\nexcept IOError as e:\n    logger.error(f'Read failed: {e}')"
+        }
+      ]
+    },
+    "concurrency_safety": {
+      "description": "Detect potential race conditions",
+      "severity": "warning",
+      "patterns": [
+        {
+          "id": "shared_state_without_lock",
+          "description": "Shared state modification without locking",
+          "pattern": "(self\\.(\\w+)|global\\s+(\\w+))\\s*=",
+          "ast_check": "shared_state_without_lock",
+          "fix_template": "with self._lock:\n    {original_line}",
+          "example_violation": "self.counter += 1",
+          "example_fix": "with self._lock:\n    self.counter += 1"
+        },
+        {
+          "id": "check_then_act",
+          "description": "Check-then-act race condition",
+          "pattern": "if .+ in .+:\\s*\\n\\s*.+\\[.+\\]",
+          "ast_check": "check_then_act_pattern",
+          "fix_template": "Use try-except or atomic operations",
+          "example_violation": "if key in dict:\n    value = dict[key]",
+          "example_fix": "value = dict.get(key, default)"
+        }
+      ]
+    }
+  },
+  "safe_patterns": {
+    "description": "Patterns that should NOT trigger violations",
+    "patterns": [
+      {
+        "id": "none_check_present",
+        "pattern": "if .+ is not None:",
+        "description": "Explicit None check before access"
+      },
+      {
+        "id": "dict_get_method",
+        "pattern": "\\.get\\(",
+        "description": "Safe dictionary access using get()"
+      },
+      {
+        "id": "len_check_present",
+        "pattern": "if len\\(.+\\)",
+        "description": "Explicit length check before access"
+      },
+      {
+        "id": "try_except_present",
+        "pattern": "try:\\s*\\n.*\\nexcept",
+        "description": "Exception handling present"
+      },
+      {
+        "id": "timeout_parameter",
+        "pattern": "timeout\\s*=",
+        "description": "Timeout parameter provided"
+      },
+      {
+        "id": "context_manager",
+        "pattern": "with .+ as .+:",
+        "description": "Context manager used"
+      },
+      {
+        "id": "zero_check_present",
+        "pattern": "if .+ != 0:",
+        "description": "Zero check before division"
+      },
+      {
+        "id": "lock_usage",
+        "pattern": "with .+lock:",
+        "description": "Lock used for thread safety"
+      }
+    ]
+  },
+  "severity_levels": {
+    "critical": {
+      "description": "Must be fixed before production",
+      "color": "red",
+      "exit_code": 1
+    },
+    "warning": {
+      "description": "Should be reviewed and fixed",
+      "color": "yellow",
+      "exit_code": 0
+    },
+    "info": {
+      "description": "Informational, consider improvement",
+      "color": "blue",
+      "exit_code": 0
+    }
+  },
+  "file_extensions": {
+    "python": [".py"],
+    "javascript": [".js", ".jsx"],
+    "typescript": [".ts", ".tsx"],
+    "java": [".java"],
+    "go": [".go"]
+  }
+}

@@ -1,0 +1,90 @@
+template_id: "rendering-css-cascade"
+template_name: "CSS Cascade and Style Computation"
+category: "rendering"
+difficulty: "hard"
+estimated_loc: "6000-10000"
+
+keywords:
+  - "cascade"
+  - "specificity"
+  - "inheritance"
+  - "computed style"
+  - "style"
+  - "css"
+  - "property"
+
+parameters:
+  - name: "features"
+    type: "array"
+    options: ["inheritance", "specificity", "important", "custom_properties"]
+
+core_interfaces:
+  - name: "StyleEngine"
+    methods:
+      - "fn compute_style(&self, element: &Element, parent_style: Option<&ComputedStyle>) -> ComputedStyle"
+      - "fn apply_cascade(&self, element: &Element, rules: &[MatchedRule]) -> ComputedStyle"
+      - "fn resolve_inheritance(&self, property: Property, parent: &ComputedStyle) -> PropertyValue"
+
+recommended_libraries:
+  rust:
+    - name: "selectors"
+      version: "0.25"
+      required: true
+      purpose: "Specificity calculation"
+      registry_url: "https://crates.io/crates/selectors"
+    - name: "cssparser"
+      version: "0.31"
+      required: true
+      purpose: "Property value parsing"
+      registry_url: "https://crates.io/crates/cssparser"
+  python:
+    - name: "tinycss2"
+      version: "1.2"
+      required: true
+      purpose: "CSS parsing"
+      registry_url: "https://pypi.org/project/tinycss2/"
+
+acceptance_criteria:
+  - "Compute specificity correctly ((a,b,c,d) tuple)"
+  - "Apply cascade (sort by specificity + source order)"
+  - "Handle !important declarations"
+  - "Inherit properties correctly (color, font-*)"
+  - "Resolve CSS variables (custom properties)"
+  - "Support shorthand expansion (margin → margin-*)"
+  - "Performance: Compute styles for 1,000 elements in < 50ms"
+
+test_strategy:
+  unit_tests:
+    - "Specificity calculation"
+    - "Property inheritance rules"
+    - "Cascade ordering"
+  integration_tests:
+    - "Full style computation pipeline"
+    - "CSS variable resolution"
+    - "!important handling"
+  public_test_suites:
+    - name: "CSS WG Cascade Tests"
+      url: "https://github.com/web-platform-tests/wpt/tree/master/css/css-cascade"
+      target_pass_rate: 85
+
+implementation_hints:
+  - "Sort matched rules by specificity + source order"
+  - "Cache computed styles for unchanged elements"
+  - "Implement property inheritance map (which properties inherit)"
+  - "Handle CSS variables with substitution pass"
+
+common_pitfalls:
+  - issue: "Incorrect specificity calculation"
+    solution: "Follow CSS spec exactly: (inline, ids, classes, elements)"
+  - issue: "Not handling !important"
+    solution: "Create separate cascade layer for !important declarations"
+  - issue: "Forgetting to inherit properties"
+    solution: "Maintain list of inheritable properties from spec"
+
+depends_on:
+  - "template://rendering/css-parser"
+  - "template://rendering/css-selector-engine"
+
+related_templates:
+  - "template://rendering/layout-engine"
+  - "template://dom/dom-tree"

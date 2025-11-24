@@ -1,0 +1,191 @@
+template_id: "testing-property-based-testing"
+template_name: "Property-Based Testing with Generators"
+category: "testing"
+difficulty: "medium"
+estimated_loc: "1000-3000"
+
+keywords:
+  - "property-based testing"
+  - "hypothesis"
+  - "proptest"
+  - "quickcheck"
+  - "generative testing"
+  - "fuzzing"
+  - "test generation"
+  - "invariant"
+
+parameters:
+  - name: "testing_framework"
+    type: "string"
+    options: ["hypothesis", "proptest", "quickcheck"]
+  - name: "strategies"
+    type: "array"
+    options: ["basic_types", "collections", "custom_generators", "stateful_testing"]
+
+core_interfaces:
+  - name: "PropertyTest"
+    methods:
+      - "fn test_property<F>(f: F) where F: Fn(T) -> bool"
+      - "fn with_examples(n: usize) -> Self"
+      - "fn with_seed(seed: u64) -> Self"
+
+recommended_libraries:
+  rust:
+    - name: "proptest"
+      version: "1.4"
+      required: true
+      purpose: "Property-based testing framework"
+      registry_url: "https://crates.io/crates/proptest"
+    - name: "quickcheck"
+      version: "1.0"
+      required: false
+      purpose: "Alternative property-based testing"
+      registry_url: "https://crates.io/crates/quickcheck"
+  python:
+    - name: "hypothesis"
+      version: "6.92"
+      required: true
+      purpose: "Property-based testing framework"
+      registry_url: "https://pypi.org/project/hypothesis/"
+
+acceptance_criteria:
+  - "Generate random test inputs"
+  - "Test invariants/properties (not specific values)"
+  - "Shrink failing inputs to minimal examples"
+  - "Reproduce failures with seeds"
+  - "Support custom generators"
+  - "Stateful testing (sequences of operations)"
+  - "Performance: Generate 100 test cases in < 1 second"
+
+test_strategy:
+  property_tests:
+    - "Arithmetic properties (commutativity, associativity)"
+    - "Serialization round-tripping (serialize → deserialize = identity)"
+    - "Idempotence (f(f(x)) = f(x))"
+    - "Invariants (sorted list stays sorted after insert)"
+  example_based_tests:
+    - "Known edge cases supplement property tests"
+  benchmarks:
+    - "Test generation speed"
+    - "Shrinking performance"
+
+implementation_hints:
+  - "Start with simple properties (reverse(reverse(x)) == x)"
+  - "Use built-in strategies (integers, strings, lists)"
+  - "Combine strategies (tuples, structs)"
+  - "Write properties, not examples"
+  - "Use @given decorator (Hypothesis) or proptest! macro (proptest)"
+  - "Let framework find edge cases (don't hardcode)"
+  - "Use stateful testing for complex state machines"
+
+common_pitfalls:
+  - issue: "Property too weak (always passes)"
+    solution: "Test with deliberately broken code to verify property catches bugs"
+  - issue: "Slow test execution"
+    solution: "Reduce max_examples, profile generators"
+  - issue: "Non-deterministic failures"
+    solution: "Save and reuse seed: @seed(1234) or seed: [0, 1234, 0, 0]"
+  - issue: "Generators produce invalid data"
+    solution: "Add filters or custom strategies with constraints"
+  - issue: "Shrinking doesn't work well"
+    solution: "Use built-in strategies (better shrinking)"
+
+property_testing_concepts:
+  property:
+    description: "Universal truth about code"
+    example: "For all lists, reverse(reverse(x)) == x"
+  generator:
+    description: "Produces random test inputs"
+    example: "Generate integers from -100 to 100"
+  shrinking:
+    description: "Minimize failing input"
+    example: "[1, 2, 3, ..., 100] shrinks to [1]"
+  stateful:
+    description: "Test sequences of operations"
+    example: "push() → pop() → check invariants"
+
+example_python_hypothesis: |
+  from hypothesis import given, strategies as st
+  import pytest
+
+  # Simple property test
+  @given(st.integers())
+  def test_addition_commutative(x):
+      assert x + 0 == 0 + x
+
+  @given(st.lists(st.integers()))
+  def test_reverse_inverse(xs):
+      assert list(reversed(list(reversed(xs)))) == xs
+
+  # Custom generator
+  @given(st.lists(st.integers(), min_size=1))
+  def test_max_in_list(xs):
+      assert max(xs) in xs
+
+  # Stateful testing
+  from hypothesis.stateful import RuleBasedStateMachine, rule
+
+  class StackMachine(RuleBasedStateMachine):
+      def __init__(self):
+          super().__init__()
+          self.stack = []
+
+      @rule(value=st.integers())
+      def push(self, value):
+          self.stack.append(value)
+
+      @rule()
+      def pop(self):
+          if self.stack:
+              self.stack.pop()
+
+      @rule()
+      def check_invariant(self):
+          # Stack never has duplicates (example invariant)
+          assert len(self.stack) == len(set(self.stack))
+
+  TestStack = StackMachine.TestCase
+
+example_rust_proptest: |
+  use proptest::prelude::*;
+
+  // Simple property test
+  proptest! {
+      #[test]
+      fn test_addition_commutative(x in 0..1000i32) {
+          assert_eq!(x + 0, 0 + x);
+      }
+
+      #[test]
+      fn test_reverse_inverse(xs in prop::collection::vec(any::<i32>(), 0..100)) {
+          let reversed: Vec<_> = xs.iter().rev().collect();
+          let reversed_again: Vec<_> = reversed.iter().rev().collect();
+          assert_eq!(xs, reversed_again.into_iter().cloned().collect::<Vec<_>>());
+      }
+  }
+
+  // Custom generator
+  fn sorted_vec() -> impl Strategy<Value = Vec<i32>> {
+      prop::collection::vec(any::<i32>(), 0..100)
+          .prop_map(|mut v| { v.sort(); v })
+  }
+
+  proptest! {
+      #[test]
+      fn test_insert_preserves_sorted(
+          mut v in sorted_vec(),
+          x in any::<i32>()
+      ) {
+          v.push(x);
+          v.sort();
+          // Check still sorted
+          for i in 1..v.len() {
+              assert!(v[i - 1] <= v[i]);
+          }
+      }
+  }
+
+related_templates:
+  - "template://scientific/numerical-simulation"
+  - "template://data/data-validation"
+  - "template://audio/signal-processing"

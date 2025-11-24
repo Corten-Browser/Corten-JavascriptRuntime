@@ -1,0 +1,101 @@
+template_id: "fonts-font-rasterization"
+template_name: "Font Rasterization and Glyph Rendering"
+category: "fonts"
+difficulty: "hard"
+estimated_loc: "5000-9000"
+
+keywords:
+  - "rasterize"
+  - "glyph"
+  - "render"
+  - "freetype"
+  - "antialiasing"
+  - "hinting"
+  - "bitmap"
+
+parameters:
+  - name: "rendering_mode"
+    type: "string"
+    options: ["grayscale", "subpixel", "monochrome"]
+    default: "grayscale"
+  - name: "features"
+    type: "array"
+    options: ["antialiasing", "hinting", "subpixel_rendering", "emoji_color"]
+
+core_interfaces:
+  - name: "FontRasterizer"
+    methods:
+      - "fn rasterize_glyph(&self, glyph_id: GlyphId, size: f32) -> RasterizedGlyph"
+      - "fn get_glyph_bitmap(&self, glyph_id: GlyphId, size: f32) -> Bitmap"
+      - "fn set_hinting(&mut self, mode: HintingMode)"
+
+recommended_libraries:
+  rust:
+    - name: "freetype"
+      version: "0.33"
+      required: true
+      purpose: "FreeType font rasterization bindings"
+      registry_url: "https://crates.io/crates/freetype"
+    - name: "fontdue"
+      version: "0.8"
+      required: false
+      purpose: "Pure Rust font rasterization (no FreeType)"
+      registry_url: "https://crates.io/crates/fontdue"
+    - name: "ab_glyph"
+      version: "0.2"
+      required: false
+      purpose: "Alternative pure Rust rasterization"
+      registry_url: "https://crates.io/crates/ab_glyph"
+  python:
+    - name: "freetype-py"
+      version: "2.4"
+      required: true
+      purpose: "FreeType bindings for Python"
+      registry_url: "https://pypi.org/project/freetype-py/"
+    - name: "Pillow"
+      version: "10.2"
+      required: true
+      purpose: "Image manipulation for glyph bitmaps"
+      registry_url: "https://pypi.org/project/Pillow/"
+
+acceptance_criteria:
+  - "Rasterize glyphs at various sizes (8pt - 144pt)"
+  - "Support antialiasing (grayscale and subpixel)"
+  - "Apply font hinting correctly"
+  - "Render color emoji (if font supports)"
+  - "Cache rasterized glyphs for performance"
+  - "Performance: Rasterize 100 glyphs in < 50ms"
+
+test_strategy:
+  unit_tests:
+    - "Glyph rasterization (various sizes)"
+    - "Bitmap generation and format conversion"
+  integration_tests:
+    - "Full text rendering pipeline"
+    - "Antialiasing modes comparison"
+  visual_regression_tests:
+    - "Glyph bitmap comparison with reference"
+  benchmarks:
+    - "Rasterization time vs glyph size"
+    - "Cache hit/miss performance"
+
+implementation_hints:
+  - "Use FreeType for production rasterization"
+  - "Enable hinting for better small-size rendering"
+  - "Cache rasterized glyphs with LRU eviction"
+  - "Use subpixel rendering for LCD displays"
+
+common_pitfalls:
+  - issue: "Blurry text at small sizes"
+    solution: "Enable hinting, use integer pixel sizes"
+  - issue: "Memory bloat from glyph cache"
+    solution: "Implement size-limited LRU cache"
+  - issue: "Color emoji not rendering"
+    solution: "Check font format (COLR/CPAL or SBIX tables)"
+
+depends_on:
+  - "template://fonts/font-loader"
+  - "template://fonts/text-shaping"
+
+related_templates:
+  - "template://rendering/paint-system"

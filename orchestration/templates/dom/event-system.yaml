@@ -1,0 +1,96 @@
+template_id: "dom-event-system"
+template_name: "DOM Event System and Listeners"
+category: "dom"
+difficulty: "hard"
+estimated_loc: "6000-10000"
+
+keywords:
+  - "event"
+  - "listener"
+  - "dispatch"
+  - "bubbling"
+  - "capture"
+  - "propagation"
+  - "addEventListener"
+
+parameters:
+  - name: "event_phases"
+    type: "array"
+    options: ["capture", "target", "bubble"]
+  - name: "features"
+    type: "array"
+    options: ["prevent_default", "stop_propagation", "event_delegation", "custom_events"]
+
+core_interfaces:
+  - name: "EventTarget"
+    methods:
+      - "fn add_event_listener(&mut self, event_type: &str, listener: EventListener, options: ListenerOptions)"
+      - "fn remove_event_listener(&mut self, event_type: &str, listener: EventListener)"
+      - "fn dispatch_event(&self, event: &Event) -> bool"
+  - name: "Event"
+    methods:
+      - "fn event_type(&self) -> &str"
+      - "fn target(&self) -> Option<EventTargetRef>"
+      - "fn current_target(&self) -> Option<EventTargetRef>"
+      - "fn stop_propagation(&mut self)"
+      - "fn prevent_default(&mut self)"
+
+recommended_libraries:
+  rust:
+    - name: "slotmap"
+      version: "1.0"
+      required: false
+      purpose: "Efficient listener storage"
+      registry_url: "https://crates.io/crates/slotmap"
+  python:
+    - name: "pyee"
+      version: "11.1"
+      required: true
+      purpose: "Event emitter pattern"
+      registry_url: "https://pypi.org/project/pyee/"
+
+acceptance_criteria:
+  - "addEventListener registers listeners correctly"
+  - "Events propagate in correct order (capture → target → bubble)"
+  - "stopPropagation prevents further propagation"
+  - "preventDefault prevents default action"
+  - "Multiple listeners per event type supported"
+  - "Custom events can be created and dispatched"
+  - "Performance: Dispatch 10,000 events in < 50ms"
+
+test_strategy:
+  unit_tests:
+    - "Listener registration/removal"
+    - "Event object creation"
+    - "Propagation order (capture/bubble)"
+  integration_tests:
+    - "Full event propagation through DOM tree"
+    - "Event delegation patterns"
+    - "stopPropagation/preventDefault behavior"
+  public_test_suites:
+    - name: "DOM Events WPT"
+      url: "https://github.com/web-platform-tests/wpt/tree/master/dom/events"
+      target_pass_rate: 85
+
+implementation_hints:
+  - "Use phase-ordered listener lists (capture, target, bubble)"
+  - "Store listeners in HashMap<EventType, Vec<Listener>>"
+  - "Implement event path calculation (ancestors list)"
+  - "Support once: true option (auto-remove after first fire)"
+
+common_pitfalls:
+  - issue: "Listeners firing in wrong order"
+    solution: "Capture phase BEFORE bubble, preserve registration order"
+  - issue: "Memory leaks from unremoved listeners"
+    solution: "Implement weak references or manual cleanup"
+  - issue: "stopPropagation not working"
+    solution: "Check propagation flag after each listener"
+  - issue: "Mutation during event dispatch"
+    solution: "Clone listener list before iterating"
+
+depends_on:
+  - "template://dom/dom-tree"
+
+related_templates:
+  - "template://dom/element-interface"
+  - "template://javascript/js-runtime-integration"

@@ -1,0 +1,121 @@
+template_id: "gui-pyside6-application"
+template_name: "PySide6 Desktop Application"
+category: "gui"
+difficulty: "medium"
+estimated_loc: "4000-8000"
+
+keywords:
+  - "gui"
+  - "desktop"
+  - "pyside"
+  - "pyside6"
+  - "qt"
+  - "pyqt"
+  - "window"
+  - "dialog"
+  - "widget"
+  - "application"
+
+parameters:
+  - name: "app_type"
+    type: "string"
+    options: ["single_window", "multi_window", "mdi"]
+    default: "single_window"
+  - name: "features"
+    type: "array"
+    options: ["dialogs", "menus", "toolbars", "status_bar", "dock_widgets", "stylesheets"]
+
+core_interfaces:
+  - name: "MainWindow"
+    methods:
+      - "def __init__(self)"
+      - "def setup_ui(self)"
+      - "def create_actions(self)"
+      - "def create_menus(self)"
+      - "def on_action_triggered(self, action: str)"
+  - name: "CustomWidget"
+    methods:
+      - "def __init__(self, parent=None)"
+      - "def paintEvent(self, event: QPaintEvent)"
+      - "def mousePressEvent(self, event: QMouseEvent)"
+
+recommended_libraries:
+  rust:
+    - name: "egui"
+      version: "0.25"
+      required: false
+      purpose: "Immediate mode GUI (not Qt but alternative)"
+      registry_url: "https://crates.io/crates/egui"
+    - name: "iced"
+      version: "0.12"
+      required: false
+      purpose: "Elm-inspired GUI (not Qt but alternative)"
+      registry_url: "https://crates.io/crates/iced"
+  python:
+    - name: "PySide6"
+      version: "6.6"
+      required: true
+      purpose: "Official Qt 6 bindings (LGPL license)"
+      registry_url: "https://pypi.org/project/PySide6/"
+    - name: "PySide6-Essentials"
+      version: "6.6"
+      required: true
+      purpose: "Core Qt modules (automatically installed)"
+      registry_url: "https://pypi.org/project/PySide6-Essentials/"
+    - name: "qt-material"
+      version: "2.14"
+      required: false
+      purpose: "Material Design themes for Qt"
+      registry_url: "https://pypi.org/project/qt-material/"
+
+acceptance_criteria:
+  - "Main window with menu bar and status bar"
+  - "Multiple dialog types (file open, message box, custom)"
+  - "Signals and slots for event handling"
+  - "Layouts (QVBoxLayout, QHBoxLayout, QGridLayout)"
+  - "Custom widgets with painting and event handling"
+  - "Application settings persistence (QSettings)"
+  - "Performance: Window opens in < 500ms"
+
+test_strategy:
+  unit_tests:
+    - "Widget creation and initialization"
+    - "Signal emission and slot connection"
+    - "Layout calculations"
+    - "Settings save/load"
+  integration_tests:
+    - "Full application startup and shutdown"
+    - "Dialog workflows (open → interact → close)"
+    - "Menu action handling"
+  gui_tests:
+    - "Qt Test framework (QTest)"
+    - "Automated UI testing (mouse clicks, keyboard input)"
+  benchmarks:
+    - "Application startup time"
+    - "UI responsiveness (frame rate)"
+
+implementation_hints:
+  - "Use Qt Designer for complex layouts (generate .ui files)"
+  - "Use signals/slots for loose coupling"
+  - "QMainWindow for main app window (built-in menu/toolbar/status)"
+  - "QDialog for modal dialogs, QWidget for embedded widgets"
+  - "Store settings with QSettings (cross-platform)"
+  - "Use Qt Style Sheets (QSS) for custom styling (CSS-like)"
+  - "Use Qt Resource System (.qrc) for bundling assets"
+
+common_pitfalls:
+  - issue: "UI freezing during long operations"
+    solution: "Use QThread or QThreadPool for background tasks"
+  - issue: "Memory leaks from parent-child relationships"
+    solution: "Qt handles cleanup if parent set correctly"
+  - issue: "Signals not triggering"
+    solution: "Check signal/slot signatures match exactly"
+  - issue: "Layouts not resizing properly"
+    solution: "Set size policies, use stretch factors"
+  - issue: "Application doesn't remember window size/position"
+    solution: "Save/restore geometry in QSettings"
+
+related_templates:
+  - "template://gui/qt-internationalization"
+  - "template://gui/cross-platform-packaging"
+  - "template://scientific/scientific-visualization"

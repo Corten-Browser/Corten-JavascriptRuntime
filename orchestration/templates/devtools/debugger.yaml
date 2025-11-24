@@ -1,0 +1,107 @@
+template_id: "devtools-debugger"
+template_name: "JavaScript Debugger"
+category: "devtools"
+difficulty: "expert"
+estimated_loc: "12000-20000"
+
+keywords:
+  - "debugger"
+  - "breakpoint"
+  - "step"
+  - "callstack"
+  - "watch"
+  - "evaluate"
+  - "debug"
+
+parameters:
+  - name: "features"
+    type: "array"
+    options: ["breakpoints", "step_execution", "call_stack", "watch_expressions", "console_eval"]
+  - name: "protocol"
+    type: "string"
+    options: ["CDP", "DAP", "custom"]
+    default: "CDP"
+
+core_interfaces:
+  - name: "Debugger"
+    methods:
+      - "fn set_breakpoint(&mut self, location: SourceLocation) -> BreakpointId"
+      - "fn remove_breakpoint(&mut self, breakpoint_id: BreakpointId)"
+      - "fn pause_execution(&mut self)"
+      - "fn resume_execution(&mut self)"
+      - "fn step_over(&mut self)"
+      - "fn step_into(&mut self)"
+      - "fn step_out(&mut self)"
+      - "fn get_call_stack(&self) -> Vec<CallFrame>"
+      - "fn evaluate_expression(&mut self, expression: &str, frame_id: FrameId) -> Result<Value, Error>"
+
+recommended_libraries:
+  rust:
+    - name: "v8"
+      version: "0.84"
+      required: true
+      purpose: "V8 debugging API access"
+      registry_url: "https://crates.io/crates/v8"
+    - name: "deno_core"
+      version: "0.248"
+      required: false
+      purpose: "Inspector protocol integration"
+      registry_url: "https://crates.io/crates/deno_core"
+  python:
+    - name: "pdb"
+      version: "builtin"
+      required: true
+      purpose: "Python debugger (for reference)"
+      registry_url: "https://docs.python.org/3/library/pdb.html"
+    - name: "debugpy"
+      version: "1.8"
+      required: false
+      purpose: "Debug Adapter Protocol for Python"
+      registry_url: "https://pypi.org/project/debugpy/"
+
+acceptance_criteria:
+  - "Set and remove breakpoints at source locations"
+  - "Pause execution on breakpoints"
+  - "Step over/into/out of function calls"
+  - "View call stack with local variables"
+  - "Evaluate expressions in paused context"
+  - "Watch variable changes"
+  - "Support source maps (if using transpiled JS)"
+  - "Performance: Breakpoint hit overhead < 10ms"
+
+test_strategy:
+  unit_tests:
+    - "Breakpoint management (set/remove)"
+    - "Step execution (over/into/out)"
+    - "Call stack inspection"
+  integration_tests:
+    - "Full debugging session"
+    - "Multi-threaded debugging"
+    - "Source map resolution"
+  public_test_suites:
+    - name: "Chrome DevTools Protocol Tests"
+      url: "https://github.com/ChromeDevTools/devtools-protocol"
+      target_pass_rate: 80
+
+implementation_hints:
+  - "Implement Chrome DevTools Protocol (CDP) for compatibility"
+  - "Use V8 debugging API for breakpoints and stepping"
+  - "Maintain mapping from source locations to bytecode offsets"
+  - "Support conditional breakpoints"
+
+common_pitfalls:
+  - issue: "Breakpoints not hit"
+    solution: "Verify source location mapping, check line numbers"
+  - issue: "Step into skipping internal functions"
+    solution: "Implement blackboxing for library code"
+  - issue: "Expression evaluation in wrong scope"
+    solution: "Ensure evaluation uses correct call frame context"
+  - issue: "Source maps not loading"
+    solution: "Implement sourceMappingURL parsing and fetching"
+
+depends_on:
+  - "template://javascript/js-runtime-integration"
+
+related_templates:
+  - "template://devtools/inspector"
+  - "template://devtools/profiler"

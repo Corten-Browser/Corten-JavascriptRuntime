@@ -1,0 +1,18 @@
+{
+  "gates": {
+    "5": {
+      "name": "Integration Testing",
+      "trigger": "task_queue_percentage",
+      "threshold": 100,
+      "command": "python orchestration/phase_gates/gate_runner.py . 5",
+      "blocking": true
+    },
+    "6": {
+      "name": "Verification",
+      "trigger": "after_gate",
+      "after": "5",
+      "command": "python orchestration/phase_gates/gate_runner.py . 6",
+      "blocking": true
+    }
+  }
+}

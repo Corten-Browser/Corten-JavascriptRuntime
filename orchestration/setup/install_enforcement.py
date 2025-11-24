@@ -101,9 +101,10 @@ def create_state_directory():
 
 def initialize_queue_state():
     """Initialize task queue state file (empty but ready)."""
-    queue_state = get_project_root() / "orchestration" / "task_queue" / "queue_state.json"
+    queue_state = get_project_root() / "orchestration" / "tasks" / "queue_state.json"
 
     if not queue_state.exists():
+        queue_state.parent.mkdir(parents=True, exist_ok=True)
         queue_state.write_text(json.dumps({
             "tasks": [],
             "completed_order": [],
@@ -168,12 +169,21 @@ def auto_discover_specs():
     # Remove duplicates and sort
     discovered_specs = sorted(set(discovered_specs))
 
-    # Create spec manifest
-    manifest_file = project_root / "orchestration" / "spec_manifest.json"
+    # Create spec manifest in the correct location (data/state/, not root)
+    state_dir = project_root / "orchestration" / "data" / "state"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    manifest_file = state_dir / "spec_manifest.json"
+
+    # Convert absolute paths to relative for portability
+    def to_relative(path: Path) -> str:
+        try:
+            return str(path.relative_to(project_root))
+        except ValueError:
+            return str(path)
 
     manifest = {
-        "spec_file": str(discovered_specs[0]) if discovered_specs else None,
-        "all_discovered_specs": [str(s) for s in discovered_specs],
+        "spec_file": to_relative(discovered_specs[0]) if discovered_specs else None,
+        "all_discovered_specs": [to_relative(s) for s in discovered_specs],
         "auto_discovered": True,
         "discovery_timestamp": datetime.now().isoformat(),
         "queue_initialized": False,

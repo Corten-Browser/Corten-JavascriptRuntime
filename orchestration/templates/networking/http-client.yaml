@@ -1,0 +1,104 @@
+template_id: "networking-http-client"
+template_name: "HTTP Protocol Client"
+category: "networking"
+difficulty: "medium"
+estimated_loc: "5000-8000"
+
+keywords:
+  - "http"
+  - "client"
+  - "request"
+  - "response"
+  - "fetch"
+  - "network"
+  - "protocol"
+
+parameters:
+  - name: "protocol_version"
+    type: "string"
+    options: ["HTTP/1.0", "HTTP/1.1", "HTTP/2", "HTTP/3"]
+    default: "HTTP/1.1"
+  - name: "features"
+    type: "array"
+    options: ["connection_pooling", "pipelining", "compression", "redirects"]
+
+core_interfaces:
+  - name: "HttpClient"
+    methods:
+      - "async fn request(&self, req: Request) -> Result<Response, Error>"
+      - "async fn get(&self, url: &str) -> Result<Response, Error>"
+      - "async fn post(&self, url: &str, body: Body) -> Result<Response, Error>"
+
+recommended_libraries:
+  rust:
+    - name: "hyper"
+      version: "1.0"
+      required: true
+      purpose: "Low-level HTTP implementation"
+      registry_url: "https://crates.io/crates/hyper"
+    - name: "tokio"
+      version: "1.35"
+      required: true
+      purpose: "Async runtime"
+      registry_url: "https://crates.io/crates/tokio"
+    - name: "h2"
+      version: "0.4"
+      required: false
+      purpose: "HTTP/2 protocol support"
+      registry_url: "https://crates.io/crates/h2"
+  python:
+    - name: "httpx"
+      version: "0.25"
+      required: true
+      purpose: "HTTP client with HTTP/2 support"
+      registry_url: "https://pypi.org/project/httpx/"
+    - name: "aiohttp"
+      version: "3.9"
+      required: false
+      purpose: "Alternative async HTTP client"
+      registry_url: "https://pypi.org/project/aiohttp/"
+
+acceptance_criteria:
+  - "GET requests return correct response body"
+  - "POST requests send request body correctly"
+  - "Headers parsed and accessible"
+  - "Connection pooling reuses connections (> 80% reuse rate)"
+  - "Performance: 1000 req/sec on localhost loopback"
+
+test_strategy:
+  unit_tests:
+    - "Request builder with GET/POST/PUT/DELETE"
+    - "Header parsing (standard + custom headers)"
+    - "URL parsing with query parameters"
+  integration_tests:
+    - "Full request/response with test HTTP server"
+    - "Connection pool behavior under load"
+    - "Error handling for connection refused/timeout"
+  benchmarks:
+    - "Throughput: requests per second"
+    - "Latency: p50/p95/p99 percentiles"
+  public_test_suites:
+    - name: "WPT Fetch API Tests"
+      url: "https://github.com/web-platform-tests/wpt/tree/master/fetch"
+      target_pass_rate: 85
+
+implementation_hints:
+  - "Use hyper::Client with connection pooling enabled"
+  - "Implement timeout using tokio::time::timeout"
+  - "Follow RFC 7230-7235 for HTTP/1.1"
+  - "Support both HTTP and HTTPS (TLS)"
+
+common_pitfalls:
+  - issue: "Not handling chunked encoding"
+    solution: "hyper handles this automatically, use Body stream"
+  - issue: "Connection leaks on errors"
+    solution: "Connections auto-returned to pool on drop"
+  - issue: "Blocking on network I/O"
+    solution: "Use async/await throughout"
+
+depends_on:
+  - "template://networking/tls-client"
+
+related_templates:
+  - "template://networking/http-server"
+  - "template://networking/http2-support"

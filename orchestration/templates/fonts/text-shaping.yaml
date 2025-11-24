@@ -1,0 +1,108 @@
+template_id: "fonts-text-shaping"
+template_name: "Text Shaping and Glyph Layout"
+category: "fonts"
+difficulty: "expert"
+estimated_loc: "8000-15000"
+
+keywords:
+  - "text"
+  - "shaping"
+  - "glyph"
+  - "harfbuzz"
+  - "ligature"
+  - "kerning"
+  - "bidi"
+  - "complex script"
+
+parameters:
+  - name: "script_support"
+    type: "array"
+    options: ["latin", "arabic", "devanagari", "chinese", "emoji"]
+  - name: "features"
+    type: "array"
+    options: ["ligatures", "kerning", "bidi", "vertical_text"]
+
+core_interfaces:
+  - name: "TextShaper"
+    methods:
+      - "fn shape_text(&self, text: &str, font: &Font, features: &ShapingFeatures) -> GlyphRun"
+      - "fn measure_text(&self, text: &str, font: &Font) -> TextMetrics"
+  - name: "GlyphRun"
+    methods:
+      - "fn glyphs(&self) -> &[GlyphInfo]"
+      - "fn positions(&self) -> &[GlyphPosition]"
+      - "fn total_width(&self) -> f32"
+
+recommended_libraries:
+  rust:
+    - name: "rustybuzz"
+      version: "0.12"
+      required: true
+      purpose: "HarfBuzz port in Rust (text shaping)"
+      registry_url: "https://crates.io/crates/rustybuzz"
+    - name: "unicode-bidi"
+      version: "0.3"
+      required: true
+      purpose: "Unicode bidirectional algorithm"
+      registry_url: "https://crates.io/crates/unicode-bidi"
+    - name: "unicode-script"
+      version: "0.5"
+      required: true
+      purpose: "Script detection"
+      registry_url: "https://crates.io/crates/unicode-script"
+  python:
+    - name: "uharfbuzz"
+      version: "0.37"
+      required: true
+      purpose: "HarfBuzz bindings for Python"
+      registry_url: "https://pypi.org/project/uharfbuzz/"
+    - name: "python-bidi"
+      version: "0.4"
+      required: true
+      purpose: "Unicode bidirectional algorithm"
+      registry_url: "https://pypi.org/project/python-bidi/"
+
+acceptance_criteria:
+  - "Shape Latin text with ligatures (fi, fl)"
+  - "Apply kerning pairs correctly"
+  - "Handle bidirectional text (Arabic, Hebrew)"
+  - "Support complex scripts (Devanagari, Arabic)"
+  - "Position glyphs with correct advances"
+  - "Handle line breaking for multi-line text"
+  - "Performance: Shape 1,000 characters in < 10ms"
+
+test_strategy:
+  unit_tests:
+    - "Glyph selection from font"
+    - "Ligature substitution"
+    - "Kerning pair application"
+  integration_tests:
+    - "Full text shaping pipeline"
+    - "Bidirectional text (mixed LTR/RTL)"
+    - "Complex script handling"
+  benchmarks:
+    - "Shaping time vs text length"
+    - "Memory usage per glyph run"
+
+implementation_hints:
+  - "Use rustybuzz (battle-tested HarfBuzz port)"
+  - "Implement unicode-bidi for RTL text"
+  - "Cache shaped text for repeated strings"
+  - "Handle font fallback for missing glyphs"
+
+common_pitfalls:
+  - issue: "Incorrect bidi algorithm implementation"
+    solution: "Use unicode-bidi crate, don't implement manually"
+  - issue: "Missing ligatures"
+    solution: "Enable OpenType features (liga, dlig)"
+  - issue: "Poor performance on long text"
+    solution: "Shape line-by-line, not entire document"
+  - issue: "Glyph positions off by 1 pixel"
+    solution: "Use proper rounding (floor/ceil/round per axis)"
+
+depends_on:
+  - "template://fonts/font-loader"
+
+related_templates:
+  - "template://fonts/font-rasterization"
+  - "template://rendering/layout-engine"

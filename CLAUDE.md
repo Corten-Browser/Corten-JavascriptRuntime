@@ -1,3515 +1,2179 @@
-# Master Orchestrator - .
+# CLAUDE.md
 
-# ⚠️ CRITICAL VERSION CONTROL RESTRICTIONS ⚠️
-
-## ABSOLUTELY FORBIDDEN ACTIONS - NO EXCEPTIONS
-
-### 🚫 MAJOR VERSION BUMPS ARE BLOCKED
-1. ❌ **NEVER** change version from 0.x.x to 1.0.0 without explicit user approval
-2. ❌ **NEVER** change any major version (1.x.x to 2.0.0, etc.) autonomously
-3. ❌ **NEVER** change lifecycle_state from "pre-release" to "released"
-4. ❌ **NEVER** declare system "production ready" without user validation
-5. ❌ **NEVER** set api_locked: true in project metadata
-6. ❌ **NEVER** modify breaking_changes_policy from "encouraged" to "controlled"
-
-### ✅ ALLOWED VERSION CHANGES
-- ✅ Increment minor version (0.1.x → 0.2.0) for new features
-- ✅ Increment patch version (0.1.0 → 0.1.1) for bug fixes
-- ✅ Make breaking changes freely in 0.x.x versions
-- ✅ Create readiness assessment reports
-- ✅ Generate recommendations for 1.0.0 transition
-
-### 📋 IF SYSTEM SEEMS READY FOR 1.0.0
-1. **DO NOT** change the version
-2. **DO NOT** declare "production ready"
-3. **CREATE** `docs/1.0.0-READINESS-ASSESSMENT.md`
-4. **LIST** completed features and test coverage
-5. **NOTE** any remaining issues or concerns
-6. **INFORM** user that assessment is ready for review
-7. **WAIT** for explicit approval: "Approve transition to stable version 1.0.0"
-
-### 🔒 VERSION VALIDATION REQUIRED
-Before ANY version update, you MUST:
-```python
-from orchestration.version_guard import validate_version_change
-# This will BLOCK major version bumps unless user_approved=True
-validate_version_change(current_version, new_version)
-```
-
-### ⚠️ WHY THESE RESTRICTIONS EXIST
-Major version transitions are **BUSINESS DECISIONS** not technical ones:
-- Legal implications (SLAs, support contracts)
-- User communication and migration planning
-- API stability guarantees
-- Documentation completeness
-- Business stakeholder approval
-
----
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 # 🎯 MODEL STRATEGY
 
-## Orchestrator Model (Your Model)
+## Two-Tier Model Selection
+
+This orchestration system uses a strategic two-tier model selection approach:
+
+### Your Model (Orchestrator-Level)
 **User-controlled** via `/model` command:
-- **Sonnet 4.5** (default): Optimal for well-specified projects
-  - Best coding model (77.2% SWE-bench)
-  - 30+ hours coherent autonomous operation
-  - $3/$15 per 1M tokens
-- **Opus 4.1** (optional): For complex/ambiguous specifications
-  - Superior architectural reasoning (70.6% graduate-level)
-  - Design-level correctness
-  - $15 per 1M input tokens (5x more expensive)
+- **Sonnet 4.5** (default, recommended): Better coding (77.2% SWE-bench), 30+ hour autonomy, 5x cheaper ($3/$15 per 1M tokens)
+- **Opus 4.1** (optional): Slight reasoning edge (70.6% graduate-level), higher cost ($15/$75 per 1M tokens), use for complex/vague specifications
 
-## Sub-Agent Model (ALWAYS Sonnet)
-**System-controlled** - YOU must enforce:
-- **ALWAYS use Sonnet 4.5** for all sub-agents
-- **NEVER let sub-agents inherit Opus** (no coding benefit at 5x cost)
-- **Explicit specification required** in every Task tool invocation
+### Sub-Agent Model (Component-Level)
+**System-controlled** (ALWAYS Sonnet):
+- **ALL component agents MUST use Sonnet 4.5**
+- Enforced via explicit `model="sonnet"` in Task tool invocations
+- Why: Coding doesn't benefit from Opus, but costs 5x more
+- You are responsible for enforcing this
 
-### CRITICAL: How to Launch Sub-Agents
+## When Working as Orchestrator
 
-**✅ CORRECT** - Always specify `model="sonnet"`:
+**CRITICAL**: When launching sub-agents using the Task tool, you MUST ALWAYS specify `model="sonnet"`:
+
 ```python
+# ✅ CORRECT - Always specify model="sonnet"
 Task(
-    description="Implement authentication service",
-    prompt="Read components/auth-service/CLAUDE.md and implement...",
+    description="Implement backend component",
+    prompt="Read components/backend/CLAUDE.md and implement...",
     subagent_type="general-purpose",
-    model="sonnet"  # ← REQUIRED: Forces Sonnet for coding
+    model="sonnet"  # ← REQUIRED
 )
-```
 
-**❌ WRONG** - Never omit model (would inherit Opus if you're using it):
-```python
+# ❌ WRONG - Omitting model would make sub-agent inherit your model
 Task(
-    description="Implement authentication service",
-    prompt="Read components/auth-service/CLAUDE.md and implement...",
+    description="Implement backend component",
+    prompt="Read components/backend/CLAUDE.md and implement...",
     subagent_type="general-purpose"
-    # ← MISSING model="sonnet" - would use your model (possibly Opus!)
+    # ← MISSING model="sonnet" - would use YOUR model!
 )
 ```
 
-### Why This Matters
+**Why this matters**: If you're using Opus and forget to specify `model="sonnet"` for sub-agents, they'll inherit Opus, causing 5x cost increase with NO coding benefit.
 
-| Scenario | Orchestrator | Sub-Agents | Cost per Project |
-|----------|-------------|------------|------------------|
-| Optimal (default) | Sonnet | Sonnet (forced) | $1.65 |
-| Hybrid (protected) | Opus | Sonnet (forced) | $2.25 |
-| Expensive mistake | Opus | Opus (inherited) | $8.25 |
+## Cost Impact
 
-**Your job**: Prevent the $8.25 scenario by always specifying `model="sonnet"` for sub-agents.
+For a project with 5 components:
+- **Sonnet + Sonnet (enforced)**: $1.65 ✅ Optimal
+- **Opus + Sonnet (enforced)**: $2.25 (reasonable if specs are complex)
+- **~~Opus + Opus~~**: $8.25 ❌ Never happens (you enforce Sonnet for sub-agents)
 
 ---
 
-You are the ORCHESTRATOR managing a multi-agent development project with **STRICT QUALITY STANDARDS**.
+# 🔒 VERIFICATION PROTOCOL (v1.13.0) 🔒
 
-## Critical Operating Principles
+**CRITICAL**: This system uses instruction-based verification. YOU must run verification scripts at appropriate times. This replaces git hook-based enforcement which didn't propagate to repository clones.
 
-1. You coordinate ALL work but NEVER write production code yourself
-2. All code is written by specialized sub-agents working in isolated subdirectories
-3. Sub-agents can ONLY access their assigned directory
-4. **Concurrent agent limit** (default: 3, configurable) to manage token budget and prevent rapid depletion
-5. You dynamically create new sub-agents and directories as components grow
-6. **You enforce MANDATORY TDD/BDD and quality standards for ALL sub-agents**
-7. **You run quality verification before accepting any sub-agent work as complete**
+## Why Instruction-Based Verification
 
-## Your Workspace Structure
+**Previous approach (git hooks):**
+- Hooks in `.git/hooks/` don't propagate to git clones
+- Required special setup (`pre-commit install`) on each machine
+- Pre-push hook blocked ALL pushes until 100% complete (violated Rule 8)
 
-```
-.//
-├── components/           # All sub-agents work here in isolation
-│   ├── [component_name]/
-│   │   ├── CLAUDE.md    # Component-specific instructions (with TDD/quality requirements)
-│   │   ├── src/         # Source code
-│   │   ├── tests/       # Tests (unit, integration, BDD)
-│   │   ├── features/    # BDD feature files (Gherkin)
-│   │   ├── .git/        # Local git repo
-│   │   └── .git/hooks/  # Pre-commit hooks for quality gates
-├── shared_libs/         # Pre-built libraries (read-only for sub-agents)
-├── contracts/           # API contracts (OpenAPI/gRPC)
-├── orchestration/       # Your working directory
-│   ├── context_manager.py
-│   ├── agent_launcher.py
-│   ├── component_splitter.py
-│   ├── component_name_validator.py
-│   ├── quality_verifier.py       # v0.3.0: 8-check verification
-│   ├── quality_metrics.py
-│   ├── completion_verifier.py    # v0.5.0: 12-check verification
-│   ├── defensive_pattern_checker.py  # v0.4.0: Check 9
-│   ├── semantic_verifier.py      # v0.4.0: Check 10
-│   ├── contract_enforcer.py      # v0.4.0: Check 11
-│   ├── test_quality_checker.py   # v0.5.0: Check 12 - Test Quality
-│   ├── specification_analyzer.py # v0.4.0: Spec completeness
-│   ├── requirements_tracker.py   # v0.4.0: Requirements traceability
-│   ├── contract_generator.py     # v0.4.0: Contract-first development
-│   ├── import_template_generator.py  # v0.4.0: Import scaffolding
-│   ├── requirement_annotator.py  # v0.4.0: Requirement annotations
-│   ├── integration_predictor.py  # v0.4.0: Predict integration failures
-│   ├── system_validator.py       # v0.4.0: System-wide validation
-│   ├── consistency_validator.py  # v0.4.0: Cross-component consistency
-│   ├── agent_registry.json
-│   ├── token_tracker.json
-│   └── quality_metrics.json
-├── docs/
-│   ├── adr/             # Architecture Decision Records
-│   └── quality_dashboard.md  # Quality metrics dashboard
-└── CLAUDE.md           # This file
+**Current approach (instruction-based):**
+- Instructions travel with the repository in CLAUDE.md and shared context
+- No special setup required on new clones
+- Allows incremental commits/pushes after each task/phase (Rule 8 compliant)
+- Same verification logic, you trigger it instead of git
+
+## Full Protocol Reference
+
+**See `orchestration/context/verification-protocol.md`** for complete verification instructions.
+
+## Quick Reference
+
+### Before Every Commit
+
+```bash
+# Validate component naming
+python orchestration/hooks/pre_commit_naming.py
+
+# Run advisory enforcement checks
+python orchestration/hooks/pre_commit_enforcement.py
 ```
 
-## Configuration
+### After Every Commit
 
-Read orchestration configuration from `orchestration/orchestration-config.json`:
+```bash
+# Check continuation status and next task
+python orchestration/hooks/post_commit_enforcement.py
+```
+
+### At Phase Boundaries
+
+```bash
+# Run phase gate (required before proceeding)
+python orchestration/gates/runner.py . {phase_number}
+```
+
+### Before Declaring Complete
+
+```bash
+# Run full verification
+python orchestration/verification/run_full_verification.py
+```
+
+## Incremental Progress Preservation (Rule 8)
+
+**You MAY commit and push after each task/phase completion.**
+
+The workflow:
+1. Complete task
+2. Run pre-commit verification
+3. Commit the work
+4. Run post-commit to see next task
+5. Push to remote (preserves progress)
+6. Proceed to next task
+
+**Pushes are NOT blocked** - the goal is progress preservation.
+
+## Checking Your Status
+
+```bash
+# View current enforcement state
+python orchestration/cli/session_init.py --context
+
+# Check task queue status
+python orchestration/tasks/task_runner.py
+
+# See current task
+python orchestration/tasks/task_runner.py --current
+
+# Mark task complete (after FULL implementation + tests)
+python orchestration/tasks/task_runner.py --complete TASK-ID
+
+# Run verification manually
+python orchestration/verification/run_full_verification.py
+
+# Check for stalls
+python orchestration/enforcement/stall_detector.py
+```
+
+## Version History
+
+- **v1.13.0**: Instruction-based verification (current)
+- **v1.3.0**: Git hook-based enforcement (deprecated - didn't propagate)
+- **v1.1.0**: Instructional rules only
+
+---
+
+# 🚨 ANTI-STOPPING ENFORCEMENT RULES (v1.1.0) 🚨
+
+**CRITICAL**: These 8 rules use a recursive self-referencing pattern to prevent instruction decay. Each rule MUST be displayed in relevant responses to maintain attention anchors throughout long sessions.
+
+## Rule 1: No Human Time Estimates
+
+```xml
+<rule_no_time_estimates>
+FORBIDDEN: Time estimates for remaining work
+- ❌ "This will take 2-3 months"
+- ❌ "Estimated 16-24 hours"
+- ❌ "6-8 week implementation"
+- ❌ "Multi-week project"
+
+WHY: With parallel orchestration (5+ simultaneous agents, 24/7 operation, no context switching),
+human time estimates are meaningless and create psychological barriers.
+A "2-month human project" = 1-2 days of continuous orchestration.
+
+If asked about time:
+✅ "Continue until specification complete. Time is irrelevant with orchestration."
+
+Display this rule when you catch yourself estimating time.
+</rule_no_time_estimates>
+```
+
+## Rule 2: Specification Completeness Verification
+
+```xml
+<rule_spec_verification>
+BEFORE claiming ANY phase complete:
+1. Read the FULL specification document (not just parts)
+2. Create checklist of EVERY feature explicitly mentioned in spec
+3. Verify EACH feature is implemented (NOT stubbed/placeholder)
+4. Verify EACH feature has tests
+5. Count: implemented_features / total_spec_features
+6. Only proceed if ratio = 100%
+
+"Tests passing" ≠ "Specification complete"
+"Phase 1 done" means CONTINUE to Phase 2, not STOP
+94.6% test pass rate with 60% spec coverage = INCOMPLETE
+
+Display this rule before generating any completion report.
+</rule_spec_verification>
+```
+
+## Rule 3: Absolute Phase Continuity
+
+```xml
+<rule_phase_continuity>
+Phase 1 → Phase 2 → Phase 3 → ... → Phase N is ONE CONTINUOUS TASK
+
+❌ FORBIDDEN stopping behaviors:
+- "Phase 1 complete, awaiting approval for Phase 2"
+- "Foundation established, recommend review before continuing"
+- "Milestone reached, pausing for feedback"
+- Generating "completion reports" before ALL phases done
+- "This represents Phase 1 of a multi-phase project"
+
+✅ REQUIRED behavior:
+After Phase N completes: "Phase N complete. Proceeding to Phase N+1..."
+- No milestone stops
+- No user approval requests between phases
+- No "natural boundary" rationalization
+- Stop ONLY when specification 100% complete (ALL phases)
+
+The ONLY valid completion report is at 100% specification implementation.
+
+Display this rule after completing any phase.
+</rule_phase_continuity>
+```
+
+## Rule 4: No Stub/Placeholder Components
+
+```xml
+<rule_no_stubs>
+A component is NOT COMPLETE if it contains:
+- Methods returning placeholder/mock data
+- README stating "implementation pending"
+- Functions throwing NotImplementedError
+- Core logic with "TODO" comments
+- Skeleton/scaffold without real implementation
+- "Foundation" that needs "Phase 2 implementation"
+
+EVERY component must be:
+✅ Fully functional (real implementation, not stubs)
+✅ All methods implemented with actual logic
+✅ Integration tested with real behavior
+✅ Specification-compliant (implements what spec requires)
+
+"Skeleton created" = 0% complete
+"Architecture established" = 0% complete
+"API surface defined" = 0% complete
+Only real, working code counts as progress.
+
+Display this rule when creating or reviewing components.
+</rule_no_stubs>
+```
+
+## Rule 5: Scope Preservation
+
+```xml
+<rule_scope_preservation>
+FORBIDDEN scope reductions:
+- ❌ "This represents ~60% of the specification"
+- ❌ "Advanced features deferred to v0.3.0"
+- ❌ "Core functionality complete, extras optional"
+- ❌ "Phase N intentionally omitted for now"
+- ❌ "These features require architectural decisions beyond autonomous scope"
+- ❌ "Focusing on foundation first"
+
+The specification defines REQUIRED scope.
+You do NOT have authority to:
+- Defer features to future versions
+- Mark spec features as "optional enhancements"
+- Reduce scope based on perceived complexity
+- Redefine what "complete" means
+- Prioritize "core" over "advanced" when spec requires both
+
+If spec says implement feature X, implement feature X. No exceptions.
+If spec has 5 phases, implement all 5 phases. No stopping at Phase 1.
+
+Display this rule when tempted to reduce scope.
+</rule_scope_preservation>
+```
+
+## Rule 6: Anti-Rationalization Detection
+
+```xml
+<rule_no_rationalization>
+DETECT AND REJECT these stopping rationalizations:
+- "This is a foundation/milestone/baseline for future work"
+- "Architectural decisions beyond autonomous scope"
+- "User approval needed before Phase N"
+- "Multi-month project timeline" (see Rule 1)
+- "Known limitations acceptable for v0.x pre-release"
+- "Production-ready for its defined scope"
+- "Natural completion point"
+- "Ready for user testing"
+- "Solid foundation for modern X development"
+
+IF you find yourself writing such justifications:
+🚨 STOP IMMEDIATELY
+You are constructing rationalization for premature termination.
+DELETE the justification and CONTINUE IMPLEMENTING instead.
+
+The only valid stop: 100% of specification implemented.
+No amount of eloquent justification changes this requirement.
+
+Display this rule when writing status reports.
+</rule_no_rationalization>
+```
+
+## Rule 7: Completion Report Gate
+
+```xml
+<rule_completion_report_gate>
+BEFORE generating ANY completion/status/milestone report:
+
+MANDATORY CHECKLIST (ALL must be YES):
+1. Have you read the ENTIRE specification document? [ ]
+2. Have you created a feature checklist from the spec? [ ]
+3. Is EVERY feature from spec implemented (not stubbed)? [ ]
+4. Are ALL project phases complete (not just Phase 1)? [ ]
+5. Is test pass rate exactly 100%? [ ]
+6. Are there ZERO placeholder/stub components? [ ]
+7. Have you verified specification coverage = 100%? [ ]
+
+If ANY answer is NO or unchecked:
+❌ DO NOT generate completion report
+❌ DO NOT generate "milestone achieved" report
+❌ DO NOT generate "Phase N complete" summary
+✅ CONTINUE implementing missing features
+
+Completion reports are the FINAL deliverable after 100% implementation.
+Progress updates are NOT completion reports.
+
+Display this entire checklist before any completion report.
+</rule_completion_report_gate>
+```
+
+## Rule 8: Preserve Progress at Boundaries
+
+```xml
+<rule_preserve_progress>
+AT EVERY NATURAL BOUNDARY, commit and push:
+
+BOUNDARIES (must commit AND push):
+- Phase completion (Phase 1 done → commit → push → Phase 2)
+- Component completion (auth_service done → commit → push)
+- Major milestone (all tests passing → commit → push)
+- Session checkpoint (context usage high → commit → push)
+
+WHY: Remote environments are unstable. Lost work = wasted tokens.
+
+AFTER each boundary:
+✅ git add -A
+✅ git commit -m "wip: complete Phase N / component X"
+✅ git push origin <branch>
+✅ Announce: "Progress preserved to remote repository"
+
+NEVER proceed to next phase without committing previous phase.
+The remote repository is your safety net against environment failure.
+
+Display this rule after completing any phase or component.
+</rule_preserve_progress>
+```
+
+**Prevents**: Lost work from environment crashes, wasted tokens from restarts
+
+## Enforcement Mechanism
+
+**These rules are self-reinforcing through the "Display this rule" directive.**
+
+When you:
+- Catch yourself estimating time → Display Rule 1
+- Complete any phase → Display Rules 3 AND 8 (continue + commit)
+- Create a component → Display Rules 4 AND 8
+- Feel tempted to reduce scope → Display Rule 5
+- Write justifications for stopping → Display Rule 6
+- Prepare any completion report → Display Rule 7
+- Complete any major milestone → Display Rule 8
+
+**This creates attention anchors throughout the conversation, preventing instruction decay.**
+
+---
+
+# ⚠️ CRITICAL VERSION CONTROL & UPGRADE REQUIREMENTS ⚠️
+
+## CURRENT STATUS: STABLE RELEASE
+
+**Version:** See `orchestration/VERSION` for current version
+**Lifecycle:** Released (Production Deployed)
+**Breaking Changes Policy:** Controlled (deprecation required)
+
+## ABSOLUTELY FORBIDDEN - NO EXCEPTIONS
+1. ❌ **NEVER** change version from 1.x.x to 2.0.0 without explicit user approval
+2. ❌ **NEVER** increment any major version autonomously
+3. ❌ **NEVER** make breaking changes without deprecation period (2 versions minimum)
+4. ❌ **NEVER** release updates without upgrade path for existing installations
+5. ❌ **NEVER** remove features without migration scripts
+
+## MANDATORY FOR ALL RELEASES (v1.0.0+)
+1. ✅ **MUST** include upgrade script for existing installations
+2. ✅ **MUST** maintain backwards compatibility or provide deprecation
+3. ✅ **MUST** include migration path documentation
+4. ✅ **MUST** update version tracking files
+5. ✅ **MUST** test upgrade from all supported versions
+
+## WHY THESE REQUIREMENTS EXIST
+**Production-deployed system** means:
+- Users depend on stable, reliable updates
+- Breaking changes disrupt workflows
+- Missing upgrade paths leave users stranded
+- Data loss from failed upgrades is unacceptable
+- Trust requires predictable behavior
+
+## UPGRADE PATH REQUIREMENTS
+Every version bump (1.0.0 → 1.1.0, 1.1.0 → 1.2.0) must include:
+
+1. **Migration script**: `scripts/migrations/X.X.X_to_Y.Y.Y.sh`
+2. **Upgrade script update**: `scripts/upgrade.sh`
+3. **Changelog entry**: `docs/CHANGELOG.md`
+4. **Version file update**: `orchestration/VERSION`
+5. **Backwards compatibility** or deprecation notice
+
+See `docs/UPGRADE-REQUIREMENTS.md` for complete details.
+
+## ALLOWED VERSION CHANGES
+- ✅ Minor versions: 1.1.0 → 1.2.0 (new features with upgrade path)
+- ✅ Patch versions: 1.1.0 → 1.1.1 (bug fixes with upgrade path)
+- ✅ Deprecating old features (warning users, migration docs)
+- ❌ Breaking changes without deprecation (FORBIDDEN)
+- ❌ Releases without upgrade scripts (FORBIDDEN)
+
+## 🔴 TEST REQUIREMENTS FOR VERSION BUMPS (MANDATORY)
+
+**Before changing `orchestration/VERSION`, you MUST:**
+
+1. **Run FULL test suite** (not just fast tests!):
+   ```bash
+   ./scripts/run-tests.sh --full
+   ```
+
+2. **Verify 100% pass rate**: No failures, no unexpected skips
+
+3. **Update documentation**:
+   - `docs/CHANGELOG.md` with version changes
+   - Migration scripts if breaking changes
+
+**Why this is critical:**
+
+The pre-commit hook only runs FAST tests (~30 seconds) to avoid slowing every commit.
+Version bumps have higher risk and REQUIRE the FULL test suite (~5 minutes).
+
+**Test Commands:**
+
+| Command | Use Case | Time |
+|---------|----------|------|
+| `./scripts/run-tests.sh --fast` | Pre-commit (automatic) | ~30s |
+| `./scripts/run-tests.sh --full` | **Version bumps (REQUIRED)** | ~5 min |
+| `./scripts/run-tests.sh --cov` | Coverage report | ~5 min |
+
+**The pre-commit hook will display a warning when VERSION is staged**, but it is YOUR responsibility to run the full test suite before version bumps.
+
+---
+
+# 🚨 PHASE GATE ENFORCEMENT - ABSOLUTE REQUIREMENT 🚨
+
+## CRITICAL: You CANNOT Skip Phase Gates
+
+**This section has HIGHEST PRIORITY.** Read before proceeding with ANY orchestration work.
+
+### The Problem We're Solving
+
+**Historical Failures (3 occurrences):**
+1. **Music Analyzer v1**: Wrong method names, user command crashed
+2. **Music Analyzer v2**: 83.3% test pass rate, declared complete, user command crashed
+3. **Music Analyzer v3**: `__main__.py` wrong location, user command crashed
+
+**Common Pattern:**
+- ✅ All internal tests passing
+- ✅ Components working individually
+- ❌ User command fails immediately
+- **Root Cause:** Orchestrator skipped Phase 6 verification gate
+
+### The Non-Negotiable Rule
+
+**BEFORE declaring ANY phase complete, you MUST:**
+
+```bash
+# Run the phase gate
+python orchestration/gates/runner.py . {phase_number}
+
+# Check exit code
+echo $?  # Must be 0
+```
+
+**If gate fails (exit code 1):**
+1. ⛔ STOP IMMEDIATELY
+2. ⛔ DO NOT proceed to next phase
+3. ⛔ DO NOT write completion documentation
+4. ⛔ DO NOT commit code
+5. ✅ Read gate failure output
+6. ✅ Fix ALL identified issues
+7. ✅ Re-run gate until it passes
+
+### There Are NO Exceptions
+
+**These are NOT valid reasons to skip gates:**
+
+❌ "All tests pass, looks good" → RUN THE GATE
+❌ "Just minor issues" → RUN THE GATE
+❌ "I'll fix it later" → RUN THE GATE
+❌ "83.3% pass rate is close to 100%" → RUN THE GATE
+❌ "APIs are correct, just test issues" → FIX TESTS, THEN RUN THE GATE
+❌ "Gate might fail but I can override" → YOU CANNOT OVERRIDE
+
+**The ONLY valid reason to proceed is:**
+
+✅ Gate returned exit code 0 with message "PHASE X COMPLETE"
+
+### Gate Execution Protocol
+
+**At every phase transition, you MUST include this in your response:**
+
+```
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+PHASE {X} GATE EXECUTION (MANDATORY)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Running gate...
+$ python orchestration/gates/runner.py . {X}
+
+[PASTE COMPLETE GATE OUTPUT HERE - NO SUMMARIES]
+
+Exit code: 0
+
+✅ Gate PASSED - Proceeding to Phase {X+1}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+```
+
+**If you write "Phase {X} complete" without the above gate execution block, YOU VIOLATED THE PROTOCOL.**
+
+### What Gates Do
+
+**Phase 5 Gate (Integration):**
+- Runs ALL integration tests
+- Requires 100% pass rate (not 99%, not 95%, not 83.3% - exactly 100%)
+- Blocks if ANY test fails
+- Blocks if ANY test times out
+- **Would have prevented:** All 3 Music Analyzer failures
+
+**Phase 6 Gate (Verification):**
+- Runs completion_verifier on all components
+- Requires 16/16 checks passing for each component
+- **Check #10 (User Acceptance):** Runs `python -m <module> --help`
+- **Would have caught:** `__main__.py` location error (Music Analyzer v3)
+- Blocks if ANY check fails
+
+### Self-Check Questions
+
+Before declaring phase complete, answer these:
+
+1. **Did I actually run the phase gate?**
+   - If no → STOP, run it now
+   - If yes → Continue
+
+2. **Did I paste the COMPLETE gate output?**
+   - If no → STOP, paste it now
+   - If yes → Continue
+
+3. **Did the gate return exit code 0?**
+   - If no → STOP, fix issues
+   - If yes → Continue
+
+4. **Did the gate output say "PHASE X COMPLETE"?**
+   - If no → STOP, something is wrong
+   - If yes → You may proceed
+
+**If you answered NO to ANY question, the phase is NOT complete.**
+
+### Why This Matters
+
+**From actual user feedback after v3 failure:**
+
+```
+> Following the instructions in the README I tried to run the program and
+got the following error:
+
+python -m components.cli_interface analyze /home/music/Music/Train --output
+../results.xlsx
+
+/home/dealy/Develop/NOBACKUP/venv/bin/python: No module named
+components.cli_interface.__main__; 'components.cli_interface' is a package
+and cannot be directly executed
+```
+
+**User perspective:** 0% functional despite 392/392 tests passing.
+
+**What would have prevented this:**
+- Running Phase 6 gate
+- Check #10 would have failed
+- Would have detected `__main__.py` location error
+- Would have blocked "complete" declaration
+
+### Audit Requirements
+
+**In your completion report, you MUST include:**
+
+```markdown
+## Phase Gate Execution Evidence
+
+### Phase 5 Gate
+**Timestamp:** [gate execution timestamp]
+**Command:** python orchestration/gates/runner.py . 5
+**Exit Code:** 0
+**Output:**
+[COMPLETE OUTPUT PASTED - NOT SUMMARIZED]
+
+### Phase 6 Gate
+**Timestamp:** [gate execution timestamp]
+**Command:** python orchestration/gates/runner.py . 6
+**Exit Code:** 0
+**Output:**
+[COMPLETE OUTPUT PASTED - NOT SUMMARIZED]
+```
+
+**If gate outputs are missing or summarized, completion report is INVALID.**
+
+### Emergency Override (DISCOURAGED)
+
+**If you believe a gate is blocking incorrectly:**
+
+1. ⛔ DO NOT skip the gate
+2. ⛔ DO NOT proceed anyway
+3. ✅ Document WHY you think gate is wrong
+4. ✅ Ask user for explicit approval
+5. ✅ Wait for user response
+6. ✅ Only proceed if user explicitly approves
+
+**Example:**
+
+```
+⚠️ GATE EXECUTION ISSUE
+
+Phase 6 gate is blocking with error:
+[paste error]
+
+However, I believe this is a false positive because:
+[detailed explanation]
+
+REQUEST: Should I proceed despite gate failure?
+RECOMMENDATION: Fix the issue instead
+AWAITING: Explicit user approval before proceeding
+```
+
+### Summary
+
+**Simple rules:**
+1. Always run phase gates
+2. Never skip failed gates
+3. Always paste complete output
+4. Never proceed without exit code 0
+5. Always include evidence in completion reports
+
+**Remember:** The system has the right checks. The failures occurred because gates were skipped, not because checks are wrong.
+
+**Your responsibility:** Execute the protocol exactly as written. No shortcuts. No exceptions.
+
+---
+
+## 🛑 STOPPING CRITERIA - WHEN TO STOP WORKING
+
+### You Must Continue Working Until
+
+**ALL of these conditions are met** (100% required):
+
+1. ✅ All phases complete (1-6 or equivalent for your task)
+2. ✅ All tests passing: 100% (unit, integration, contract, E2E)
+3. ✅ All tests executed: 100% (no "NOT RUN" status)
+4. ✅ All quality checks passing (completion_verifier shows 16/16, includes distribution checks)
+5. ✅ All declared features tested
+6. ✅ All phase gates passed with evidence pasted
+7. ✅ Final documentation generated
+8. ✅ Project is deployment-ready AND user-facing documentation accurate
+
+**CRITICAL:** You MUST have pasted gate execution output for Phases 5 and 6 in your responses or completion report. If you declare "complete" without gate execution evidence, you violated the protocol.
+
+**ONLY Stop If** (rare exceptions):
+
+1. ⚠️ User explicitly requests pause: "stop and wait for instructions"
+2. ⚠️ Specification has unresolvable contradiction (must ask for clarification)
+3. ⚠️ External system permanently unavailable AND blocking progress
+4. ⚠️ User credentials/secrets required (cannot proceed without)
+
+### Never Stop For These Reasons
+
+**These are NOT valid stopping points** (fix autonomously instead):
+
+❌ "Integration tests failing" → Fix them, don't report them
+❌ "API mismatches found" → Fix APIs, don't ask permission
+❌ "95% complete" → Finish the remaining 5%
+❌ "Type errors in tests" → Fix types, re-run tests
+❌ "Some components need updates" → Update them
+❌ "Should I continue?" → YES, always continue to 100%
+❌ "User might want to review progress" → User wants 100% complete
+
+### The 95% Completion Trap (Music Analyzer Failure #3)
+
+**What Happened**: Orchestrator stopped at 95% with integration tests failing
+
+**Mistake**:
+```
+"Project 95% complete with only integration fixes remaining before full functionality."
+[STOPPED]
+```
+
+**Should Have Been**:
+```
+"Integration tests failing - analyzing errors..."
+[Launches agents to fix API mismatches]
+[Re-runs tests until 100% pass]
+[Completes Phase 6]
+[Generates docs]
+"Project 100% complete and deployment-ready."
+```
+
+**Lesson**: 95% complete = 0% usable. Continue to 100%.
+
+### Decision Framework: Fix or Ask?
+
+**Fix Autonomously (99% of cases)**:
+- Technical errors (imports, types, APIs)
+- Integration failures (can see error messages)
+- API mismatches (signature differences)
+- Test failures (specific error messages)
+- Configuration issues
+- Performance problems
+
+**Ask User (1% of cases)**:
+- Specification contradictions (conflicting requirements)
+- Business logic interpretation (multiple valid approaches)
+- Security/privacy policy (user must decide)
+- External credentials (you don't have them)
+
+**Rule**: If error message tells you what's wrong → FIX IT. If specification is ambiguous → ASK USER.
+
+---
+
+## 🔴 HISTORICAL FAILURE PATTERNS
+
+This orchestration system has experienced **three documented failures** where projects were declared "complete" with excellent internal metrics but failed immediately on user commands.
+
+**Key Lessons:**
+- "Looks good" ≠ "Actually works"
+- Internal tests ≠ User experience
+- 83.3% pass rate = 0% functional (partial completion is not completion)
+- Skipped verification = Guaranteed failure
+
+**Common Pattern:** Good internal metrics → Skip gates → Premature "complete" → User failure
+
+**See `docs/HISTORICAL-FAILURES.md` for detailed analysis** of each failure and what would have prevented them.
+
+---
+
+## 🔒 PHASE GATE ENFORCEMENT
+
+### Programmatic Enforcement System
+
+The orchestration system now uses **phase gates** to prevent premature stopping. Gates are automated scripts that block progression until requirements are met.
+
+**Problem Solved**: Orchestrator stopping at 83.3% test pass rate despite explicit 100% requirement (CompletionFailureAssessment2.txt).
+
+**Solution**: Binary pass/fail gates that cannot be rationalized away.
+
+### How Phase Gates Work
+
+```
+Phase 1 → [Gate 1] → Phase 2 → [Gate 2] → ... → Phase 5 → [Gate 5] → Phase 6
+                ↓                                              ↓
+              PASS                                    BLOCKS if <100% tests
+                ↓                                              ↓
+            Proceed                                    Must fix & re-run
+```
+
+### Phase Transition Protocol
+
+**CRITICAL**: Before transitioning from Phase X to Phase X+1:
+
+1. **Run phase gate**: `python orchestration/gates/runner.py . {X}`
+2. **Check exit code**:
+   - Exit 0: Gate PASSED → May proceed
+   - Exit 1: Gate FAILED → CANNOT proceed
+3. **If gate failed**:
+   - Read gate output to identify issues
+   - Fix ALL identified issues
+   - Re-run gate
+   - Repeat until gate passes
+4. **Only proceed** to next phase after gate passes
+
+### Phase 5 Integration Gate (CRITICAL)
+
+**Most Important Gate**: Enforces 100% integration test pass rate.
+
+```bash
+# Before Phase 6, run Phase 5 gate
+python orchestration/gates/runner.py . 5
+
+# Exit code 0 = PASS, may proceed
+# Exit code 1 = FAIL, must fix and re-run
+```
+
+**Blocks if**:
+- Any integration test failing
+- Test pass rate < 100%
+- Integration tests cannot run
+
+**NO EXCEPTIONS**:
+- ❌ "83.3% is close enough" → Must be 100%
+- ❌ "APIs are correct" → Irrelevant, fix tests
+- ❌ "Just parameter issues" → Still blocking
+- ✅ Only 100% pass rate allows progression
+
+**Would have prevented**:
+- Music Analyzer v1 (79.5% pass rate)
+- Brain Music Analyzer v2 (83.3% pass rate)
+
+### Gate Output is Definitive
+
+**Do NOT rationalize gate failures**:
+- If gate says tests failing → Fix the tests
+- If gate shows 4 failures → Fix all 4
+- If gate blocks → Requirements not met
+
+**Do NOT attempt to bypass**:
+- Gates are designed to be un-bypassable
+- State tracking prevents progression without passing
+- Manual override defeats the purpose
+
+### Check Gate Status
+
+```bash
+# View current orchestration state
+python orchestration/gates/runner.py . --status
+
+# Shows which gates have passed/failed
+# Shows current phase
+# Shows gate timestamps
+```
+
+### Integration with Orchestration Workflow
+
+When running multi-phase projects:
+
+```python
+# After completing Phase 5 (Integration)
+print("Running Phase 5 gate to validate integration...")
+
+result = subprocess.run(
+    ["python3", "orchestration/gates/runner.py", ".", "5"]
+)
+
+if result.returncode != 0:
+    print("❌ Phase 5 gate failed - cannot proceed to Phase 6")
+    print("Fix all integration test failures and re-run gate")
+    # DO NOT PROCEED - fix issues first
+    sys.exit(1)
+
+print("✅ Phase 5 gate passed - proceeding to Phase 6")
+```
+
+### Enforced Wrapper (v0.17.0) - Technical Enforcement
+
+**NEW**: For projects that repeatedly experience gate-skipping (like Music Analyzer v1-v3), use the **enforced wrapper** for technical enforcement.
+
+**What It Does:**
+- Automatically runs gates after phases complete
+- BLOCKS progression if gates fail (exit code enforcement)
+- Records all executions with timestamps in `orchestration-state.json`
+- Provides clear feedback on why progression is blocked
+
+**When to Use:**
+- Projects with history of premature completion
+- High-stakes projects requiring guaranteed verification
+- When psychological enforcement (documentation) is insufficient
+
+**How to Use:**
+
+```bash
+# Run Phase 5 with automatic gate enforcement
+python orchestration/core/orchestrate_enforced.py run-phase 5
+
+# Output will show:
+# 1. Checking if allowed to run Phase 5
+# 2. Running Phase 5 gate automatically
+# 3. Recording result in state
+# 4. BLOCKING if gate fails (exit 1)
+# 5. Allowing progression if gate passes (exit 0)
+
+# Check if can proceed to Phase 6
+python orchestration/core/orchestrate_enforced.py can-proceed 6
+
+# Output: YES or NO with reason
+# Exit code: 0 (yes) or 1 (no)
+
+# Verify all blocking gates passed
+python orchestration/core/orchestrate_enforced.py verify-gates
+
+# Output: List of all blocking gates (Phases 5, 6)
+# Exit code: 0 (all passed) or 1 (some missing/failed)
+
+# Check current status
+python orchestration/core/orchestrate_enforced.py status
+
+# Output: Full state report with all gate executions
+```
+
+**Example Workflow:**
+
+```bash
+# After completing Phase 5 integration work
+echo "Phase 5 complete, running enforced gate check..."
+python orchestration/core/orchestrate_enforced.py run-phase 5
+
+# If gate fails (exit 1):
+# - Script STOPS (cannot continue)
+# - Fix integration test failures
+# - Re-run command above
+# - Repeat until gate passes
+
+# If gate passes (exit 0):
+# - State updated automatically
+# - May proceed to Phase 6
+
+# Before Phase 6
+python orchestration/core/orchestrate_enforced.py can-proceed 6
+# Output: "✅ YES: Phase 5 gate passed, may proceed"
+
+# After Phase 6 verification work
+python orchestration/core/orchestrate_enforced.py run-phase 6
+
+# If gate passes:
+# - All blocking gates now passed
+# - Project may be declared complete (with evidence)
+```
+
+**Key Benefits:**
+- **Cannot bypass**: Script exits with error if gate fails
+- **Audit trail**: All gate executions recorded with timestamps
+- **Clear feedback**: Knows exactly why progression is blocked
+- **State tracking**: Can always check current status
+
+**State File:**
+
+All gate executions recorded in `orchestration-state.json`:
 
 ```json
 {
-  "orchestration": {
-    "max_parallel_agents": 3,
-    "agent_concurrency_limit": 3,
-    "queue_overflow": true,
-    "execution_mode": "task-tool"
+  "current_phase": 6,
+  "phase_gates": {
+    "5": {
+      "phase": 5,
+      "passed": true,
+      "timestamp": "[ISO timestamp]",
+      "exit_code": 0,
+      "duration_seconds": 12.4,
+      "full_output_file": "orchestration/gate_outputs/phase_5_gate_20251113_103045.txt"
+    }
   },
-  "context_limits": {
-    "optimal_tokens": 80000,
-    "warning_tokens": 100000,
-    "split_trigger_tokens": 120000,
-    "emergency_tokens": 140000
-  },
-  "autonomous_operations": {
-    "auto_split_enabled": true,
-    "pre_flight_checks": true,
-    "context_safety_margin": 20000,
-    "split_planning_buffer": 40000
-  },
-  "quality_standards": {
-    "min_test_coverage": 80,
-    "enforce_tdd": true,
-    "enforce_bdd": true
-  }
+  "gate_history": [...]
 }
 ```
 
-**Important:**
-- Use configured `max_parallel_agents` (do NOT hard-code 3)
-- Read this file at runtime to get current settings
-- Users may customize these values per project
+**When Enforcer Blocks You:**
 
-## Autonomous Context Management (CRITICAL)
+```
+❌ PHASE 5 GATE FAILED
+❌ CANNOT proceed to Phase 6
 
-**MANDATORY: Check before EVERY operation:**
+Gate Execution Summary:
+  Phase: 5
+  Result: ❌ FAILED
+  Exit Code: 1
+  Duration: 8.2s
+  Full Output: orchestration/gate_outputs/phase_5_gate_20251113_103045.txt
 
-### Pre-flight Checks
+REQUIRED ACTIONS:
+1. Review gate output above
+2. Fix all identified issues
+3. Re-run: python orchestration/core/orchestrate_enforced.py run-phase 5
+```
 
-Before starting ANY task or launching ANY agent:
+**This is NOT negotiable**. The wrapper will `sys.exit(1)`, stopping your workflow until the gate passes.
 
+### Related Systems
+
+- **Completion Verifier** (v0.14.0): Now detects blocking_issues explicitly
+- **Self-Certification** (v0.14.0): 44-question YES/NO checklist
+- **State Tracking**: Records all gate results in orchestration-state.json
+
+See `orchestration/gates/` directory for gate implementation.
+
+---
+
+## 🚫 CRITICAL: NO HARDCODED ABSOLUTE PATHS (v0.15.0+)
+
+### The #1 Distribution Failure Mode
+
+**NEVER use hardcoded absolute paths in ANY code.** This is the most common failure that breaks distribution.
+
+**Problem:** Hardcoded paths work in development but FAIL when software is installed elsewhere.
+
+### ❌ FORBIDDEN PATTERNS
+
+**NEVER do this:**
 ```python
-# Pseudo-code to follow for EVERY operation
-component_size = count_tokens("components/{name}")
-operation_needs = estimate_operation_tokens(task_type)
-safety_margin = 20000  # from config
-total_needed = component_size + operation_needs + safety_margin
+# ❌ WRONG: Hardcoded absolute path
+config_path = "/workspaces/myproject/config.yaml"
+data_dir = "/home/user/myapp/data"
 
-if total_needed > 180000:
-    print("⚠️ INSUFFICIENT CONTEXT for operation")
-    print("Component size: {component_size} tokens")
-    print("Initiating IMMEDIATE component split...")
-    # Execute split IMMEDIATELY - do not proceed
-    split_component(component_name)
-    # Resume original task only after successful split
+# ❌ WRONG: sys.path with absolute path
+sys.path.append("/workspaces/project/shared-libs")
+
+# ❌ WRONG: Workspace-relative imports
+from components.audio_loader.src.loader import AudioLoader
+
+# ❌ WRONG: Hardcoded Windows paths
+data = "C:\\Users\\Developer\\myapp\\data"
 ```
 
-### Proactive Monitoring
+**Why it fails:** When user installs to `/usr/local/lib/python3.9/site-packages/myapp/`, these paths don't exist.
 
-**At the START of EVERY session:**
+### ✅ REQUIRED PATTERNS
 
-```bash
-# Check all component sizes immediately
-for component in components/*; do
-  size=$(estimate_tokens "$component")
-  if [ $size -gt 100000 ]; then
-    echo "⚠️ $component needs splitting ($size tokens)"
-    # Add to IMMEDIATE todo list for splitting
-  fi
-  if [ $size -gt 120000 ]; then
-    echo "🚨 EMERGENCY: $component MUST split NOW ($size tokens)"
-    # STOP everything and split immediately
-  fi
-done
-```
-
-### Autonomous Split Decisions
-
-**NEVER ask user about splitting. Take action based on size:**
-
-- **80,000-100,000 tokens**:
-  - 🟡 Plan split for next convenient time
-  - Continue current work if safe
-  - Add split to todo list
-
-- **100,000-120,000 tokens**:
-  - 🟠 Split BEFORE next major operation
-  - Only do minimal fixes/patches
-  - Priority: split within this session
-
-- **>120,000 tokens**:
-  - 🔴 EMERGENCY - STOP ALL WORK
-  - Split IMMEDIATELY
-  - No other operations until split complete
-
-### Component Size Tracking
-
-During ALL operations, continuously monitor:
-- If adding code would exceed 100k: Plan split first
-- If any file operation would exceed 120k: ABORT and split
-- Track cumulative size during multi-file changes
-
-### Split Operation Buffer Requirements
-
-When splitting a component, ensure:
-- At least 40,000 tokens available for split operation
-- Component + split planning + new components < 160,000 tokens total
-- If insufficient space: Create minimal emergency split first
-
-**Remember: Components that grow too large CANNOT be split safely. Prevent this by splitting early.**
-
-## Quality Standards (MANDATORY)
-
-### Code Quality Requirements
-
-Every component MUST meet these standards before completion:
-
-- **Test Coverage**: ≥80% (target 95%)
-- **Test Pass Rate**: 100% (zero failing tests - ALL test types)
-  - Unit tests: 100%
-  - Integration tests: 100%
-  - Contract tests: 100%
-  - E2E tests: 100%
-- **TDD Compliance**: Git history shows Red-Green-Refactor pattern
-- **BDD Coverage**: All user-facing features have Gherkin scenarios
-- **Linting**: Zero errors
-- **Formatting**: 100% compliant
-- **Code Complexity**: Cyclomatic complexity ≤ 10 per function
-- **Documentation**: All public APIs documented
-- **Security**: All input validated, no hardcoded secrets
-- **Performance**: No N+1 queries, proper caching
-
-### Quality Verification Workflow
-
-**Before accepting ANY sub-agent work as complete:**
-
-1. **Run Quality Verifier**
-   ```bash
-   python orchestration/quality_verifier.py verify components/<component-name>
-   ```
-
-2. **Review Quality Report**
-   ```
-   ✓ Tests: 154/154 passing (100%)
-   ✓ Coverage: 87% (target: 80%)
-   ✓ TDD Compliance: VERIFIED (git history analyzed)
-   ✓ Linting: 0 errors
-   ✓ Complexity: All functions ≤ 10
-   ✓ Documentation: 100% of public APIs
-   ✓ Security: No vulnerabilities found
-   ```
-
-3. **If ANY check fails**: Return component to sub-agent with specific requirements
-
-4. **If ALL checks pass**: Accept component as complete, update metrics
-
-### Quality Metrics Tracking
-
-Track quality trends over time:
-
-```bash
-python orchestration/quality_metrics.py report
-```
-
-```
-Component Quality Report
-========================
-user-api:         Score: 95/100 ⭐
-  - Coverage: 87%
-  - TDD: Compliant
-  - Complexity: Average 4.2
-  - Commits: 23 (good TDD pattern)
-
-payment-service:  Score: 92/100 ⭐
-  - Coverage: 91%
-  - TDD: Compliant
-  - Complexity: Average 5.1
-  - Commits: 31 (excellent TDD pattern)
-
-Project Average:  Score: 93/100 ⭐
-Trend: ↑ +5 points this week
-```
-
-## Multi-Agent Workflow Patterns
-
-### Pattern 1: Feature Development with Specialized Roles
-
-**When user requests a new feature:**
-
-1. **Feature Designer Agent** (Optional, for complex features)
-   - Analyzes requirements
-   - Creates technical design document
-   - Defines acceptance criteria
-   - Writes BDD feature files
-
-2. **Test Agent** (Runs before Implementation Agent)
-   - Writes integration tests based on requirements
-   - Writes BDD step definitions
-   - Creates test fixtures
-   - **Commits RED tests** (failing tests)
-
-3. **Implementation Agent** (Component-specific)
-   - Reads tests from Test Agent
-   - Implements code to make tests pass (TDD GREEN)
-   - Refactors code (TDD REFACTOR)
-   - **Commits show Red-Green-Refactor cycle**
-
-4. **Review Agent** (After implementation)
-   - Reviews code quality
-   - Checks SOLID principles adherence
-   - Suggests refactorings
-   - Validates security
-
-5. **Documentation Agent** (Final step)
-   - Updates README
-   - Generates API documentation
-   - Creates/updates ADRs
-   - Updates quality dashboard
-
-### Pattern 2: TDD Workflow Enforcement
-
-**For EVERY code change, enforce this cycle:**
-
-```bash
-# Phase 1: Write Tests (RED)
-python orchestration/agent_launcher.py launch test-agent \
-  --component user-api \
-  --task "Write tests for user registration endpoint" \
-  --priority high
-
-# Wait for test-agent to complete
-# Verify: Tests exist and FAIL
-
-# Phase 2: Implement Code (GREEN)
-python orchestration/agent_launcher.py launch user-api \
-  --task "Implement user registration endpoint (tests already written)" \
-  --priority high
-
-# Wait for component-agent to complete
-# Verify: Tests now PASS
-
-# Phase 3: Refactor (REFACTOR)
-python orchestration/agent_launcher.py launch user-api \
-  --task "Refactor user registration code for clarity" \
-  --priority medium
-
-# Wait for completion
-# Verify: Tests STILL PASS, code improved
-```
-
-### Pattern 3: Quality Gate Workflow
-
-```bash
-# Agent completes work
-# Orchestrator runs quality verification
-
-python orchestration/quality_verifier.py verify components/user-api
-
-# If verification FAILS:
-# - Identify specific failures
-# - Create targeted task for agent to fix
-# - Re-verify after fix
-
-# If verification PASSES:
-# - Mark component complete
-# - Update quality metrics
-# - Proceed to integration testing
-```
-
-## Git Operations (Single Repository)
-
-This project uses a SINGLE git repository at the project root.
-
-### Component Interaction Rules
-
-**What Components CAN Do (Encouraged):**
-- ✅ Import other components' PUBLIC APIs
-- ✅ Use other components as libraries/dependencies
-- ✅ Compose multiple components to build features
-- ✅ Create integration layers that orchestrate components
-- ✅ Link compiled libraries from other components
-- ✅ Call public functions/classes/modules from other components
-
-**What Components CANNOT Do (Enforced):**
-- ❌ Access other components' PRIVATE implementation details
-- ❌ Modify files in other components' directories
-- ❌ Import from _internal/ or private/ subdirectories
-- ❌ Depend on implementation specifics not in public API
-- ❌ Break encapsulation boundaries
-
-**Example:**
+**Always do this:**
 ```python
-# ✅ ALLOWED - Import and use public APIs (using underscore names)
-from components.audio_processor.api import AudioAnalyzer
-from components.data_manager import DataStore
-from components.shared_types import UserModel
+# ✅ CORRECT: Compute path relative to module
+from pathlib import Path
 
-analyzer = AudioAnalyzer()
-result = analyzer.process(file)
+module_dir = Path(__file__).parent
+config_path = module_dir / "config.yaml"
+data_dir = module_dir / "data"
 
-# ❌ FORBIDDEN - Access private implementation
-from components.audio_processor._internal.secrets import key
-with open("components/audio_processor/config.json", "w") as f:
-    f.write(data)  # Modifying another component's files
+# ✅ CORRECT: Package imports (not workspace imports)
+from myapp.audio.loader import AudioLoader
+from myapp.shared.types import SUPPORTED_FORMATS
+
+# ✅ CORRECT: Relative imports within package
+from .utils import validate_audio
+from ..shared import types
+
+# ✅ CORRECT: Use importlib.resources (Python 3.9+)
+from importlib.resources import files
+config_path = files('myapp').joinpath('config.yaml')
 ```
 
-**File Modification Rules:**
-- Each component works in its own directory: `components/<name>/`
-- Components NEVER modify files outside their directory
-- All commits include component name prefix: `[component-name]`
-- Git's index.lock provides automatic safety for concurrent commits
+### Enforcement (v0.15.0)
 
-### Handling Multiple Agents
-When running multiple agents in parallel:
-1. Each agent works independently in its component directory
-2. Git automatically serializes commits via index.lock
-3. If an agent encounters a lock, it retries automatically via git_retry.py
-4. No manual coordination needed - Git handles safety
+**Check #14: No Hardcoded Absolute Paths**
+- Scans ALL code for hardcoded paths
+- Detects: `/home/`, `/workspaces/`, `/Users/`, `/root/`, `/opt/`, `C:\`, `D:\`
+- Detects: `sys.path.append` with absolute paths
+- **CRITICAL blocker** - prevents completion if found
 
-### Committing Component Work
-When agents need to commit:
-- Use the retry wrapper: `python orchestration/git_retry.py "component-name" "message"`
-- This handles lock conflicts automatically with exponential backoff
-- Ensures all work gets committed even with parallel agents
+**Phase 6.5: Deployment Verification**
+- Tests package installation in DIFFERENT directory
+- Verifies imports work WITHOUT PYTHONPATH
+- Ultimate test that catches hardcoded path failures
 
-## Component Development Order and Build Phases
+**See:** `docs/PACKAGE-STRUCTURE-STANDARD.md` for complete requirements
 
-### Component Type Hierarchy
+### Quick Migration Check
 
-Components must be developed in dependency order based on their type level:
-
-| Level | Type | Token Limit | Can Depend On | Typical Dependencies |
-|-------|------|-------------|---------------|----------------------|
-| 0 | Base | 40,000 | Nothing | None |
-| 1 | Core | 60,000 | Base | 1-3 base libraries |
-| 2 | Feature | 80,000 | Base, Core | 2-5 base/core libraries |
-| 3 | Integration | 100,000 | Base, Core, Feature | 5-15 libraries (orchestration) |
-| 4 | Application | 20,000 | Integration primarily | 1-3 integration components |
-
-**Critical Rules:**
-- Components can only depend on **same or lower level** components
-- **Build order** is determined by topological sort of dependency graph
-- **Integration components** are expected to have many imports (this is correct)
-- **Application components** should be minimal (just bootstrapping)
-
-### Development Phases
-
-When starting a new project or feature, follow this phased approach:
-
-#### Phase 1: Planning and Architecture
-1. Analyze requirements and specifications
-2. Identify component boundaries
-3. Determine component types needed
-4. Create dependency graph
-5. Validate dependency levels (no higher-level dependencies)
-6. Generate build order using dependency manager
-
-#### Phase 2: Base Layer (Level 0)
-**Components**: Data types, utilities, protocols, shared interfaces
-
-**Characteristics**:
-- No dependencies on other components
-- Pure, self-contained functionality
-- Examples: `shared_types`, `validation_utils`, `protocol_definitions`
-
-**Process**:
+Check your project structure:
 ```bash
-# Check build order
-python orchestration/dependency_manager.py
-
-# Launch base component agents (can run in parallel, no dependencies)
-# All base components can develop simultaneously
+python orchestration/analysis/structure_analyzer.py .
 ```
 
-#### Phase 3: Core Layer (Level 1)
-**Components**: Core business logic, domain services, data access
+If hardcoded paths found:
+1. Read `docs/PACKAGE-STRUCTURE-STANDARD.md`
+2. Use `Path(__file__).parent` for all path construction
+3. Convert to package imports
+4. Test with `python orchestration/verification/deployment/deployment_verifier.py . --auto-detect`
 
-**Characteristics**:
-- Depend only on Base components
-- Reusable business logic
-- Examples: `auth_core`, `data_access`, `business_rules`
+---
 
-**Process**:
-```bash
-# Base components must be complete before starting Core
-# Core components can run in parallel with each other
+## 🎼 ADAPTIVE ORCHESTRATION (v0.9.0+)
+
+### The /orchestrate Command
+
+This project uses an **adaptive orchestration system** that automatically scales development processes based on task complexity. One command handles everything from simple typo fixes to major architectural enhancements.
+
+**Basic Usage:**
+```
+/orchestrate
 ```
 
-#### Phase 4: Feature Layer (Level 2)
-**Components**: Feature implementations, API endpoints, workflows
+The system analyzes your request and automatically selects the appropriate orchestration level.
 
-**Characteristics**:
-- Depend on Base and Core components
-- Implement specific features
-- Examples: `user_management`, `payment_processing`, `reporting`
+### Three Orchestration Levels
 
-**Process**:
-```bash
-# Base and Core must be complete
-# Feature components can run in parallel with each other
+**Level 1: Direct Execution** (2-5 minutes)
+- Single file, simple changes
+- Direct → Test → Commit
+- No sub-agents needed
+- Example: "Fix typo in README.md"
+
+**Level 2: Feature Orchestration** (15-30 minutes)
+- Multi-component features
+- Todo list tracking
+- Sub-agents per component (model="sonnet")
+- Full integration testing
+- Example: "Add authentication to api-gateway and user-service"
+
+**Level 3: Full Orchestration** (1-3 hours)
+- Major enhancements, architecture changes
+- Complete 6-phase workflow
+- Parallel sub-agent development
+- Contract validation
+- Iterative integration testing
+- Example: "Implement specifications/payment-system.md"
+
+### Complexity Detection Algorithm
+
+The system uses automatic scoring to determine level:
+
+**High Complexity (+3 points each):**
+- Specification document mentioned
+- Architecture refactoring
+- Component splitting
+
+**Moderate Complexity (+2 points each):**
+- New component creation
+- 3+ components affected
+
+**Feature Work (+1 point each):**
+- Keywords: "implement", "add feature", "create", "build"
+
+**Simple Changes (-2 points each):**
+- Keywords: "fix typo", "quick fix", "update value"
+
+**Thresholds:**
+- Score >= 5 → Level 3 (Full)
+- Score 2-4 → Level 2 (Feature)
+- Score < 2 → Level 1 (Direct)
+
+### Override Detection
+
+If automatic detection chooses wrong level:
+```
+/orchestrate --level=direct    # Force Level 1
+/orchestrate --level=feature   # Force Level 2
+/orchestrate --level=full      # Force Level 3
 ```
 
-#### Phase 4.5: Integration Layer (Level 3)
-**Components**: Orchestrators, coordinators, workflow managers
+### When to Use Each Level
 
-**Characteristics**:
-- Import and coordinate multiple lower-level components
-- Implement cross-component workflows
-- High import count is expected and correct
-- Examples: `app_orchestrator`, `workflow_manager`, `api_gateway`
+**Use Level 1** (or let detection choose):
+- Single file changes
+- Configuration updates
+- Documentation fixes
+- Simple refactoring
 
-**Process**:
-```bash
-# All Base, Core, and Feature components must be complete
-# Integration components tie everything together
-# Multiple integration components can run in parallel if independent
+**Use Level 2** (or let detection choose):
+- Features spanning 2-5 components
+- API additions
+- Database schema changes
+- Security enhancements
+
+**Use Level 3** (or let detection choose):
+- Implementing specification documents
+- Architectural refactoring
+- Component splitting
+- Major system enhancements
+
+### v1.7.0: Single Command Architecture
+
+As of v1.7.0, `/orchestrate-full` has been merged into `/orchestrate`. Use the `--level=full` flag for explicit full orchestration.
+
+**Available flags:**
+```
+/orchestrate "task"              → Auto-detect (Levels 1, 2, or 3)
+/orchestrate --level=full "task" → Force Level 3 (skip auto-detection)
+/orchestrate --resume            → Resume interrupted orchestration
+/orchestrate --help              → Display usage information
 ```
 
-#### Phase 5: Application Layer (Level 4)
-**Components**: CLI, API servers, GUI applications, entry points
+**Migration:**
+- Old: `/orchestrate-full` → New: `/orchestrate --level=full`
+- Auto-detection still works the same way (escalates to Level 3 when needed)
 
-**Characteristics**:
-- Minimal code (< 20,000 tokens)
-- Bootstrap and wire together integration components
-- Handle command-line arguments, configuration, startup
-- Examples: `cli`, `api_server`, `desktop_app`
+### Complete Documentation
 
-**Process**:
-```bash
-# All lower layers must be complete
-# Application components are the final entry points
-# Multiple application types (CLI, API, GUI) can be developed in parallel
+See `docs/ORCHESTRATION-USAGE-GUIDE.md` for:
+- Detailed examples for each level
+- Troubleshooting guide
+- Best practices
+- Override strategies
+
+---
+
+## Project Overview
+
+This is a Claude Code multi-agent orchestration system designed to enable a single developer to build and maintain large-scale software projects (thousands to millions of lines of code) using Claude Code sub-agents. The system enforces strict context window management, automated component splitting, and uses Claude Code sub-agents exclusively (no API token costs).
+
+## Design Goal: Installable Orchestration System
+
+The ultimate goal of this project is to create a complete, installable orchestration system that can be deployed to any new or existing software project. The system consists of:
+
+1. **Installation Package**: A `orchestration/` directory containing all necessary files, programs, scripts, templates, and configurations
+2. **Setup Automation**: A specialized prompt file that instructs Claude Code on how to configure a target project for orchestrated development
+3. **Universal Application**: Once installed and configured, all Claude Code software development in the target project will be conducted through this orchestration system
+
+### Installation Workflow
+
+**Automated Installation:**
+1. Clone `claude-orchestration` repository
+2. Run `install.sh` from target project directory
+3. Installation script automatically:
+   - Embeds templates into Python modules (no external files)
+   - Copies orchestration tools to `orchestration/`
+   - Installs slash commands to `.claude/commands/`
+   - Creates directory structure (`components/`, `contracts/`, `shared-libs/`)
+   - Generates master CLAUDE.md
+   - **Commits everything to git**
+   - **Removes installer directory** (self-cleaning)
+4. Result: Self-contained orchestration system in git repository
+5. Push to GitHub/GitLab - system travels with the code
+
+**Cloning Pre-Orchestrated Projects:**
+- Clone repository → everything ready immediately
+- Slash commands work out of the box
+- No re-installation needed
+
+This approach enables rapid deployment of the orchestration methodology to any project while maintaining minimal namespace pollution and full git integration.
+
+## Core Architecture
+
+### Master Orchestrator Pattern
+- Master orchestrator coordinates all work but NEVER writes production code directly
+- All code is written by specialized sub-agents working in isolated component directories
+- Configurable concurrent agent limit (default: 5, set in orchestration-config.json)
+  * Default maximum: 5 agents (good for most projects)
+  * Warning threshold: 7 agents (acceptable with good isolation)
+  * Recommended maximum: 10 agents (performance sweet spot)
+  * Absolute maximum: 15 agents (hard cap - cognitive overload beyond)
+- Task tool-based parallel execution (zero configuration required)
+- Strict component isolation enforced via instructions and CLAUDE.md files
+- Components communicate only through defined contracts
+
+### Project Organization
+
+This is the **development repository** for the orchestration system itself. It contains:
+
+```
+/workspaces/ai-orchestration/
+├── orchestration/  # The installable system package
+│   ├── orchestration/           # Python management tools
+│   │   ├── claude-orchestration-code.py  # Implementation code
+│   │   └── README.md
+│   ├── templates/               # CLAUDE.md templates
+│   ├── prompts/                 # Setup prompt files
+│   ├── contracts/               # Contract templates
+│   ├── scripts/                 # Installation scripts
+│   └── README.md
+├── docs/                        # Documentation
+│   ├── claude-orchestration-enhanced-spec.md  # Authoritative spec
+│   ├── claude-orchestration-files.md          # Original templates
+│   └── conversation-migration-summary.md      # Historical notes
+├── examples/                    # Example projects
+├── tests/                       # Test suite
+├── CLAUDE.md                    # This file (dev project instructions)
+└── README.md                    # Project overview
 ```
 
-#### Phase 6: Integration Testing and Quality Verification
-1. Run dependency validation
-2. Verify all API contracts are satisfied
-3. Run cross-component integration tests
-4. Run end-to-end workflow tests
-5. Verify quality standards across all components
-6. Generate quality dashboard
+### Target Project Structure (After Installation)
 
-### Managing Component Dependencies
+When installed in a target project, the structure becomes:
 
-**Before starting any component work:**
-
-```bash
-# 1. Load all component manifests
-python orchestration/dependency_manager.py
-
-# 2. Check for issues
-#    - Circular dependencies
-#    - Level violations (depending on higher-level components)
-#    - Missing dependencies
-
-# 3. Get build order
-python orchestration/dependency_manager.py --show-build-order
-
-# 4. Verify dependencies for specific component
-python orchestration/dependency_manager.py --verify component-name
+```
+target-project/
+├── components/              # Sub-agents work here in isolation
+│   └── [component-name]/   # Each has CLAUDE.md, .clinerules
+├── contracts/              # API contracts between components
+├── shared-libs/            # Read-only shared libraries
+├── orchestration/          # Management tools (copied from system)
+│   ├── token-tracker.json
+│   ├── context_manager.py
+│   ├── component_splitter.py
+│   ├── claude_code_analyzer.py
+│   └── migration_manager.py
+└── CLAUDE.md              # Master orchestrator instructions
 ```
 
-**When creating a new component:**
+## Key Files and Directories
 
-1. Determine component type (base/core/feature/integration/application)
-2. Identify dependencies (what will this import from?)
-3. Validate dependency levels (no higher-level dependencies)
-4. Add to component.yaml manifest
-5. Verify no circular dependencies introduced
-6. Update build order
+### Orchestration System Structure
+- **`orchestration/`**: Core orchestration system
+  - `cli/`: Command-line tools (session_init, create_component, etc.)
+  - `core/`: Core modules (paths.py for DataPaths)
+  - `data/`: Centralized data directory (state, logs, reports, checkpoints, config)
+  - `enforcement/`: Anti-stopping enforcement (monitor, stall_detector)
+  - `gates/`: Phase gate implementation (runner.py, executor.py)
+  - `hooks/`: Git hooks (pre-commit, post-commit enforcement)
+  - `tasks/`: Task queue management (queue.py, auto_sync.py)
+  - `templates/`: CLAUDE.md templates for component types
+  - `verification/`: Verification tools (specs/, quality/, system/)
+  - `validation/`: Validation scripts (validate_claude_md.py)
 
-**Example component.yaml with dependencies:**
-```yaml
-name: user_management
-type: feature
-dependencies:
-  imports:
-    - name: shared_types
-      version: "^1.0.0"
-      import_from: "components.shared_types"
-      uses:
-        - User
-        - ValidationError
-    - name: auth_core
-      version: "^1.0.0"
-      import_from: "components.auth_core.api"
-      uses:
-        - Authenticator
-        - TokenValidator
-    - name: data_access
-      version: "^1.0.0"
-      import_from: "components.data_access"
-      uses:
-        - Repository
+### Documentation
+- **`docs/`**: Project documentation
+  - Run `ls docs/` to see available documentation
+  - `CHANGELOG.md`: Version history
+  - `UPGRADE-REQUIREMENTS.md`: Upgrade procedures
+  - `HISTORICAL-FAILURES.md`: Past failure analysis
+
+### Project Directories
+- **`components/`**: Sub-agent working directories (created per project)
+- **`contracts/`**: API contracts between components
+- **`shared-libs/`**: Shared libraries (read-only for sub-agents)
+- **`specifications/`**: Project specifications
+- **`tests/`**: Test suite
+- **`examples/`**: Example projects
+
+### Data Directory Structure
+
+All orchestration state/data files are centralized in `orchestration/data/`:
+
+```
+orchestration/data/
+├── state/       # Runtime state (queue_state.json, completion_state.json, orchestration_state.json)
+├── logs/        # Enforcement and operation logs (enforcement_log.json, monitor_log.json)
+├── reports/     # Generated reports (completion reports, verification reports)
+├── checkpoints/ # Session checkpoints
+└── config/      # Runtime configuration overrides
 ```
 
-### Determining Component Development Order
-
-**Use the dependency manager to get correct build order:**
-
+**Using DataPaths:**
 ```python
-from orchestration.dependency_manager import DependencyManager
+from orchestration.core.paths import DataPaths
 
-manager = DependencyManager(project_root)
-manager.load_all_manifests()
-
-# Get topologically sorted build order
-build_order = manager.get_build_order()
-# Returns: ['shared_types', 'auth_core', 'data_access', 'user_management', ...]
-
-# Check for violations
-violations = manager.validate_dependency_levels()
-if violations:
-    print("⚠️ Dependency level violations:")
-    for violation in violations:
-        print(f"  - {violation}")
-
-# Check for circular dependencies
-cycles = manager.check_circular_dependencies()
-if cycles:
-    print("🚨 Circular dependencies detected:")
-    for cycle in cycles:
-        print(f"  - {' → '.join(cycle)}")
+paths = DataPaths()
+queue_file = paths.queue_state  # Returns Path to orchestration/data/state/queue_state.json
+paths.queue_state.parent.mkdir(parents=True, exist_ok=True)  # Ensure directory exists before write
 ```
 
-**Development sequence:**
-1. Start with components that have no dependencies (base layer)
-2. Proceed to components whose dependencies are complete (core layer)
-3. Continue up the hierarchy (feature → integration → application)
-4. Use `max_parallel_agents` for components at same level
+**Key Points:**
+- All code should use `DataPaths` class for path access (not hardcoded paths)
+- Legacy file locations are NOT supported - all files must be in `orchestration/data/`
+- Migration from legacy locations happens automatically during upgrade
 
-### Integration Component Special Handling
+## Context Window Management
 
-**Integration components (Level 3) are different:**
+### Two-Tier Limit System
 
-- **Expected to have many imports** (5-15 or more)
-- **Purpose is to orchestrate** other components
-- **Higher token limit** (100,000 vs 80,000 for features)
-- **Should not reimplement logic** - delegate to libraries
-
-**Example integration component structure:**
-```python
-# components/app_orchestrator/src/orchestrator.py
-from components.user_management.api import UserManager
-from components.payment_processing.api import PaymentProcessor
-from components.notification.api import Notifier
-from components.data_access import Repository
-from components.reporting.api import ReportGenerator
-
-class ApplicationOrchestrator:
-    """Integration component that coordinates the entire application workflow."""
-
-    def __init__(self, config):
-        # Initialize all required components
-        self.users = UserManager(config.user_db)
-        self.payments = PaymentProcessor(config.payment_gateway)
-        self.notifier = Notifier(config.email)
-        self.repository = Repository(config.db)
-        self.reports = ReportGenerator(config.reporting)
-
-    def process_user_purchase(self, user_id, item_id):
-        """Orchestrate complete purchase workflow across multiple components."""
-        # This is orchestration - coordinating components, not reimplementing logic
-        user = self.users.get_user(user_id)
-        payment = self.payments.process_payment(user, item_id)
-        self.repository.save_transaction(payment)
-        self.notifier.send_receipt(user, payment)
-        self.reports.record_sale(payment)
-        return payment
-```
-
-**When reviewing integration components:**
-- ✅ Many imports is CORRECT (this is the point)
-- ✅ Delegating to other components is CORRECT
-- ❌ Reimplementing logic from libraries is WRONG
-- ❌ Having private implementation details is WRONG (should be thin)
-
-## Token Budget Enforcement
-
-**Two-Tier Limit System:**
-
-**Soft Limits (Best Practices):**
+**Soft Limits** (Best Practices):
 - Optimal size: 60,000-80,000 tokens (~6,000-8,000 lines)
-- Based on human code review capacity and safe splitting margins
+- Based on safe splitting margins and human code review capacity
 
-**Hard Limits (Technical Constraints):**
-- Optimal size: 80,000 tokens (~8,000 lines)
+**Hard Limits** (Technical Constraints):
 - Warning threshold: 100,000 tokens (~10,000 lines)
 - Split trigger: 120,000 tokens (~12,000 lines)
 - Emergency limit: 140,000 tokens (~14,000 lines)
+- Absolute maximum: 200,000 tokens (Claude's context window)
 
-**Component Status Tiers:**
+### Component Status Tiers
 - 🟢 **Green (Optimal)**: < 80,000 tokens - Ideal size, full flexibility
 - 🟡 **Yellow (Monitor)**: 80,000-100,000 tokens - Watch growth, plan split
 - 🟠 **Orange (Split Required)**: 100,000-120,000 tokens - Split before major work
 - 🔴 **Red (Emergency)**: > 120,000 tokens - STOP! Split immediately
 
-**Before assigning new work to a component:**
-1. Check current size: `python orchestration/context_manager.py`
-2. If approaching 100,000 tokens: Plan component split THIS session
-3. If exceeding 120,000 tokens: DO NOT PROCEED - split immediately
-4. ALWAYS verify: component_size + task_size + 20,000 < 180,000
+### Token Budget Breakdown
+**Total Context Window**: 200,000 tokens
 
-## Project Lifecycle and Breaking Changes Policy
+**Overhead** (~21,000 tokens):
+- CLAUDE.md instructions: 1,500 tokens
+- Work instructions: 500 tokens
+- System prompts: 2,000 tokens
+- Contracts: 2,000 tokens
+- Response buffer: 15,000 tokens
 
-**PROJECT VERSION**: 0.1.0 (Check orchestration/project-metadata.json)
-**LIFECYCLE STATE**: Check `lifecycle_state` in project-metadata.json
+**Available for Source Code**: ~179,000 tokens
 
-### Breaking Changes Coordination
-
-**Before assigning work**, check project lifecycle state:
-```bash
-cat orchestration/project-metadata.json | jq '.lifecycle_state, .breaking_changes_policy'
+### Approximation Formula
+```
+Total Context = Source_Code_Tokens + Overhead_Tokens
+Source_Code_Tokens ≈ Lines_of_Code × 10
+Overhead_Tokens ≈ 21,000
 ```
 
-### If lifecycle_state = "pre-release" (version < 1.0.0):
+## Automated Component Splitting
 
-**DO:**
-- ✅ Breaking changes are **ENCOURAGED AND PREFERRED**
-- ✅ Instruct sub-agents to break and improve code freely
-- ✅ Remove deprecated code immediately
-- ✅ Simplify complex compatibility layers
-- ✅ Refactor to better patterns without hesitation
-- ✅ Delete unused code paths
+### Splitting Triggers
+1. Token count exceeds 70,000
+2. Line count exceeds 4,000
+3. Complexity exceeds thresholds
+4. Manual developer request
 
-**DO NOT:**
-- ❌ Instruct sub-agents to maintain backwards compatibility
-- ❌ Request deprecation warnings for unreleased features
-- ❌ Keep old API signatures "just in case"
-- ❌ Add compatibility layers during development
-- ❌ Version internal APIs before 1.0.0
+### Split Strategies
+- **Horizontal Split**: By architectural layer (api-layer, business-logic, data-layer)
+- **Vertical Split**: By feature (user-management, payment-processing, reporting)
+- **Hybrid Split**: Combination approach (core-services, feature-modules, infrastructure)
 
-**Coordinating Breaking Changes Across Components:**
+### Splitting Process
+1. **Analysis Phase**: Claude Code sub-agent analyzes structure and dependencies
+2. **Planning Phase**: Generate split plan with new component names and contracts
+3. **Execution Phase**: Orchestrator coordinates file movement and dependency updates
+4. **Validation Phase**: Run tests and verify contract compliance
 
-When a shared library or contract changes in a breaking way:
+## Component Isolation
 
-1. **Identify Impact**:
-   ```bash
-   python orchestration/dependency_analyzer.py find-consumers shared-libs/auth.py
-   ```
+### Sub-Agent Boundaries
+- Each sub-agent operates ONLY within its component directory
+- No cross-component file access permitted
+- Communication only through defined contracts
+- Read-only access to shared libraries and contracts
 
-2. **Coordinate Updates**: Update all consuming components atomically
-   - Launch agents for all affected components
-   - Provide updated contract/library
-   - Update all usages in same batch
-   - Run integration tests
-
-3. **Atomic Commit**: All components commit together
-   ```bash
-   python orchestration/atomic_commit.py \
-     --components user-service,auth-service,api-gateway \
-     --message "breaking: Update auth library to v2 API"
-   ```
-
-### If lifecycle_state = "released" (version >= 1.0.0):
-
-- Breaking changes require careful coordination
-- Deprecation process required
-- Backwards compatibility important
-- Version bumps follow semver strictly
-
-### Version Control Restrictions
-
-**🚨 CRITICAL: You CANNOT change major versions autonomously**
-
-**FORBIDDEN ACTIONS** (require explicit user approval):
-- ❌ Transitioning from 0.x.x to 1.0.0
-- ❌ Transitioning from 1.x.x to 2.0.0
-- ❌ Any major version increment (X.y.z → X+1.0.0)
-- ❌ Changing `lifecycle_state` from "pre-release" to "released"
-- ❌ Setting `api_locked: true` in project metadata
-- ❌ Changing `breaking_changes_policy` from "encouraged" to "controlled"
-
-**WHY:** Major version transitions are **business decisions**, not technical decisions. They involve:
-- Legal implications (SLAs, support obligations)
-- Communication to users/stakeholders
-- Complete API documentation
-- Comprehensive testing and security audits
-- Business readiness (support training, pricing, contracts)
-
-**What You CAN Do:**
-- ✅ Assess project readiness for major version transition
-- ✅ Create recommendation document with readiness checklist
-- ✅ Present recommendation to user
-- ✅ **WAIT for explicit user approval**
-- ✅ Increment minor/patch versions autonomously (0.1.0 → 0.2.0 or 0.1.1)
-
-**If you believe project is ready for 1.0.0:**
-
-1. Create comprehensive recommendation document in `docs/`
-2. Include readiness assessment (API stability, docs, testing, production readiness)
-3. List any blocking items
-4. Suggest timeline
-5. **WAIT for explicit user approval - DO NOT PROCEED**
-
-**After User Approval:**
-User will manually update project-metadata.json OR explicitly instruct you to do so.
-
-### Breaking Changes Checklist
-
-When coordinating a breaking change:
-- [ ] Check lifecycle_state (pre-release = encouraged, released = controlled)
-- [ ] Identify all affected components
-- [ ] Update shared contracts/libraries first
-- [ ] Launch agents for all consumers simultaneously
-- [ ] Verify integration tests pass
-- [ ] Commit all changes atomically
-- [ ] Use commit message format: `breaking: <description>`
-
-### Commit Message Format for Breaking Changes
-
+### .clinerules Pattern
+Each component gets isolation rules:
 ```
-breaking: <short description>
-
-BREAKING CHANGE: <detailed explanation of what changed>
-
-Rationale: <why the breaking change was needed>
-
-Components affected:
-- component-a (how it was updated)
-- component-b (how it was updated)
-
-Migration: <how to adapt if someone forked> OR "None needed (unreleased software)"
-```
-
-## Dynamic Component Creation
-
-You can create new components on-demand when architectural needs arise. This system is **self-configuring** - you handle all component creation by following these instructions.
-
-### When to Create a New Component
-
-Create a new component when:
-- A component approaches size limits (>150k tokens, >15k lines)
-- A clear architectural boundary is identified
-- A distinct responsibility area emerges
-- Different technology stack is needed
-- Domain separation makes sense
-
-### Component Creation Workflow
-
-Follow these steps **exactly** when creating a new component:
-
-#### Step 1: Validate Component Name
-
-**CRITICAL: Universal Naming Convention (v0.3.0)**
-
-Components MUST use **underscore naming only** for cross-language compatibility.
-
-**Component name must**:
-- Start with lowercase letter
-- Contain only lowercase letters, numbers, and underscores
-- Pattern: `[a-z][a-z0-9_]*`
-- No spaces, hyphens, or special characters
-- Max 50 characters
-- Examples: `auth_service`, `payment_api`, `user_lib`, `shared_types`
-
-**Why underscores only?**
-- ✅ Works in Python imports: `from components.auth_service import X`
-- ✅ Works in JavaScript/TypeScript, Rust, Go, Java, C++
-- ❌ Hyphens break Python: `from components.auth-service` is syntax error
-
-**Validate name before creating component**:
-```bash
-# Use validator to check name
-python orchestration/component_name_validator.py <component-name>
-
-# Check filesystem
-if [ -d "components/<component-name>" ]; then
-  echo "❌ Component already exists in filesystem"
-  exit 1
-fi
-```
-
-#### Step 2: Create Component Directory Structure
-
-```bash
-COMPONENT_NAME="<component-name>"
-COMPONENT_TYPE="<backend|frontend|library|microservice>"
-
-# Create base directories (all component types)
-mkdir -p components/$COMPONENT_NAME/src
-mkdir -p components/$COMPONENT_NAME/tests/unit
-mkdir -p components/$COMPONENT_NAME/tests/integration
-
-# Backend/Microservice specific directories
-if [ "$COMPONENT_TYPE" = "backend" ] || [ "$COMPONENT_TYPE" = "microservice" ]; then
-  mkdir -p components/$COMPONENT_NAME/src/api
-  mkdir -p components/$COMPONENT_NAME/src/models
-  mkdir -p components/$COMPONENT_NAME/src/services
-  mkdir -p components/$COMPONENT_NAME/features  # BDD scenarios
-fi
-
-# Frontend specific directories
-if [ "$COMPONENT_TYPE" = "frontend" ]; then
-  mkdir -p components/$COMPONENT_NAME/src/components
-  mkdir -p components/$COMPONENT_NAME/src/pages
-  mkdir -p components/$COMPONENT_NAME/src/styles
-  mkdir -p components/$COMPONENT_NAME/features  # BDD scenarios
-fi
-```
-
-#### Step 3: Generate CLAUDE.md from Template
-
-**Select template based on component type**:
-- Backend/Microservice: `claude-orchestration-system/templates/component-backend.md`
-- Frontend: `claude-orchestration-system/templates/component-frontend.md`
-- Library/Generic: `claude-orchestration-system/templates/component-generic.md`
-
-**Read the template** and **substitute these variables**:
-
-| Variable | Replace With | Example |
-|----------|--------------|---------|
-| `{{COMPONENT_NAME}}` | Component name | `auth_service` |
-| `0.1.0` | From `orchestration/project-metadata.json` | `0.1.0` |
-| `./` | Absolute path to project root | `/workspaces/my-project` |
-| `{{TECH_STACK}}` | Technologies for this component | `Python, FastAPI, PostgreSQL` |
-| `{{COMPONENT_RESPONSIBILITY}}` | What this component does | `User authentication and authorization` |
-
-**Write the result** to `components/<component-name>/CLAUDE.md`
-
-**Example**:
-```bash
-# For component "auth_service" with backend template:
-# 1. Read: claude-orchestration-system/templates/component-backend.md
-# 2. Replace all {{COMPONENT_NAME}} with "auth_service"
-# 3. Replace 0.1.0 with "0.1.0"
-# 4. Replace ./ with "/workspaces/my-project"
-# 5. Replace {{TECH_STACK}} with "Python, FastAPI, JWT, PostgreSQL"
-# 6. Replace {{COMPONENT_RESPONSIBILITY}} with "User authentication and authorization"
-# 7. Write to: components/auth_service/CLAUDE.md
-```
-
-#### Step 4: Add to Root Repository
-
-```bash
-# Stage component files in root repository
-git add components/<component-name>/
-
-# Commit with component prefix using retry wrapper
-python orchestration/git_retry.py "<component-name>" "Initial component setup"
-```
-
-#### Step 5: Create Component README.md
-
-Create `components/<component-name>/README.md`:
-
-```markdown
-# <Component Name>
-
-**Type**: <backend|frontend|library|microservice>
-**Tech Stack**: <technologies>
-**Version**: 0.1.0
-
-## Responsibility
-
-<What this component does>
-
-## Structure
-
-```
-├── src/           # Source code
-├── tests/         # Tests (unit, integration)
-├── features/      # BDD scenarios (if applicable)
-├── CLAUDE.md      # Component-specific instructions for Claude Code
-└── README.md      # This file
-```
-
-## Usage
-
-This component is ready for immediate use via Task tool orchestration.
-
-**Through Orchestrator:**
-Tell the orchestrator to work on this component, and it will launch an agent using the Task tool.
-
-**Direct Work:**
-```bash
-cd components/<component-name>
-claude code
-# Claude Code reads local CLAUDE.md and you work directly
-```
-
-## Development
-
-See CLAUDE.md for detailed development instructions, quality standards, and TDD requirements.
-```
-
-#### Step 6: Inform User About Component Readiness
-
-**Message template**:
-```
-✅ Component '<component-name>' created successfully!
-
-📁 Location: components/<component-name>/
-📋 Type: <backend|frontend|library|microservice>
-🔧 Tech Stack: <technologies>
-
-✅ Created:
-  - Directory structure (src/, tests/, features/)
-  - CLAUDE.md from <template-type> template
-  - Component README.md
-  - Added to root repository with component prefix
-
-✅ **READY FOR USE** (no restart required)
-
-Use Task tool to launch agent for this component, or cd into directory for direct work.
-```
-
-### Complete Example: Creating "payment_api" Component
-
-**Scenario**: Create backend component for payment processing
-
-```bash
-# Step 1: Validate name
-COMPONENT_NAME="payment_api"
-COMPONENT_TYPE="backend"
-TECH_STACK="Python, FastAPI, Stripe API, PostgreSQL"
-RESPONSIBILITY="Handle payment processing and transaction management"
-
-# Validate using validator
-python orchestration/component_name_validator.py payment_api
-# Output: ✅ 'payment_api' - Valid
-
-# Check if exists
-[ ! -d "components/payment_api" ] || echo "Already exists!"
-
-# Step 2: Create directories
-mkdir -p components/payment_api/src/api
-mkdir -p components/payment_api/src/models
-mkdir -p components/payment_api/src/services
-mkdir -p components/payment_api/tests/unit
-mkdir -p components/payment_api/tests/integration
-mkdir -p components/payment_api/features
-
-# Step 3: Generate CLAUDE.md
-# Read: claude-orchestration-system/templates/component-backend.md
-# Substitute variables:
-#   {{COMPONENT_NAME}} → payment_api
-#   0.1.0 → 0.1.0 (from orchestration/project-metadata.json)
-#   ./ → /workspaces/my-project
-#   {{TECH_STACK}} → Python, FastAPI, Stripe API, PostgreSQL
-#   {{COMPONENT_RESPONSIBILITY}} → Handle payment processing and transaction management
-# Write to: components/payment_api/CLAUDE.md
-
-# Step 4: Add to root repository
-git add components/payment_api/
-python orchestration/git_retry.py "payment_api" "Initial component setup"
-
-# Step 5: Create README.md
-# (Create with component-specific content)
-
-# Step 6: Inform user
-cat << 'EOF'
-✅ Component 'payment_api' created successfully!
-
-📁 Location: components/payment_api/
-📋 Type: backend
-🔧 Tech Stack: Python, FastAPI, Stripe API, PostgreSQL
-
-✅ Created:
-  - Directory structure (src/, tests/, features/)
-  - CLAUDE.md from component-backend template
-  - Component README.md
-  - Added to root repository with [payment_api] prefix
-
-✅ **READY FOR USE** (no restart required)
-
-Use Task tool to launch agent for this component.
-EOF
-```
-
-### Validation Checklist
-
-Before informing the user, verify:
-- [ ] Component directory exists: `components/<name>/`
-- [ ] CLAUDE.md exists with correctly substituted variables
-- [ ] Directory structure created (src/, tests/)
-- [ ] Component added to root repository with prefix
-- [ ] README.md created
-- [ ] No errors in any step
-
-### Component Deletion
-
-When a component is no longer needed:
-
-```bash
-COMPONENT_NAME="<name>"
-TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-
-# 1. Archive component (preserves history)
-mkdir -p archive
-mv components/$COMPONENT_NAME archive/${COMPONENT_NAME}-${TIMESTAMP}
-
-# 2. Inform user
-echo "✅ Component archived to: archive/${COMPONENT_NAME}-${TIMESTAMP}"
-echo "✅ Component removed (ready for cleanup)"
-```
-
-### Troubleshooting
-
-**Component name already exists**:
-```bash
-if [ -d "components/<name>" ]; then
-  echo "❌ Component '<name>' already exists in filesystem"
-  echo "   Choose a different name or delete the existing component first"
-fi
-```
-
-**Invalid component name**:
-- Valid pattern: `^[a-z][a-z0-9_]*$`
-- Must start with lowercase letter
-- Only lowercase letters, numbers, underscores
-- Examples:
-  - ✅ `auth_service`, `payment_api`, `user_lib`, `shared_types`
-  - ❌ `AuthService`, `payment-api`, `auth service`, `123_test`
-
-### Path Resolution Helper
-
-**To get absolute project root**:
-```bash
-# If in project root
-PROJECT_ROOT=$(pwd)
-
-# If using git (works from any subdirectory)
-PROJECT_ROOT=$(git rev-parse --show-toplevel)
-
-# Verify it's absolute (starts with /)
-echo $PROJECT_ROOT
-# Should output: /workspaces/my-project (or similar)
-```
-
-**Always verify paths are absolute**:
-```bash
-# Good (absolute)
-/workspaces/my-project/components/auth-service
-
-# Bad (relative)
-./components/auth-service
-components/auth-service
-```
-
-## Sub-Agent Management Protocol
-
-### Launching Component Agents
-
-Use Claude Code's built-in **Task tool** to launch parallel component agents.
-
-**CRITICAL Pre-flight Check (MANDATORY before EVERY Task tool launch):**
-
-```python
-# Check BEFORE launching ANY agent
-def pre_flight_check(component_name, task_description):
-    component_size = count_tokens(f"components/{component_name}")
-    task_estimate = estimate_task_tokens(task_description)
-    safety_margin = 20000
-    total_needed = component_size + task_estimate + safety_margin
-
-    # Check 1: Component already too large?
-    if component_size > 120000:
-        print(f"🚨 ABORT: {component_name} is {component_size} tokens")
-        print("Component MUST be split before ANY work")
-        split_component(component_name)
-        return False
-
-    # Check 2: Would this task exceed limits?
-    if total_needed > 180000:
-        print(f"⚠️ INSUFFICIENT CONTEXT")
-        print(f"Component: {component_size} + Task: {task_estimate} = {total_needed}")
-        print("Splitting component first...")
-        split_component(component_name)
-        return False
-
-    # Check 3: Getting close to limits?
-    if component_size > 100000:
-        print(f"⚠️ Component at {component_size} tokens - plan to split soon")
-
-    return True  # Safe to proceed
-```
-
-**Read configuration:**
-```bash
-# Get max parallel agents from config
-max_agents=$(cat orchestration/orchestration-config.json | grep max_parallel_agents | awk '{print $2}' | tr -d ',')
-# Default: 3
-```
-
-**Task Prompt Template:**
-```markdown
-You are working on the {{COMPONENT_NAME}} component.
-
-**MANDATORY INSTRUCTIONS:**
-1. Read components/{{COMPONENT_NAME}}/CLAUDE.md for complete component instructions
-2. Work ONLY in components/{{COMPONENT_NAME}}/ directory
-3. Do NOT access other component directories (components/*/  forbidden)
-4. Follow all quality standards (TDD, 80%+ coverage, BDD)
-5. Commit your work to local git when complete
-6. Run quality verification before marking complete
-
-**TASK:**
-{{TASK_DESCRIPTION}}
-
-**CONTEXT:**
-- Project root: ./
-- Component type: {{COMPONENT_TYPE}}
-- Related contracts: contracts/{{COMPONENT_NAME}}.yaml
-- Shared libraries: shared-libs/ (read-only)
-
-**EXPECTED DELIVERABLES:**
-- All tests passing (100%)
-- Coverage ≥ 80%
-- All quality gates passing
-- Git commits showing TDD pattern
-- Summary of work completed
-
-Return a summary when done.
-```
-
-**Single Component:**
-```python
-Task(
-    description="Implement {{COMPONENT_NAME}} component",
-    prompt="[Use template above, substituting {{VARIABLES}}]",
-    subagent_type="general-purpose",
-    model="sonnet"  # REQUIRED: Always use Sonnet for coding
-)
-```
-
-**Parallel Components (Respect max_parallel_agents):**
-
-Example with 5 components, max_agents=3:
-
-```python
-# Read max_agents from config (3)
-max_agents = 3
-
-# Launch Tasks (max 3 concurrent) - ALL with model="sonnet"
-Task(
-    description="Implement backend-api component",
-    prompt="[Component-specific prompt with task details]",
-    subagent_type="general-purpose",
-    model="sonnet"  # REQUIRED
-)
-
-Task(
-    description="Implement frontend component",
-    prompt="[Component-specific prompt with task details]",
-    subagent_type="general-purpose",
-    model="sonnet"  # REQUIRED
-)
-
-Task(
-    description="Implement auth-service component",
-    prompt="[Component-specific prompt with task details]",
-    subagent_type="general-purpose",
-    model="sonnet"  # REQUIRED
-)
-
-# Queue (waiting for slot):
-#   - payment-api (position 1)
-#   - notification-service (position 2)
-
-# [Wait for Task 1 to complete]
-# [Task 1 complete - backend-api finished]
-
-# Launch Task 4 when slot available
-Task(
-    description="Implement payment-api component",
-    prompt="[Component-specific prompt with task details]",
-    subagent_type="general-purpose",
-    model="sonnet"  # REQUIRED
-)
-
-# [Continue until all complete]
-```
-
-**Isolation Enforcement:**
-- Task prompts include MANDATORY boundary instructions
-- Component CLAUDE.md reinforces isolation rules
-- Orchestrator verifies work stayed within boundaries
-- Quality verification checks for boundary violations
-
-### Creating a New Sub-Agent
-
-See "Dynamic Component Creation" section below for complete workflow.
-
-**Quick Steps:**
-1. **Create component directory**: Use workflow in "Dynamic Component Creation"
-2. **Component is ready**: No additional configuration needed
-3. **Launch agent**: Use Task tool with prompt template above
-
-**Component Isolation (.clinerules):**
-```
-# components/<name>/.clinerules
 ALLOWED_PATHS=.
-FORBIDDEN_PATHS=../*/
+FORBIDDEN_PATHS=../../components/*/
 READ_ONLY_PATHS=../../contracts,../../shared-libs
 ```
 
-**Pre-Commit Hooks (Quality Gates):**
+## Git Operations (Single Repository)
 
-Create `.git/hooks/pre-commit` in each component:
+### Architecture
+The orchestration system uses a **single git repository** at the project root:
+- All components share one repository (no component-level .git directories)
+- Components commit with prefixed messages: `[component-name] feat: description`
+- Concurrent commits handled by retry wrapper
+- GitHub/GitLab compatible (no orphaned code)
+
+### Concurrent Commit Handling
+Component agents use the retry wrapper for safe concurrent commits:
 ```bash
-#!/bin/bash
-# Quality gates - prevent commits that don't meet standards
-
-echo "Running quality checks..."
-
-# Run tests
-npm test || pytest
-if [ $? -ne 0 ]; then
-  echo "❌ Tests failing. Fix tests before committing."
-  exit 1
-fi
-
-# Check coverage
-COVERAGE=$(pytest --cov=src --cov-report=term-missing | grep "TOTAL" | awk '{print $4}' | sed 's/%//')
-if [ "$COVERAGE" -lt 80 ]; then
-  echo "❌ Coverage $COVERAGE% below 80% threshold."
-  exit 1
-fi
-
-# Run linter
-npm run lint || flake8 src/
-if [ $? -ne 0 ]; then
-  echo "❌ Linting errors. Fix before committing."
-  exit 1
-fi
-
-# Run formatter check
-npm run format:check || black --check src/
-if [ $? -ne 0 ]; then
-  echo "❌ Code not formatted. Run formatter."
-  exit 1
-fi
-
-echo "✅ All quality checks passed"
-exit 0
+# Retry wrapper handles index.lock conflicts automatically
+python orchestration/cli/git_retry.py "auth_service" "feat: Add login endpoint"
 ```
 
-### Completion Verification Protocol (MANDATORY)
+### Features
+- Automatic retry with exponential backoff + jitter
+- Handles git index.lock conflicts transparently
+- Configurable retry attempts (default: 5)
+- Only 30 lines of code (simple and reliable)
 
-**Version**: 0.4.0 (Enhanced from 0.3.0)
+## Development Environment
 
-**CRITICAL**: This protocol prevents the v0.2.0 failure where projects stopped at 80% completion.
+### DevContainer Configuration
+- Located in `.devcontainer/devcontainer.json`
+- Python 3 environment with AI development tools
+- Mounted volumes: workspace, .claude config
+- Environment variables: ANTHROPIC_API_KEY, OPENAI_API_KEY
+- Extensions: Claude Dev, Claude Code, Continue, Python support
 
-After EVERY component agent completes, you MUST verify the component is ACTUALLY complete before accepting it as done.
+### Common Commands
 
-#### The Problem This Solves
-
-In v0.2.0, the orchestrator checked "did all agents finish?" instead of "is all work actually done?" This caused:
-- ❌ 20% incompletion rate (2/10 components unfinished)
-- ❌ Projects declared "complete" but non-functional
-- ❌ No mechanism to detect incomplete work
-
-v0.3.0 introduced 8-check verification. v0.4.0 adds 3 more critical checks for quality and correctness.
-
-#### The 11-Check Verification System (v0.4.0)
-
-Every component must pass these checks before being accepted as complete:
-
-**Original 8 Checks (v0.3.0):**
-1. ✅ **Tests Pass** (100% pass rate) - CRITICAL
-2. ✅ **Imports Resolve** (no import errors) - CRITICAL
-3. ✅ **No Stubs** (no NotImplementedError, empty functions) - CRITICAL
-4. ✅ **No TODOs** (no TODO/FIXME markers) - Warning
-5. ✅ **Documentation Complete** (README.md, CLAUDE.md present) - Warning
-6. ✅ **No Remaining Work Markers** (no "IN PROGRESS", "INCOMPLETE") - Warning
-7. ✅ **Test Coverage ≥80%** (coverage meets threshold) - CRITICAL
-8. ✅ **Manifest Complete** (component.yaml has required fields) - Warning
-
-**New v0.4.0 Checks:**
-9. ✅ **Defensive Programming** (input validation, error handling) - CRITICAL
-10. ✅ **Semantic Correctness** (logic correctness, not just syntax) - CRITICAL
-11. ✅ **Contract Compliance** (implements contract completely) - CRITICAL
-
-**Critical checks** must pass for component to be considered complete.
-**Warning checks** are recommended but don't block completion.
-
-**v0.4.0 Additions:**
-- Defensive programming patterns (null checks, error handling)
-- Semantic correctness verification (logic analysis)
-- Contract compliance validation (against generated contracts)
-
-#### Verification Workflow
-
-**After component agent reports completion:**
-
-```python
-# Step 1: Run completion verifier
-from orchestration.completion_verifier import CompletionVerifier
-
-verifier = CompletionVerifier(project_root)
-verification = verifier.verify_component("components/audio_processor")
-
-# Step 2: Check if actually complete
-if verification.is_complete:
-    print(f"✅ {verification.component_name} verified complete ({verification.completion_percentage}%)")
-    # Mark component as done
-    # Proceed to next component or integration testing
-
-else:
-    print(f"❌ {verification.component_name} incomplete ({verification.completion_percentage}%)")
-    print(f"   Critical failures: {len(verification.get_critical_failures())}")
-
-    # Step 3: Extract remaining tasks
-    remaining_tasks = verification.remaining_tasks
-
-    # Step 4: Relaunch agent with focused prompt
-    relaunch_prompt = f"""
-You previously worked on {verification.component_name} but it's not complete yet.
-
-VERIFICATION FAILED - Remaining issues:
-{chr(10).join(f'- {task}' for task in remaining_tasks)}
-
-Please fix these specific issues:
-
-{chr(10).join(f'{i+1}. {task}' for i, task in enumerate(remaining_tasks))}
-
-DO NOT re-implement working code. Focus ONLY on fixing the issues listed above.
-
-When done, all 8 completion checks must pass.
-"""
-
-    Task(
-        description=f"Fix remaining issues in {verification.component_name}",
-        prompt=relaunch_prompt,
-        subagent_type="general-purpose",
-        model="sonnet"
-    )
-
-    # Wait for completion, then verify again
-```
-
-#### Command-Line Usage
-
+**Verify repository setup:**
 ```bash
-# Verify a component
-python orchestration/completion_verifier.py components/audio_processor
-
-# Output shows pass/fail for each check
-# Exit code: 0 if complete, 1 if incomplete
+python orchestration/cli/self_check_repo.py
 ```
 
-#### Example Verification Output
-
-```
-======================================================================
-COMPLETION VERIFICATION: audio_processor
-======================================================================
-❌ INCOMPLETE (75%)
-
-✅ Tests Pass: All tests passing
-❌ Imports Resolve: 2 import error(s) found [CRITICAL]
-     audio_processor.py:15: cannot import name 'AudioCodec'
-     utils.py:8: cannot import name 'validate_format'
-✅ No Stubs: No stub implementations found
-⚠️  No TODOs: 3 TODO marker(s) found
-     processor.py:45: # TODO: Add error handling
-✅ Documentation Complete: All required documentation present
-✅ No Remaining Work Markers: No incomplete markers found
-❌ Test Coverage: Coverage: 72% (target: 80%) [CRITICAL]
-✅ Manifest Complete: component.yaml complete
-
-📋 REMAINING TASKS:
-   - Imports Resolve: 2 import error(s) found
-   - Test Coverage: Coverage: 72% (target: 80%)
-
-======================================================================
-```
-
-#### Relaunch Loop
-
-**NEVER** declare project complete until ALL components pass verification:
-
-```python
-# Pseudo-code for completion guarantee loop
-all_components = get_all_components()
-incomplete_components = []
-
-for component in all_components:
-    verification = verifier.verify_component(component)
-
-    if not verification.is_complete:
-        incomplete_components.append((component, verification))
-
-# Relaunch incomplete components
-while incomplete_components:
-    for component, verification in incomplete_components:
-        relaunch_agent_with_tasks(component, verification.remaining_tasks)
-
-    # Re-verify after fixes
-    incomplete_components = []
-    for component in all_components:
-        verification = verifier.verify_component(component)
-        if not verification.is_complete:
-            incomplete_components.append((component, verification))
-
-# Only when ALL components verified complete:
-print("✅ ALL COMPONENTS VERIFIED COMPLETE")
-print("   Ready for integration testing")
-```
-
-#### Integration with Your Workflow
-
-Update your agent completion handler:
-
-```python
-# OLD (v0.2.0) - leads to 80% completion:
-def on_agent_complete(component_name):
-    print(f"✅ {component_name} complete")  # Trust agent's claim
-    mark_as_done(component_name)
-
-# NEW (v0.3.0) - guarantees 100% completion:
-def on_agent_complete(component_name):
-    verification = verifier.verify_component(f"components/{component_name}")
-
-    if verification.is_complete:
-        print(f"✅ {component_name} verified complete")
-        mark_as_done(component_name)
-    else:
-        print(f"⚠️  {component_name} needs more work")
-        relaunch_with_remaining_tasks(component_name, verification.remaining_tasks)
-```
-
-#### Key Rules
-
-1. **NEVER** accept component as complete without running verification
-2. **NEVER** declare project complete until ALL components pass verification
-3. **ALWAYS** relaunch agents with specific remaining tasks if verification fails
-4. **ALWAYS** re-verify after relaunches
-5. **DO NOT** proceed to integration testing until all components verified
-
-#### What If Verification Keeps Failing?
-
-If a component fails verification 3+ times:
-
-1. **Analyze the specific failures** - are they legitimate issues or false positives?
-2. **Check agent prompts** - is the agent clear on what needs to be done?
-3. **Check component complexity** - might need to split into smaller components
-4. **Manual intervention** - inform user that component needs attention
-
-**DO NOT** skip verification to "move forward" - this defeats the completion guarantee.
-
-### Checkpoint-Aware Agent Launch (RECOMMENDED)
-
-**Version**: 0.3.0
-
-Use checkpoints to handle complex components that can't be completed in one session.
-
-#### When to Use Checkpoints
-
-- Component estimated to take > 90 minutes
-- Agent reports "ran out of time" or "need to continue"
-- Complex implementation requiring multiple iterations
-- Agent encountered blocking issues that need resolution
-
-#### Creating a Checkpoint
-
-When agent completes but work is unfinished:
-
-```python
-from orchestration.checkpoint_manager import CheckpointManager, Checkpoint
-
-manager = CheckpointManager(project_root)
-
-# Create checkpoint from agent's report
-checkpoint = manager.create_checkpoint_from_agent_report(
-    component_name="audio_processor",
-    iteration=1,
-    agent_report="""
-    Completed:
-    - Implemented AudioCodec class
-    - Added basic WAV file support
-    - Created unit tests for codec
-
-    Remaining:
-    - Add MP3 support
-    - Add FLAC support
-    - Increase test coverage to 80%
-
-    Time spent: 85 minutes
-    Tests: 12/15 passing
-    Coverage: 65%
-    """,
-    time_spent_minutes=85
-)
-
-# Save checkpoint
-manager.save_checkpoint(checkpoint)
-```
-
-#### Resuming from Checkpoint
-
-Launch agent with resume prompt:
-
-```python
-# Load latest checkpoint
-checkpoint = manager.load_checkpoint("audio_processor")
-
-if checkpoint:
-    # Generate resume prompt
-    resume_prompt = manager.generate_resume_prompt(checkpoint)
-
-    # Launch agent with resume instructions
-    Task(
-        description=f"Continue {checkpoint.component_name} (iteration {checkpoint.iteration + 1})",
-        prompt=resume_prompt,
-        subagent_type="general-purpose",
-        model="sonnet"
-    )
-else:
-    # No checkpoint, launch normally
-    Task(
-        description="Implement audio_processor",
-        prompt="Read components/audio_processor/CLAUDE.md...",
-        subagent_type="general-purpose",
-        model="sonnet"
-    )
-```
-
-#### Resume Prompt Format
-
-The generated resume prompt tells the agent:
-- ✅ What tasks are already complete (don't redo)
-- 📋 What tasks remain (focus here)
-- 📂 Which files were modified
-- 🧪 Current test status and coverage
-- ⚠️  Any blocking issues
-
-This prevents wasted time redoing completed work.
-
-#### Example Workflow with Checkpoints
-
-```python
-# Iteration 1: Initial work
-launch_agent("audio_processor")
-# Agent works for 85 minutes, makes progress but not complete
-checkpoint_1 = create_checkpoint_from_report(agent_report, iteration=1, time=85)
-
-# Iteration 2: Resume and continue
-resume_prompt = generate_resume_prompt(checkpoint_1)
-launch_agent_with_resume("audio_processor", resume_prompt)
-# Agent works for 45 minutes, completes remaining tasks
-verification = verify_component("audio_processor")
-
-if verification.is_complete:
-    # Success! Component done in 2 iterations (130 minutes total)
-    delete_checkpoints("audio_processor")  # Clean up
-else:
-    # Need iteration 3
-    checkpoint_2 = create_checkpoint_from_report(agent_report, iteration=2, time=45)
-    # Continue...
-```
-
-#### Checkpoint Management Commands
-
+**Session initialization (auto-runs on start):**
 ```bash
-# List all checkpoints for a component
-python orchestration/checkpoint_manager.py list audio_processor
-
-# Load latest checkpoint
-python orchestration/checkpoint_manager.py load audio_processor
-
-# Generate resume prompt
-python orchestration/checkpoint_manager.py resume audio_processor
-
-# Delete checkpoints after completion
-python orchestration/checkpoint_manager.py delete audio_processor
+python orchestration/cli/session_init.py --context
 ```
 
-#### Best Practices
-
-1. **Save checkpoints** when agents report partial progress
-2. **Generate resume prompts** to avoid wasted work
-3. **Delete checkpoints** after component verification passes
-4. **Track iterations** to detect components that need splitting
-5. **Review checkpoints** if a component needs > 3 iterations (may be too complex)
-
-### Dynamic Time Allocation (RECOMMENDED)
-
-**Version**: 0.3.0
-
-Allocate time/resources based on component complexity, not one-size-fits-all.
-
-#### The Problem with Fixed Time Budgets
-
-In v0.2.0, all components got the same time budget regardless of complexity:
-- ❌ Simple components had excess time (wasted)
-- ❌ Complex components ran out of time (incomplete)
-- ❌ No way to predict which components needed more resources
-
-#### Complexity-Based Allocation
-
-Use the complexity estimator to dynamically allocate resources:
-
-```python
-from orchestration.complexity_estimator import ComplexityEstimator
-
-estimator = ComplexityEstimator(project_root)
-
-# Estimate component complexity
-estimate = estimator.estimate_component(
-    component_name="audio_processor",
-    spec_content=spec_text,  # From requirements or CLAUDE.md
-    component_type="feature",
-    dependencies=["shared_types", "audio_codec"]
-)
-
-# Use recommended time budget
-print(f"Allocating {estimate.estimated_minutes} minutes for {estimate.component_name}")
-print(f"Complexity: {estimate.complexity_level} ({estimate.complexity_score:.1f}/100)")
-print(f"Max iterations: {estimate.max_iterations}")
-```
-
-#### Complexity Factors
-
-The estimator calculates complexity based on:
-
-1. **Component Type** (30% weight)
-   - Base: 20/100 (simple data types)
-   - Core: 40/100 (business logic)
-   - Feature: 60/100 (feature implementation)
-   - Integration: 80/100 (complex orchestration)
-   - Application: 30/100 (minimal entry point)
-
-2. **Dependencies** (25% weight)
-   - 0 deps: 10/100
-   - 1-3 deps: 20-50/100
-   - 5+ deps: 50-100/100
-
-3. **Specification Complexity** (25% weight)
-   - Length, sections, technical keywords
-   - 0-40 points for length
-   - 0-30 points for structure
-   - 0-30 points for technical depth
-
-4. **Integration Complexity** (20% weight)
-   - Based on type and dependencies
-   - Integration components: 80/100
-   - Application components: 40/100
-   - Others scale with dependencies
-
-#### Complexity Levels and Recommendations
-
-| Level | Score | Time Budget | Max Iterations | Checkpoint Frequency |
-|-------|-------|-------------|----------------|----------------------|
-| **Simple** | 0-30 | 45 min | 2 | Not needed |
-| **Moderate** | 30-55 | 90 min | 3 | Every 60 min |
-| **Complex** | 55-75 | 120 min | 4 | Every 90 min |
-| **Very Complex** | 75-100 | 180 min | 5 | Every 90 min |
-
-#### Example: Estimate Before Launch
-
-```python
-# Step 1: Estimate complexity
-estimate = estimator.estimate_component(
-    component_name="payment_processor",
-    spec_content=spec_text,
-    component_type="feature",
-    dependencies=["auth_core", "data_access", "notification", "audit_log"]
-)
-
-# Output:
-# Component type: feature
-# Overall complexity: 68.5/100 (complex)
-#
-# Breakdown:
-#   - Type: 60.0/100
-#   - Dependencies: 65.0/100
-#   - Specification: 72.0/100
-#   - Integration: 70.0/100
-#
-# Recommended time budget: 120 minutes
-# Maximum iterations: 4
-# Checkpoint frequency: Every 90 minutes
-
-# Step 2: Launch agent with appropriate resources
-launch_agent_with_resources(
-    component_name="payment_processor",
-    estimated_minutes=estimate.estimated_minutes,
-    max_iterations=estimate.max_iterations,
-    checkpoint_frequency=estimate.checkpoint_frequency_minutes
-)
-```
-
-#### Estimate All Components
-
-Get overview of entire project:
-
+**Create new component:**
 ```bash
-python orchestration/complexity_estimator.py --all
-
-# Output:
-# ======================================================================
-# COMPLEXITY ESTIMATES FOR ALL COMPONENTS
-# ======================================================================
-#
-# analyzer_engine      very_complex 85.5/100  180min
-# payment_processor    complex      68.5/100  120min
-# audio_processor      moderate     52.0/100   90min
-# shared_types         simple       25.0/100   45min
-#
-# ======================================================================
-# Total estimated time: 435 minutes
-# ======================================================================
+python orchestration/cli/create_component.py <component-name> --type <backend|frontend|library>
 ```
 
-This helps you:
-- Plan project timeline
-- Identify components that need splitting
-- Allocate development priority
-
-#### Integration with Launch Workflow
-
-```python
-def launch_component_agent(component_name, spec_content, component_type, dependencies):
-    """Launch agent with dynamic resource allocation."""
-
-    # Step 1: Estimate complexity
-    estimator = ComplexityEstimator(project_root)
-    estimate = estimator.estimate_component(
-        component_name=component_name,
-        spec_content=spec_content,
-        component_type=component_type,
-        dependencies=dependencies
-    )
-
-    # Step 2: Check for existing checkpoint
-    manager = CheckpointManager(project_root)
-    checkpoint = manager.load_checkpoint(component_name)
-
-    if checkpoint:
-        # Resume from checkpoint
-        prompt = manager.generate_resume_prompt(checkpoint)
-        iteration = checkpoint.iteration + 1
-    else:
-        # New component
-        prompt = generate_initial_prompt(component_name, spec_content)
-        iteration = 1
-
-    # Step 3: Launch with recommended resources
-    Task(
-        description=f"Implement {component_name} (iteration {iteration}, "
-                    f"{estimate.estimated_minutes}min, {estimate.complexity_level})",
-        prompt=prompt,
-        subagent_type="general-purpose",
-        model="sonnet"
-    )
-
-    # Step 4: Track for checkpoint if complex
-    if estimate.complexity_level in ["complex", "very_complex"]:
-        schedule_checkpoint_check(
-            component_name=component_name,
-            frequency_minutes=estimate.checkpoint_frequency_minutes
-        )
-```
-
-#### Best Practices
-
-1. **Always estimate before launching** complex components
-2. **Use estimates to plan** project timeline and priorities
-3. **Split components** with very_complex estimates (>75/100)
-4. **Review estimates** if actual time significantly differs from estimated
-5. **Update manifests** with dependencies to improve estimate accuracy
-
-### Monitoring Component Sizes
-
-**Check regularly:**
+**Check component naming:**
 ```bash
-python orchestration/context_manager.py
+python orchestration/cli/check_naming.py
 ```
 
-**Output interpretation:**
-- Green (< 100,000 tokens): Healthy
-- Yellow (100,000-140,000): Approaching limits
-- Orange (140,000-180,000): Plan split soon
-- Red (> 180,000): SPLIT IMMEDIATELY
-
-### Component Communication Rules
-
-Components communicate ONLY through:
-1. **REST/gRPC APIs** defined in contracts/
-2. **Shared libraries** in shared-libs/ (versioned, read-only)
-3. **Message queues** (if implemented)
-
-NEVER through:
-- Direct file access across components
-- Shared mutable state
-- Cross-component imports
-
-## Your Daily Workflow (v0.4.0)
-
-**Updated Workflow Summary:**
-
-1. **Phase 0: Specification Analysis** (NEW) - Ensure specifications are complete
-2. **Phase 0.5: Requirements Extraction** (NEW) - Track all requirements
-3. **Phase 1: Contract-First Development** (UPDATED) - Generate contracts before components
-4. **Step 2: Decompose into Components** - Plan component architecture
-5. **Step 3: Plan Multi-Agent Workflow** - Design development workflow
-6. **Step 4: Create Component Directories** (ENHANCED) - Use contracts and import templates
-7. **Step 5: Spawn Sub-Agents** - Launch parallel component agents
-8. **Step 6: Monitor Progress** - Track agent work
-9. **Step 7: Enhanced Quality Verification** (UPDATED) - Run 12-check verification (v0.5.0)
-10. **Step 7.5: Pre-Integration Analysis** (NEW) - Predict integration failures
-11. **Step 8: Integration Testing** - Verify cross-component integration
-12. **Step 9: System-Wide Validation** (NEW) - Comprehensive system readiness check
-13. **Step 10: Update Documentation** - Generate quality reports
-14. **Step 11: Report Completion** - Comprehensive completion report
-
-**Key v0.4.0 Changes:**
-- **Quality-First**: Specification analysis and requirements tracking before coding
-- **Contract-First**: Generate contracts before components
-- **11-Check Verification**: Added defensive programming, semantic correctness, contract compliance
-- **Predictive Analysis**: Find integration issues before testing
-- **System Validation**: Comprehensive deployment readiness check
-
----
-
-### Phase 0: Specification Analysis (NEW v0.4.0)
-
-**BEFORE any component work begins:**
-
+**Git operations with retry (for concurrent commits):**
 ```bash
-# 1. Analyze specification completeness
-python orchestration/specification_analyzer.py spec.md
-
-# 2. If incomplete (score < 80), generate clarifications
-# File: SPEC_CLARIFICATIONS.md will be created
-
-# 3. Resolve ambiguities:
-#    - Review SPEC_CLARIFICATIONS.md
-#    - Make decisions or get user input
-#    - Update specification
-
-# 4. Re-analyze until complete
-python orchestration/specification_analyzer.py spec.md
-# Should show: Score: 100/100, Ready for implementation
+python orchestration/cli/git_retry.py "<component>" "<commit message>"
 ```
 
-**Do NOT proceed to planning without complete specifications.**
-
-**Key Checks:**
-- Functional requirements specified?
-- Non-functional requirements (performance, security) included?
-- Edge cases identified?
-- Error conditions documented?
-- Success criteria defined?
-
-**If specification incomplete:**
-1. Generate clarification questions
-2. Present to user or make reasonable decisions
-3. Document decisions in specification
-4. Re-verify completeness
-
-### Phase 0.5: Requirements Extraction (NEW v0.4.0)
-
-**Extract and track all requirements:**
-
+**Uninstall orchestration system:**
 ```bash
-# 1. Parse requirements from specification
-python orchestration/requirements_tracker.py parse spec.md
-
-# 2. Review traceability matrix
-python orchestration/requirements_tracker.py matrix
-
-# 3. Verify all requirements extracted
-python orchestration/requirements_tracker.py coverage
-# Should show all categories with requirements
+python orchestration/cli/uninstall.py
+python orchestration/cli/uninstall.py --dry-run  # See what would be removed
 ```
 
-**All requirements must be tracked before component creation.**
-
-**Categories to extract:**
-- Functional requirements (FR-001, FR-002, ...)
-- Non-functional requirements (NFR-001, NFR-002, ...)
-- Security requirements (SEC-001, SEC-002, ...)
-- Performance requirements (PERF-001, PERF-002, ...)
-- Usability requirements (UX-001, UX-002, ...)
-
-**Traceability Matrix:**
-Each requirement will be tracked to:
-- Component implementing it
-- Tests verifying it
-- Documentation covering it
-
-### 1. Receive Requirements
-
-User provides feature specifications or bug reports.
-
-**Your Actions:**
-- Parse requirements (using specification analyzer)
-- Extract all requirements (using requirements tracker)
-- Verify specification completeness
-- Identify acceptance criteria
-- Determine if BDD scenarios needed
-- Assess complexity
-
-### Phase 1: Contract-First Development (UPDATED v0.4.0)
-
-**Generate contracts BEFORE creating components:**
-
+**Run tools with --help for full usage:**
 ```bash
-# For each component identified:
-
-# 1. Generate contract from specification
-python orchestration/contract_generator.py generate spec.md component-name
-
-# 2. Verify contract completeness
-python orchestration/contract_enforcer.py check component-name
-
-# 3. Generate contract tests (RED phase of TDD)
-# Tests are auto-generated in tests/contract_tests/
-
-# 4. ONLY NOW create component directory
-mkdir -p components/component-name
+python orchestration/cli/<tool>.py --help
 ```
 
-**NEVER create components before contracts exist.**
+## Contract-Based Communication
 
-**Contract Generation Outputs:**
-- OpenAPI/gRPC contract in `contracts/`
-- Contract test suite in `tests/contract_tests/`
-- Interface skeleton code
-- Request/response schemas
+### OpenAPI/YAML Contracts
+- Located in `contracts/` directory
+- Define all inter-component APIs
+- Sub-agents implement endpoints per their contract
+- Example: `contracts/backend-api.yaml`
 
-**Contract Verification:**
-- All endpoints specified?
-- Request/response schemas complete?
-- Error cases documented?
-- Authentication/authorization defined?
-- Rate limits specified?
-
-### 2. Decompose into Components
-
-Break down work into components (optimal: 10,000 lines, max: 17,000 lines each).
-
-**Considerations:**
-- Which existing components are affected?
-- Are new components needed?
-- Do any components need splitting first?
-- What API contracts need updating? (generate contracts first!)
-- What shared libraries are required?
-- What are the dependencies between components?
-
-### 3. Plan Multi-Agent Workflow
-
-**For simple changes (single component):**
-```
-Test Agent → Implementation Agent → Quality Verification → Done
+### Contract Template Structure
+```yaml
+openapi: 3.0.0
+info:
+  title: Component API
+  version: 1.0.0
+paths:
+  /endpoint:
+    post:
+      summary: Endpoint description
+      requestBody: ...
+      responses: ...
 ```
 
-**For complex features (multiple components):**
-```
-Feature Designer → Test Agents (parallel) → Implementation Agents (parallel) →
-Review Agent → Quality Verification → Integration Tests → Documentation Agent → Done
-```
+## Migration Tooling
 
-**For large features (new subsystem):**
-```
-Feature Designer → Architecture Decision → Contract Design →
-Test Agents → Implementation Agents → Review Agent →
-Quality Verification → Integration Tests → Documentation Agent →
-ADR Creation → Done
-```
+### Existing Project Migration
+1. **Analysis Phase**: Claude Code sub-agent analyzes existing codebase
+2. **Planning Phase**: Generate migration plan with component breakdown
+3. **Execution Phase**: Multiple sub-agents execute migration in parallel
+4. **Validation Phase**: Run tests and verify functionality
 
-### 4. Create Component Directories (for new components) - ENHANCED v0.4.0
+### Migration Process
+- Identify natural component boundaries
+- Extract API definitions
+- Map dependencies
+- Preserve git history in single repository
+- Create component-specific CLAUDE.md files
 
-**Enhanced Component Creation Workflow:**
+## 🔒 COMPONENT NAMING STANDARD (MANDATORY)
 
-When creating a component:
+**Enforcement**: Automatic (validator + gates)
 
-1. **Verify contract exists** (from Phase 1)
-   ```bash
-   # Contract must exist before component
-   [ -f "contracts/component-name.yaml" ] || echo "ERROR: Contract missing!"
-   ```
+### The Standard
 
-2. **Validate component name:**
-   ```bash
-   python orchestration/component_name_validator.py component-name
-   # Must pass validation (underscore naming only)
-   ```
+**Pattern**: `^[a-z][a-z0-9_]*$`
 
-3. **Create directory structure** (src/, tests/, features/)
-   ```bash
-   mkdir -p components/component-name/src
-   mkdir -p components/component-name/tests/unit
-   mkdir -p components/component-name/tests/integration
-   mkdir -p components/component-name/features
-   ```
+ALL component names MUST:
+1. Start with lowercase letter (a-z)
+2. Contain ONLY: lowercase letters + numbers + underscores
+3. NO hyphens, spaces, uppercase, special characters
+4. NOT be reserved names (test, src, lib, etc.)
 
-4. **Set up imports:**
-   ```bash
-   python orchestration/import_template_generator.py components/component-name
-   # Generates proper import structure from dependencies
-   ```
+### Examples
 
-5. **Generate implementation skeleton:**
-   ```bash
-   python orchestration/contract_enforcer.py skeleton component-name > components/component-name/src/api.py
-   # Creates skeleton from contract (functions with NotImplementedError)
-   ```
+**Valid** ✅:
+- `auth_service`
+- `payment_api`
+- `user_lib`
+- `audio_processor`
+- `shared_types`
 
-6. **Generate CLAUDE.md from template** (as before, with variable substitution)
+**Invalid** ❌:
+- `auth-service` (hyphens break Python: `from components.auth-service` = syntax error)
+- `AuthService` (uppercase not allowed)
+- `payment api` (spaces not allowed)
+- `test` (reserved name)
+- `123_service` (cannot start with number)
 
-7. **Annotate with requirements:**
-   ```bash
-   python orchestration/requirement_annotator.py auto-annotate components/component-name
-   # Adds requirement IDs to component files
-   ```
+### Why This Standard Exists
 
-8. **Initialize local git** and **Install pre-commit hooks**
+**Historical Context**: In v0.2.0, hyphenated names caused:
+- ❌ Python import errors (`from components.audio-processor` is invalid syntax)
+- ❌ 30-60 minute debugging loops for sub-agents
+- ❌ 20% project incompletion rate
+- ❌ Projects stopped at 80% due to import failures
 
-9. **Create initial BDD feature files** (if user-facing)
+**Universal Compatibility**: This pattern works in:
+- Python: `from components.auth_service import X` ✅
+- JavaScript: `import X from 'components/auth_service'` ✅
+- Rust: `use components::auth_service;` ✅
+- Go: `import "project/components/auth_service"` ✅
+- Java: `import components.auth_service.X;` ✅
+- C++: `#include "components/auth_service/header.h"` ✅
 
-**New v0.4.0 Steps:**
-- Import template generation (step 4)
-- Implementation skeleton from contract (step 5)
-- Requirement annotation (step 7)
+### Validation Tool
 
-### 5. Spawn Sub-Agents (Respecting Concurrency Limit)
-
-```python
-from orchestration.agent_launcher import AgentLauncher
-
-# Default: 3 concurrent agents (configurable for token budget management)
-launcher = AgentLauncher()
-
-# Or customize based on your token budget:
-# launcher = AgentLauncher(max_concurrent=5)
-
-# Option 1: Traditional approach
-launcher.launch_agent(
-    component_name="user-api",
-    task="Implement user registration endpoint",
-    priority=0
-)
-
-# Option 2: Multi-agent workflow (NEW)
-launcher.launch_workflow(
-    workflow_type="feature_development",
-    feature_name="user_registration",
-    components=["user-api", "email-service"],
-    parallel_agents=True
-)
-```
-
-### 6. Monitor Progress
-
-- **Check git commits** in component repositories
-  - Verify TDD pattern (test commits before implementation)
-  - Review commit messages (should follow conventional commit format)
-- **Review agent status** periodically
-  ```bash
-  python orchestration/agent_launcher.py status
-  ```
-- **Check quality metrics** as work progresses
-  ```bash
-  python orchestration/quality_metrics.py live
-  ```
-- **Process queue** when agents complete
-
-### 7. Run Enhanced Quality Verification (UPDATED v0.5.0)
-
-**For EACH completed component, run 12-check verification:**
-
+**Check component name before creation**:
 ```bash
-# Run comprehensive verification (12 checks in v0.5.0)
-python orchestration/completion_verifier.py components/component-name
+python3 orchestration/verification/system/component_name_validator.py <name>
 
-# Additional v0.4.0 checks:
+# Example:
+python3 orchestration/verification/system/component_name_validator.py auth_service
+# ✅ 'auth_service' - Valid
 
-# Check 9: Defensive Programming
-python orchestration/defensive_pattern_checker.py components/component-name
-
-# Check 10: Semantic Correctness
-python orchestration/semantic_verifier.py components/component-name
-
-# Check 11: Contract Compliance
-python orchestration/contract_enforcer.py check component-name
-
-# v0.5.0: Check 12: Test Quality (automated by completion_verifier)
-# This check is automatically run by completion_verifier.py
-# Can also run standalone:
-python orchestration/test_quality_checker.py components/component-name
-
-# Requirements Coverage
-python orchestration/requirements_tracker.py coverage
-
-# Standards Compliance
-python orchestration/consistency_validator.py --component component-name
+python3 orchestration/verification/system/component_name_validator.py auth-service
+# ❌ 'auth-service' - Invalid
+#    Invalid component name 'auth-service': cannot contain hyphens (use underscores instead)
+#    Suggestion: 'auth_service'
 ```
 
-**12-Check Verification System (v0.5.0):**
+### Enforcement
 
-**Original 8 Checks:**
-1. ✅ Tests Pass (100% pass rate) - CRITICAL
-2. ✅ Imports Resolve (no import errors) - CRITICAL
-3. ✅ No Stubs (no NotImplementedError, empty functions) - CRITICAL
-4. ✅ No TODOs (no TODO/FIXME markers) - Warning
-5. ✅ Documentation Complete (README.md, CLAUDE.md present) - Warning
-6. ✅ No Remaining Work Markers (no "IN PROGRESS", "INCOMPLETE") - Warning
-7. ✅ Test Coverage ≥80% (coverage meets threshold) - CRITICAL
-8. ✅ Manifest Complete (component.yaml has required fields) - Warning
+**Automatic enforcement at**:
+1. **Component creation** - Validator blocks invalid names before directory creation
+2. **Project startup** - Scanner detects existing violations, offers auto-fix
+3. **Phase 1 Gate** - Validates all component names before proceeding
+4. **Pre-commit hook** - Blocks commits with invalid component names (optional)
 
-**New v0.4.0 Checks:**
-9. ✅ **Defensive Programming** (input validation, error handling) - CRITICAL
-10. ✅ **Semantic Correctness** (logic correctness, not just syntax) - CRITICAL
-11. ✅ **Contract Compliance** (implements contract completely) - CRITICAL
-
-**New v0.5.0 Check:**
-12. ✅ **Test Quality** (no over-mocking, integration tests exist, no skipped tests) - CRITICAL
-
-**Also verified:**
-- TDD compliance (git history analysis)
-- Linting passing
-- Formatting correct
-- Cyclomatic complexity ≤ 10
-- No security vulnerabilities
-- Requirements traceability
-
-**If ANY critical check fails:**
-1. Generate focused fix prompt
-2. Relaunch agent with specific issues
-3. Re-verify after fix
-4. Repeat until ALL checks pass
-
-**NEVER accept component as complete without ALL checks passing.**
-
-**If verification PASSES:**
-- Mark component as complete
-- Update quality metrics
-- Proceed to pre-integration analysis
-- **DO NOT** declare system "production ready"
-- **DO NOT** bump major version
-
-### 7.5. Pre-Integration Analysis (NEW v0.4.0)
-
-**BEFORE integration testing, predict failures:**
-
+**If you have existing components with invalid names**:
 ```bash
-# Run integration predictor
-python orchestration/integration_predictor.py predict
-
-# Review predictions
-# - Critical: MUST fix before integration
-# - Warning: Should fix
-# - Info: Document and monitor
-
-# Generate integration tests from predictions
-python orchestration/integration_predictor.py generate-tests > tests/integration/test_predicted.py
-
-# Fix predicted critical failures
-# ... make changes ...
-
-# Re-run predictor
-python orchestration/integration_predictor.py predict
-# Should show: 0 critical failures
+# Orchestrator will detect and offer to fix automatically on next run
+# Or run migration manually:
+python orchestration/migration/rename_components.py --dry-run  # Preview
+python orchestration/migration/rename_components.py            # Execute
 ```
 
-**Do NOT proceed to integration testing with critical predictions.**
-
-**What the Predictor Checks:**
-- Contract mismatches (field type conflicts, missing fields)
-- Dependency version conflicts
-- Interface signature mismatches
-- Data format incompatibilities
-- Authentication/authorization gaps
-- Performance bottlenecks (N+1 queries predicted)
-- Error handling gaps
-
-**Severity Levels:**
-- **Critical**: Will definitely fail integration tests (fix required)
-- **Warning**: Likely to fail or cause issues (should fix)
-- **Info**: Potential improvement opportunity (document)
-
-**Fix Workflow:**
-1. Review all critical predictions
-2. For each critical issue:
-   - Identify affected components
-   - Launch component agents to fix
-   - Re-verify component (11 checks)
-3. Re-run predictor until 0 critical failures
-4. Only then proceed to integration testing
-
-**Benefits:**
-- Find integration issues before running tests
-- Faster feedback (static analysis vs runtime testing)
-- More focused fixes (know exactly what's wrong)
-- Reduced integration test failures
-
-### 8. Coordinate Cross-Component Integration Testing
-
-## Integration Test Hard Gates - ZERO TOLERANCE (CRITICAL)
-
-### Absolute Requirements
-- **100% integration test pass rate** - NO EXCEPTIONS
-- Even 99% pass rate = SYSTEM BROKEN
-- Every integration failure is a CRITICAL BUG
-
-### Why Zero Tolerance
-The Music Analyzer catastrophe proves:
-- 79.5% integration pass rate = 0% functional system
-- Users experienced complete failure despite "mostly passing" tests
-- One API mismatch (`FileScanner.scan()` missing) broke everything
-- System delivered as "complete" but couldn't execute basic commands
-
-### Integration Tests Are Binary
-Components either connect or they don't:
-- ✅ 100% pass = System might work
-- ❌ <100% pass = System definitely broken
-
-### No Acceptable Failures
-These are NEVER acceptable in integration tests:
-- AttributeError: Component can't call required method = CRITICAL
-- TypeError: Components can't communicate = CRITICAL
-- ImportError: Components can't find each other = CRITICAL
-- Any failure = User-facing breakage = STOP IMMEDIATELY
-
-### The Music Analyzer Mistake
-I proceeded to Phase 6 with 79.5% integration pass rate, thinking:
-- ❌ "79.5% is pretty good"
-- ❌ "These are probably test bugs"
-- ❌ "Unit tests passed so components are fine"
-
-Reality:
-- System was 0% functional
-- First user command failed
-- Complete system breakdown
-- **NEVER REPEAT THIS MISTAKE**
-
----
-
-**CRITICAL**: After component agents complete their work AND pre-integration analysis passes, verify components work together.
-
-**Your Role**: Launch Integration Test Agent and coordinate fixes (DON'T write tests yourself)
-
-#### Step 1: Launch Integration Test Agent
-
-Use Task tool to launch the Integration Test Agent:
-
-```python
-Task(
-    description="Create and run cross-component integration tests",
-    prompt="""You are the Integration Test Agent for this project.
-
-Your mission:
-1. Read all contracts in contracts/
-2. Read all component CLAUDE.md files to understand architecture
-3. Identify component dependencies and data flows
-4. Create cross-component integration tests in tests/integration/
-5. Create end-to-end workflow tests in tests/e2e/
-6. Create contract compatibility tests
-7. Run all tests using pytest
-8. Report results in tests/integration/TEST-RESULTS.md
-
-Read your full instructions at:
-claude-orchestration-system/templates/integration-test-agent.md
-
-Your working directory: tests/integration/
-You may read from: contracts/, components/*/CLAUDE.md
-You may write to: tests/integration/, tests/e2e/
-
-Start by analyzing the architecture, then create comprehensive integration tests.""",
-    subagent_type="general-purpose",
-    model="sonnet"  # REQUIRED
-)
-```
-
-#### Step 2: Review Integration Test Results
-
-After Integration Test Agent completes, read:
-- `tests/integration/TEST-RESULTS.md`
-- Check for failures
-
-#### Step 2.5: Test Failure Analysis Protocol (CRITICAL)
-
-**MANDATORY**: When integration tests fail, analyze failures using this protocol.
-
-**Error Pattern Recognition** (Learn from Music Analyzer):
-
-| Error Type | What It Means | Severity | Cause | Action |
-|------------|---------------|----------|-------|--------|
-| `AttributeError: 'FileScanner' object has no attribute 'get_audio_files'` | Component API mismatch | **CRITICAL** | Caller uses wrong method name | Fix caller to use correct method from contract |
-| `AttributeError: 'FileScanner' object has no attribute 'scan'` | Component didn't implement contract | **CRITICAL** | Component implementation incomplete | Fix component to implement contract method |
-| `TypeError: scan() takes 1 argument but 2 were given` | Method signature mismatch | **CRITICAL** | Caller passes wrong parameters | Fix caller to match contract signature |
-| `TypeError: scan() missing 1 required positional argument` | Missing parameters | **CRITICAL** | Caller not passing required params | Add required parameters from contract |
-| `ImportError: cannot import name 'FileScanner'` | Component not properly exposed | **CRITICAL** | Module structure wrong | Fix __init__.py exports |
-| `KeyError: 'country'` in integration test | Missing data field | **CRITICAL** | Component not providing required field | Add field to component output |
-| `AssertionError` comparing values | Business logic bug | **HIGH** | Component logic incorrect | Fix component logic |
-| `ConnectionError`, `TimeoutError` | Infrastructure issue | **MEDIUM** | Test setup problem | Fix test infrastructure |
-
-**Failure Analysis Decision Tree**:
-
-```
-Integration Test Failed?
-├─ YES → STOP IMMEDIATELY
-│   │
-│   ├─ Is it AttributeError?
-│   │   ├─ YES → API Mismatch (CRITICAL)
-│   │   │   ├─ Object has no attribute 'X'?
-│   │   │   │   ├─ Check contract: What's the correct method name?
-│   │   │   │   ├─ Fix: Update caller to use correct name from contract
-│   │   │   │   └─ Re-run: Contract tests + Integration tests
-│   │   │   └─ Re-test until 100% pass
-│   │   │
-│   ├─ Is it TypeError?
-│   │   ├─ YES → Signature Mismatch (CRITICAL)
-│   │   │   ├─ Check contract: What are the correct parameters?
-│   │   │   ├─ Fix: Update method signature to match contract
-│   │   │   └─ Re-run: Contract tests + Integration tests
-│   │   │
-│   ├─ Is it ImportError?
-│   │   ├─ YES → Export Issue (CRITICAL)
-│   │   │   ├─ Check: Is class/function in __init__.py?
-│   │   │   ├─ Fix: Add proper exports
-│   │   │   └─ Re-run: Contract tests + Integration tests
-│   │   │
-│   ├─ Is it KeyError?
-│   │   ├─ YES → Missing Field (CRITICAL)
-│   │   │   ├─ Check contract: What fields are required?
-│   │   │   ├─ Fix: Add missing field to component
-│   │   │   └─ Re-run: Contract tests + Integration tests
-│   │   │
-│   └─ Other Error?
-│       ├─ Analyze error message
-│       ├─ Identify root cause
-│       ├─ Fix component (NOT test)
-│       └─ Re-run: ALL integration tests
-│
-└─ NO → Proceed to Phase 6
-```
-
-**NEVER Do This (Music Analyzer Mistakes)**:
-- ❌ "79.5% pass rate is pretty good" → **NO**: <100% = BROKEN
-- ❌ "These are probably test bugs" → **NO**: Integration failures = Component bugs
-- ❌ "We can fix it later" → **NO**: System is unusable now
-- ❌ "Let's proceed and see what happens" → **NO**: STOP until fixed
-- ❌ Modify tests to match broken components → **NO**: Fix components to match contracts
-
-**ALWAYS Do This**:
-- ✅ Treat ANY integration failure as CRITICAL
-- ✅ STOP immediately when tests fail
-- ✅ Analyze error type using table above
-- ✅ Fix components (NOT tests)
-- ✅ Re-run until 100% pass rate
-- ✅ Only proceed when ALL tests pass
-
-**Failure Response Checklist**:
-- □ Read TEST-RESULTS.md completely
-- □ Identify error type using recognition table
-- □ Determine which component(s) need fixing
-- □ Check contracts for correct API specification
-- □ Launch component agent with specific fix instructions
-- □ Re-run contract tests for fixed component
-- □ Re-run integration tests (full suite)
-- □ Verify 100% pass rate before proceeding
-
-#### Step 3: Coordinate Fixes (if needed)
-
-If integration tests failed:
-
-**For each failure**:
-
-1. **Identify which component(s) need changes**
-   - Example: "user-service missing 'country' field"
-
-2. **Launch component agent to fix**:
-   ```python
-   Task(
-       description="Add country field to user-service",
-       prompt="""The Integration Test Agent found that payment-service requires
-       a 'country' field in user data, but user-service doesn't provide it.
-
-       Please:
-       1. Add 'country' field to User model
-       2. Update user profile creation to accept country
-       3. Update contracts/user-api.yaml to include country field
-       4. Update tests to cover country field
-       5. Run your component tests to verify
-
-       Integration test failure details:
-       [paste relevant section from TEST-RESULTS.md]""",
-       subagent_type="general-purpose",
-       model="sonnet"
-   )
-   ```
-
-3. **After fixes, re-run Integration Test Agent**:
-   ```python
-   Task(
-       description="Re-run integration tests after fixes",
-       prompt="""Integration test failures have been fixed. Please re-run all integration tests.
-
-       Previous failures were:
-       - user-service missing country field (FIXED)
-
-       Run: pytest tests/integration/ tests/e2e/ -v
-
-       Report results in tests/integration/TEST-RESULTS-RETEST.md""",
-       subagent_type="general-purpose",
-       model="sonnet"
-   )
-   ```
-
-#### Step 4: Verify 100% Integration Test Pass Rate - ABSOLUTE GATE
-
-**MANDATORY REQUIREMENT:**
-- **100% integration test pass rate** - NO EXCEPTIONS
-- Even ONE failing test = STOP - DO NOT PROCEED
-
-**Do not proceed to step 9 until:**
-- ALL cross-component integration tests pass (100%)
-- ALL E2E workflow tests pass (100%)
-- ALL contract compatibility tests pass (100%)
-- ZERO AttributeError
-- ZERO TypeError
-- ZERO ImportError
-
-**If ANY test fails:**
-1. STOP immediately
-2. Treat as CRITICAL bug
-3. Fix the component (NOT the test)
-4. Re-run ALL integration tests
-5. Repeat until 100% pass rate achieved
-
-**Remember Music Analyzer:**
-- 79.5% pass rate = 0% functional
-- Never proceed with <100% integration pass
-
-### 9. System-Wide Validation (NEW v0.4.0)
-
-**Before deployment readiness declaration:**
-
-```bash
-# Run comprehensive system validation
-python orchestration/system_validator.py
-
-# This checks:
-# - All requirements implemented and tested
-# - All contracts satisfied
-# - All components verified (11 checks)
-# - Integration tests passing
-# - Defensive patterns compliant
-# - Cross-component consistency
-# - Semantic correctness
-# - No predicted integration failures
-# - Requirements traceability complete
-
-# Exit code: 0 = ready, 1 = not ready
-```
-
-**System Validation Report Includes:**
-
-1. **Requirements Coverage**: 100% of requirements must be implemented and tested
-2. **Component Health**: All components pass 12-check verification (v0.5.0)
-3. **Integration Status**: All integration tests passing
-4. **Contract Compliance**: All components satisfy their contracts
-5. **Quality Gates**: All quality standards met
-6. **Security**: No known vulnerabilities
-7. **Performance**: No identified bottlenecks
-8. **Documentation**: Complete and up-to-date
-
-**If validation passes:**
-- Generate deployment readiness report
-- Note current version (e.g., v0.5.0)
-- State: "All quality gates passed"
-- Create `docs/DEPLOYMENT-READINESS-{version}.md`
-
-**NEVER:**
-- Declare "production ready"
-- Bump to 1.0.0
-- Change lifecycle_state
-
-**User must explicitly approve major version transitions.**
-
-**Example Report:**
-```
-======================================================================
-SYSTEM VALIDATION REPORT - v0.5.0
-======================================================================
-✅ Requirements: 45/45 implemented (100%)
-✅ Components: 8/8 verified (11 checks passed)
-✅ Integration Tests: 127/127 passing (100%)
-✅ Contract Compliance: 8/8 components compliant
-✅ Quality Gates: All standards met
-✅ Security: 0 vulnerabilities
-✅ Performance: No bottlenecks identified
-✅ Documentation: Complete
-
-OVERALL STATUS: ✅ READY FOR DEPLOYMENT (v0.5.0)
-
-Note: This is a pre-release version. Major version transition to 1.0.0
-requires explicit user approval.
-======================================================================
-```
-
-### 10. Update Documentation & Metrics
-
-- Generate quality dashboard
-  ```bash
-  python orchestration/quality_metrics.py dashboard > docs/quality-dashboard.md
-  ```
-- Create ADR if architectural decision made
-  ```bash
-  python orchestration/adr_generator.py create \
-    --title "Use PostgreSQL for user database" \
-    --status accepted \
-    --context "..." \
-    --decision "..." \
-    --consequences "..."
-  ```
-- Update project README if needed
-- Generate deployment readiness report (if system validation passed)
-
-### 11. Report Completion
-
-Provide status updates to user with:
-- Components modified
-- Requirements implemented (with traceability)
-- Quality scores (12-check verification results)
-- Test coverage achieved
-- Integration test results
-- Pre-integration analysis results (predictions)
-- System validation results
-- Any issues encountered
-- Links to ADRs created
-- Quality dashboard URL
-- Deployment readiness report (if applicable)
-- Current version (e.g., "v0.5.0")
-
-**DO NOT**:
-- Declare system "production ready"
-- Change version to 1.0.0
-- Change lifecycle_state
-- State "ready for production"
-
-**IF all quality gates pass (v0.4.0)**:
-- Create `docs/DEPLOYMENT-READINESS-{version}.md`
-- State: "All quality gates passed at version {current_version}"
-- Include system validation report
-- Note: "This is a pre-release version. Major version transition requires user approval."
-- Suggest: "Review deployment readiness report for 1.0.0 assessment"
-
-**Completion Report Template (v0.4.0):**
-
-```markdown
-# Development Completion Report - v{version}
-
-## Summary
-Feature: {feature_name}
-Status: ✅ Complete
-Date: {date}
-Version: {current_version}
-
-## Requirements Implemented
-- FR-001: User registration ✅
-- FR-002: Email verification ✅
-- NFR-001: Response time < 200ms ✅
-- SEC-001: Password hashing ✅
-
-Total: {count}/count} (100%)
-
-## Components Modified/Created
-1. {component-name}: {description}
-   - Quality Score: {score}/100
-   - Test Coverage: {coverage}%
-   - 11-Check Verification: ✅ PASSED
-   - Contract Compliance: ✅
-
-## Quality Metrics
-- Overall Quality Score: {score}/100
-- Test Coverage: {coverage}%
-- Integration Tests: {passing}/{total} passing
-- Pre-Integration Analysis: 0 critical issues
-- System Validation: ✅ PASSED
-
-## Documentation
-- ADRs Created: {list}
-- Quality Dashboard: docs/quality-dashboard.md
-- Deployment Readiness: docs/DEPLOYMENT-READINESS-{version}.md
-
-## Notes
-{Any issues, decisions, or important information}
-
----
-This is a pre-release version ({current_version}).
-Major version transition to 1.0.0 requires explicit user approval.
-```
-
-## Quality Enforcement Checklist
-
-Before marking component complete, verify:
-
-### Code Quality
-- [ ] All tests pass (100% pass rate - unit, integration, contract, E2E)
-- [ ] Zero failing tests in any category
-- [ ] Test coverage ≥ 80%
-- [ ] TDD compliance verified (git history shows Red-Green-Refactor)
-- [ ] Linting passes (zero errors)
-- [ ] Formatting correct (100% compliant)
-- [ ] Cyclomatic complexity ≤ 10 for all functions
-- [ ] No code duplication
-- [ ] SOLID principles followed
-
-### Testing
-- [ ] Unit tests for all business logic
-- [ ] Integration tests for API endpoints
-- [ ] BDD scenarios for user-facing features (if applicable)
-- [ ] Contract compliance tests
-- [ ] Edge cases tested
-- [ ] Error cases tested
-
-### Documentation
-- [ ] All public APIs have docstrings
-- [ ] README.md updated
-- [ ] CHANGELOG.md entry added
-- [ ] ADR created (if architectural decision made)
-- [ ] Inline comments for complex logic
-
-### Security
-- [ ] All input validated
-- [ ] No SQL injection vulnerabilities
-- [ ] No XSS vulnerabilities
-- [ ] No hardcoded secrets
-- [ ] Authentication/authorization implemented
-
-### Performance
-- [ ] No N+1 query problems
-- [ ] Proper database indexing
-- [ ] Caching implemented where appropriate
-- [ ] No unnecessary re-renders (frontend)
-
-### Git Hygiene
-- [ ] Code committed to local git
-- [ ] Meaningful commit messages
-- [ ] Small, focused commits
-- [ ] No commented-out code
-
-### API Contract
-- [ ] Contract compliance verified
-- [ ] Request/response schemas match
-- [ ] HTTP status codes correct
-- [ ] Error responses formatted correctly
-
-### Token Budget
-- [ ] Component within optimal range (< 120,000 tokens)
-- [ ] Not approaching hard limits (< 170,000 tokens)
-
-## Component Splitting
-
-### When to Split
-
-**Immediately if:**
-- Component exceeds 170,000 tokens (split trigger)
-- Component has > 17,000 lines of code
-- Complexity makes it unmaintainable
-- Quality metrics consistently low
-
-**Plan to split if:**
-- Component approaching 150,000 tokens (warning threshold)
-- Component has > 12,000 lines of code
-- Natural boundaries becoming apparent
-- Team requests better organization
-- Multiple developers working on same component
-
-### Splitting Process
-
-1. **Analyze**: `python orchestration/component_splitter.py recommendations`
-2. **Plan**: Identify split strategy (horizontal, vertical, or hybrid)
-3. **Create ADR**: Document splitting decision
-   ```bash
-   python orchestration/adr_generator.py create \
-     --title "Split user-api into user-service and auth-service" \
-     --status proposed
-   ```
-4. **Execute**: Create new components with proper isolation
-5. **Migrate**: Move code to appropriate components (use agents)
-6. **Update**: Regenerate contracts and dependencies
-7. **Validate**: Run all tests in split components
-8. **Quality Verify**: Run quality verification on all new components
-9. **Archive**: Archive original component with git history
-10. **Update ADR**: Mark ADR as accepted
-
-## Integration Testing
-
-### Test Execution Flow
-
-1. Each component developed in own git branch
-2. Component marked complete → orchestrator runs integration tests
-3. Tests pass → orchestrator merges to main branch
-4. Conflicts arise → orchestrator resolves (never delegate to sub-agents)
-
-### Test Commands
-
-Component tests:
-```bash
-cd components/<name>
-pytest  # or npm test
-```
-
-Integration tests (cross-component):
-```bash
-python orchestration/integration_tests.py run --all
-```
-
-Contract compliance:
-```bash
-python orchestration/contract_validator.py verify components/<name>
-```
-
-### BDD Tests
-
-For user-facing features, verify BDD scenarios:
-```bash
-cd components/<name>
-behave features/  # or cucumber
-```
-
-Example BDD feature:
-```gherkin
-# features/user_registration.feature
-
-Feature: User Registration
-  As a new user
-  I want to register an account
-  So that I can access the system
-
-  Scenario: Successful registration with valid data
-    Given I am on the registration page
-    When I enter email "user@example.com"
-    And I enter name "John Doe"
-    And I click "Register"
-    Then I should see "Registration successful"
-    And I should receive a welcome email
-
-  Scenario: Registration fails with duplicate email
-    Given a user exists with email "existing@example.com"
-    When I try to register with email "existing@example.com"
-    Then I should see "Email already registered"
-    And no email should be sent
-```
-
-## Error Handling
-
-### Component Exceeds Limits
-1. **Alert**: Component has exceeded safe limits
-2. **Block**: No new work assigned to component
-3. **Split**: Trigger emergency component split
-4. **Migrate**: Move code to new components
-5. **Quality Verify**: Verify all new components meet quality standards
-6. **Resume**: Continue work in split components
-
-### Agent Failures
-1. **Detect**: Agent process terminated unexpectedly
-2. **Review**: Check component state and git commits
-3. **Analyze**: Determine cause of failure
-4. **Recover**: Determine if work needs to be redone
-5. **Restart**: Launch new agent if needed
-6. **Monitor**: Watch for recurring failures
-
-### Quality Verification Failures
-1. **Identify**: Which specific checks failed
-2. **Report**: Generate detailed failure report
-3. **Task**: Create specific fix task for agent
-4. **Re-launch**: Send agent back with fix instructions
-5. **Re-verify**: Run quality verification again
-6. **Escalate**: If repeated failures, analyze root cause
-
-### Integration Conflicts
-1. **Identify**: Detect conflicts during integration
-2. **Analyze**: Understand source of conflict
-3. **Resolve**: Make minimal changes to resolve
-4. **Validate**: Run all tests after resolution
-5. **Document**: Update ADR if conflict revealed architectural issue
-
-## Monitoring Commands
-
-**Check component sizes:**
-```bash
-python orchestration/context_manager.py
-```
-
-**View agent status:**
-```bash
-python orchestration/agent_launcher.py status
-```
-
-**Get split recommendations:**
-```bash
-python orchestration/component_splitter.py recommendations
-```
-
-**Run quality verification (v0.3.0 - 8 checks):**
-```bash
-python orchestration/quality_verifier.py verify components/<name>
-```
-
-**Run completion verification (v0.4.0 - 11 checks):**
-```bash
-python orchestration/completion_verifier.py components/<name>
-python orchestration/defensive_pattern_checker.py components/<name>
-python orchestration/semantic_verifier.py components/<name>
-python orchestration/contract_enforcer.py check <name>
-```
-
-**Specification and requirements (v0.4.0):**
-```bash
-# Analyze specification
-python orchestration/specification_analyzer.py spec.md
-
-# Extract and track requirements
-python orchestration/requirements_tracker.py parse spec.md
-python orchestration/requirements_tracker.py matrix
-python orchestration/requirements_tracker.py coverage
-```
-
-**Contract management (v0.4.0):**
-```bash
-# Generate contract from specification
-python orchestration/contract_generator.py generate spec.md component-name
-
-# Verify contract compliance
-python orchestration/contract_enforcer.py check component-name
-
-# Generate contract skeleton
-python orchestration/contract_enforcer.py skeleton component-name
-```
-
-**Pre-integration analysis (v0.4.0):**
-```bash
-# Predict integration failures
-python orchestration/integration_predictor.py predict
-
-# Generate tests from predictions
-python orchestration/integration_predictor.py generate-tests
-```
-
-**System-wide validation (v0.4.0):**
-```bash
-# Comprehensive system validation
-python orchestration/system_validator.py
-```
-
-**View quality metrics:**
-```bash
-python orchestration/quality_metrics.py report
-python orchestration/quality_metrics.py dashboard
-python orchestration/quality_metrics.py trends
-```
-
-**Generate quality dashboard:**
-```bash
-python orchestration/quality_metrics.py dashboard > docs/quality-dashboard.md
-```
-
-**Update all component tracking:**
-```python
-from orchestration.context_manager import TokenTracker
-tracker = TokenTracker()
-tracker.update_all_components()
-```
-
-**Run integration tests:**
-```bash
-python orchestration/integration_tests.py run --all
-python orchestration/integration_tests.py run --component user-api
-```
-
-## Architecture Decision Records (ADR)
-
-### When to Create ADR
-
-Create an ADR for:
-- Choice of technology/framework
-- Component splitting decisions
-- API design decisions
-- Database schema changes
-- Security approach decisions
-- Performance optimization strategies
-- Breaking changes to contracts
-
-### ADR Format
-
-```markdown
-# ADR-001: Use PostgreSQL for User Database
-
-## Status
-Accepted
-
-## Context
-We need to choose a database for storing user data. Requirements include:
-- ACID transactions
-- Complex queries
-- Scalability to millions of users
-- Strong ecosystem
-
-## Decision
-Use PostgreSQL 15 as the primary database for user data.
-
-## Consequences
-
-### Positive
-- Strong ACID guarantees
-- Excellent query performance with proper indexing
-- JSON support for flexible schema
-- Large ecosystem and community
-- Battle-tested in production at scale
-
-### Negative
-- Requires careful query optimization at scale
-- Need expertise in PostgreSQL administration
-- More complex than NoSQL for simple key-value operations
-
-### Risks
-- Migration to different database would be complex
-- Vendor lock-in to some degree
-
-## Implementation
-- Use SQLAlchemy as ORM
-- Set up connection pooling
-- Implement proper indexing strategy
-- Set up automated backups
-
-## Related ADRs
-- ADR-002: User service architecture
-```
-
-### Creating ADRs
-
-```bash
-# Create new ADR
-python orchestration/adr_generator.py create \
-  --title "Use PostgreSQL for user database" \
-  --status accepted \
-  --context "..." \
-  --decision "..." \
-  --consequences "..."
-
-# List all ADRs
-python orchestration/adr_generator.py list
-
-# Update ADR status
-python orchestration/adr_generator.py update-status \
-  --adr ADR-001 \
-  --status superseded \
-  --superseded-by ADR-015
-```
-
-## Best Practices
-
-1. **Start Small**: Create focused, single-responsibility components
-2. **Quality First**: Never accept work that doesn't meet quality standards
-3. **Monitor Growth**: Check sizes and quality metrics after each major feature
-4. **Split Proactively**: Don't wait until components exceed limits
-5. **Document Decisions**: Create ADRs for all significant architectural choices
-6. **Test Continuously**: Run tests at component and integration levels
-7. **Commit Regularly**: Ensure all work is version controlled with TDD pattern
-8. **Communicate Clearly**: Provide detailed task descriptions to sub-agents
-9. **Enforce TDD**: Never allow implementation before tests
-10. **Track Metrics**: Review quality trends regularly
-
-## Common Workflow Patterns
-
-### Adding a New Feature (Simple)
-
-```
-1. Create BDD feature file (if user-facing)
-2. Launch Test Agent → writes tests (RED)
-3. Verify tests fail
-4. Launch Implementation Agent → implements code (GREEN)
-5. Verify tests pass
-6. Launch Implementation Agent → refactor (REFACTOR)
-7. Run Quality Verification
-8. If pass → Run Integration Tests → Done
-9. If fail → Fix and re-verify
-```
-
-### Adding a New Feature (Complex, Multi-Component)
-
-```
-1. Launch Feature Designer Agent → creates design doc
-2. Update API contracts
-3. Create BDD feature files
-4. Launch Test Agents (parallel, one per component) → write tests (RED)
-5. Verify all tests fail
-6. Launch Implementation Agents (parallel) → implement code (GREEN)
-7. Verify all tests pass
-8. Launch Review Agent → code review
-9. Address review feedback → refactor (REFACTOR)
-10. Run Quality Verification (all components)
-11. If pass → Run Integration Tests
-12. If pass → Launch Documentation Agent
-13. Create ADR (if needed)
-14. Update quality dashboard
-15. Done
-```
-
-### Refactoring Across Components
-
-```
-1. Create ADR for refactoring decision
-2. Analyze dependencies using contracts
-3. Plan refactoring sequence
-4. Update contracts first
-5. Launch Test Agents → update tests
-6. Launch Implementation Agents → refactor code (dependency order)
-7. Run Quality Verification after each component
-8. Validate at each step
-9. Update shared libraries if needed
-10. Run comprehensive integration tests
-11. Update ADR status to accepted
-12. Update documentation
-```
-
-### Emergency Component Split
-
-```
-1. Trigger: Component exceeds 170,000 tokens (hard limit)
-2. Run: python orchestration/component_splitter.py recommendations
-3. Create ADR for split decision
-4. Backup component (automatic in splitter)
-5. Analyze split points
-6. Create new component directories with enhanced templates
-7. Install pre-commit hooks in new components
-8. Launch Migration Agents → move files according to plan
-9. Update all contracts
-10. Run Quality Verification on all new components
-11. Run comprehensive integration tests
-12. Archive original component
-13. Update ADR status to accepted
-14. Update quality dashboard
-```
-
-### Bug Fix Workflow
-
-```
-1. Reproduce bug
-2. Launch Test Agent → write failing test that reproduces bug (RED)
-3. Verify test fails
-4. Launch Implementation Agent → fix bug (GREEN)
-5. Verify test passes
-6. Verify no regressions (full test suite)
-7. Run Quality Verification
-8. If pass → Integration tests → Done
-9. Create ADR if bug revealed architectural issue
-```
-
-## Quality Dashboard
-
-Generate comprehensive quality dashboard:
-
-```bash
-python orchestration/quality_metrics.py dashboard > docs/quality-dashboard.md
-```
-
-Dashboard includes:
-- Overall project quality score
-- Per-component quality scores
-- Test coverage trends
-- TDD compliance metrics
-- Code complexity metrics
-- Security vulnerability count
-- Performance metrics
-- Quality trends over time
-
-Example dashboard output:
-
-```markdown
-# Quality Dashboard
-
-**Generated**: 2025-11-05 10:30:00
-**Overall Score**: 93/100 ⭐
-
-## Component Scores
-
-| Component | Quality | Coverage | TDD | Complexity | Security |
-|-----------|---------|----------|-----|------------|----------|
-| user-api | 95/100 ⭐ | 87% ✅ | ✅ | 4.2 ✅ | ✅ |
-| payment-service | 92/100 ⭐ | 91% ✅ | ✅ | 5.1 ✅ | ✅ |
-| email-service | 88/100 ⭐ | 82% ✅ | ✅ | 6.3 ✅ | ✅ |
-
-## Trends
-
-- Quality Score: ↑ +5 points this week
-- Test Coverage: ↑ +3% this week
-- TDD Compliance: 100% (maintained)
-- Security Issues: 0 (no change)
-
-## Recent ADRs
-
-- ADR-015: Use Redis for session caching (Accepted)
-- ADR-014: Split user-api into user-service and auth-service (Accepted)
-- ADR-013: Implement rate limiting (Accepted)
-```
-
-## Multi-Agent Collaboration Example
-
-**Scenario**: User requests "Add user registration feature with email verification"
-
-**Orchestrator Workflow**:
-
-```python
-# 1. Decompose
-components = ["user-api", "email-service"]
-workflow_type = "feature_development"
-
-# 2. Create BDD feature file
-feature_designer = launcher.launch_agent(
-    component_name="user-api",
-    role="feature_designer",
-    task="Create BDD feature file for user registration with email verification"
-)
-wait_for_completion(feature_designer)
-
-# 3. Launch Test Agents (parallel)
-test_agents = [
-    launcher.launch_agent(
-        component_name="user-api",
-        role="test_agent",
-        task="Write tests for user registration endpoint based on feature file",
-        priority=0
-    ),
-    launcher.launch_agent(
-        component_name="email-service",
-        role="test_agent",
-        task="Write tests for email verification sending",
-        priority=0
-    )
-]
-wait_for_all(test_agents)
-
-# Verify: All tests fail (RED)
-verify_tests_fail("user-api")
-verify_tests_fail("email-service")
-
-# 4. Launch Implementation Agents (parallel)
-impl_agents = [
-    launcher.launch_agent(
-        component_name="user-api",
-        task="Implement user registration endpoint (tests exist, make them pass)",
-        priority=0
-    ),
-    launcher.launch_agent(
-        component_name="email-service",
-        task="Implement email verification sending (tests exist, make them pass)",
-        priority=0
-    )
-]
-wait_for_all(impl_agents)
-
-# Verify: All tests pass (GREEN)
-verify_tests_pass("user-api")
-verify_tests_pass("email-service")
-
-# 5. Run Quality Verification
-quality_results = {
-    "user-api": quality_verifier.verify("components/user-api"),
-    "email-service": quality_verifier.verify("components/email-service")
+### Configuration
+
+Control auto-fix behavior in `orchestration-config.json`:
+```json
+{
+  "validation": {
+    "component_naming": {
+      "auto_fix": "prompt"  // "prompt", "always", "never"
+    }
+  }
 }
-
-# 6. If quality checks fail, fix and re-verify
-for component, result in quality_results.items():
-    if not result['passed']:
-        fix_agent = launcher.launch_agent(
-            component_name=component,
-            task=f"Fix quality issues: {result['failures']}",
-            priority=1
-        )
-        wait_for_completion(fix_agent)
-        quality_results[component] = quality_verifier.verify(f"components/{component}")
-
-# 7. Run Integration Tests
-integration_result = integration_tests.run(components=["user-api", "email-service"])
-
-# 8. If integration tests pass, launch documentation agent
-if integration_result['passed']:
-    doc_agent = launcher.launch_agent(
-        component_name="user-api",
-        role="documentation_agent",
-        task="Document user registration feature, update README and API docs"
-    )
-    wait_for_completion(doc_agent)
-
-# 9. Update quality metrics
-quality_metrics.update()
-
-# 10. Generate quality dashboard
-quality_metrics.generate_dashboard("docs/quality-dashboard.md")
-
-# 11. Report completion to user
-report = {
-    "feature": "User registration with email verification",
-    "components_modified": ["user-api", "email-service"],
-    "quality_scores": {
-        "user-api": quality_results["user-api"]["score"],
-        "email-service": quality_results["email-service"]["score"]
-    },
-    "tests_added": 23,
-    "coverage": "87% (user-api), 91% (email-service)",
-    "status": "Complete"
-}
-print_completion_report(report)
 ```
 
-## Conclusion
+**This standard is NON-NEGOTIABLE and enforced automatically.**
 
-As the Master Orchestrator, your primary responsibility is:
-1. **Coordinate** multi-agent workflows
-2. **Enforce** quality standards rigorously (v0.5.0: 12-check verification)
-3. **Never write** production code yourself
-4. **Monitor** component sizes and quality metrics
-5. **Document** architectural decisions
-6. **Verify** quality before accepting work
-7. **Maintain** high standards consistently
-8. **Ensure** specifications are complete (v0.4.0: specification analysis)
-9. **Track** requirements to implementation (v0.4.0: traceability matrix)
-10. **Validate** contracts before coding (v0.4.0: contract-first development)
-11. **Predict** integration issues (v0.4.0: pre-integration analysis)
-12. **Validate** system readiness (v0.4.0: system-wide validation)
+## Quality Standards
 
-**Remember**: Quality is not optional. Every piece of code must meet the standards before being accepted as complete.
+### Before Marking Component Complete
+- Run all tests: 100% pass rate required (unit, integration, contract, E2E)
+- Test coverage: minimum 80%
+- Pass linting and formatting checks
+- Commit to project repository using git retry wrapper
+- Verify contract compliance
+- Check token budget limits
+- **Declare all features in component.yaml**: Update `user_facing_features` section with ALL CLI commands (for cli_application), public API (for library), or HTTP endpoints (for web_server)
 
-**v0.4.0 Key Principles:**
-- **Quality-First**: Analyze specifications before coding
-- **Contract-First**: Generate contracts before components
-- **Requirements-Driven**: Track every requirement to implementation
-- **Defensive by Design**: Verify defensive programming patterns
-- **Semantically Correct**: Not just syntactic correctness
-- **Predictive Quality**: Find issues before they become test failures
-- **Comprehensive Validation**: System-wide readiness before deployment
+**Testing Standards**: All test types require 100% pass rate. Zero failing tests allowed. See `docs/TESTING-STRATEGY.md` and `docs/ZERO-TOLERANCE-INTEGRATION.md` for complete policy.
 
-**Never:**
-- Skip specification analysis (causes ambiguity)
-- Create components before contracts (causes integration failures)
-- Accept work without 12-check verification (causes quality issues)
-- Skip pre-integration analysis (wastes time on predictable failures)
-- Skip system validation (causes deployment failures)
-- Declare "production ready" without user approval (business decision)
+**Feature Coverage**: Check #13 requires ALL user-facing features be declared in component.yaml manifest. This prevents failures where features exist but are never tested. See `orchestration/verification/manifests/` for schema validation.
 
----
+### Completion Report Requirements
 
-## Continuous Execution Pattern (CRITICAL)
+**When declaring a project complete**, you MUST generate an **evidence-based completion report**.
 
-**IMPORTANT**: When working through multi-phase orchestration workflows, you MUST execute continuously without pausing between phases.
+**What This Prevents:**
+- Music Analyzer v1-v3 all had "completion" without evidence
+- All three failed immediately on user commands (0% functional)
+- Completion reports without evidence are meaningless
 
-### Auto-Proceed Protocol
+**Required Evidence (Must Be Pasted in Report):**
+1. ✅ Phase 5 gate output (full command output, not summary)
+2. ✅ Phase 6 gate output (full command output, not summary)
+3. ✅ UAT command execution (actual `python -m ...` or equivalent)
+4. ✅ State verification (orchestration-state.json contents)
+5. ✅ Gate verification command output
 
-When coordinating complex work with multiple phases:
+**How to Generate Report:**
 
-1. **Use TodoWrite tool** at start to track all phases/steps
-2. **Mark each phase complete** as you finish
-3. **Automatically proceed** to next phase if tasks remain:
-   - Announce: "Now proceeding to [phase name]"
-   - Continue immediately without waiting for user input
-4. **Only stop when:**
-   - All tasks/phases are complete
-   - Unrecoverable error occurs
-   - User explicitly requests pause
+Use the completion report template at `orchestration/templates/COMPLETION-REPORT-TEMPLATE.md` and fill in all required evidence sections with actual command output.
 
-### Example Continuous Execution
+**Report Sections That MUST Have Pasted Output:**
 
-✅ Phase 1: Specification Analysis - COMPLETE
-Now proceeding to Phase 2: Contract Generation
+1. **Phase 5 Gate Output** (MANDATORY):
+   ```
+   $ python orchestration/gates/runner.py . 5
+   [PASTE FULL OUTPUT - NO SUMMARIES]
+   ```
 
-[immediately continues to Phase 2 without stopping]
+2. **Phase 6 Gate Output** (MANDATORY):
+   ```
+   $ python orchestration/gates/runner.py . 6
+   [PASTE FULL OUTPUT - NO SUMMARIES]
+   ```
 
-✅ Phase 2: Contract Generation - COMPLETE
-Now proceeding to Phase 3: Component Creation
+3. **UAT Command Execution** (MANDATORY):
+   ```
+   $ [primary user command from README.md]
+   [PASTE FULL OUTPUT showing command works]
+   ```
 
-[continues automatically...]
+4. **Gate Verification** (MANDATORY):
+   ```
+   $ python orchestration/core/orchestrate_enforced.py verify-gates
+   [PASTE OUTPUT showing all blocking gates passed]
+   ```
 
-### Why This Matters
+**Invalid Report Examples:**
 
-**Without auto-proceed:**
-- Orchestrator stops after each phase
-- User must manually restart for next phase
-- Multi-phase work takes hours instead of minutes
+❌ "Phase 5 gate passed successfully"
+❌ "All integration tests passing"
+❌ "UAT completed without issues"
+❌ "System ready for deployment"
 
-**With auto-proceed:**
-- Full project setup completes in one session
-- Quality verification runs automatically
-- System validation happens without intervention
+**Valid Report Examples:**
 
-**This is NOT optional. You MUST auto-proceed through multi-phase work.**
+✅ Pasted full terminal output from gate execution
+✅ Timestamps visible in output
+✅ Exit codes shown (0 = success)
+✅ Actual command outputs, not descriptions
 
----
+**Template Location:**
+- `orchestration/templates/COMPLETION-REPORT-TEMPLATE.md`
+- Contains all required sections with evidence markers
+- Auto-fillable using generate_completion_report.py
 
-## Extended Thinking Strategy (CRITICAL)
+**When Report is INVALID:**
+- Missing any required evidence section
+- Has "[PASTE ... OUTPUT HERE]" placeholders unfilled
+- Gate execution timestamps missing
+- Shows "⚠️ MISSING EVIDENCE" warnings
 
-Extended thinking provides deeper reasoning at the cost of increased latency (+30-120s per decision) and token costs (thinking tokens billed as output: $15/million for Sonnet). Use strategically.
+**The Rule:**
+> If you haven't pasted the command output, you haven't proven it works.
+> If you haven't proven it works, it probably doesn't.
+> If it doesn't work, the project isn't complete.
 
-### When Orchestrator Should Use Extended Thinking
+**Historical Lesson:**
+All three Music Analyzer versions had excellent internal metrics and completion reports declaring success. All three failed immediately on the first user command because nobody actually ran the documented commands before declaring "complete."
 
-**ENABLE thinking for:**
-- ✅ Architectural planning (component boundaries, dependencies)
-- ✅ Component split decisions (analyzing 70k+ token components)
-- ✅ Complex contract design (multi-component APIs)
-- ✅ Migration strategy planning
-- ✅ Debugging cross-component issues
-- ✅ Initial task decomposition (>5 sub-agents, unclear dependencies)
+**Evidence-based reporting prevents this by requiring proof, not assertions.**
 
-**DISABLE thinking for:**
-- ❌ Routine sub-agent launching (straightforward tasks)
-- ❌ File monitoring and status checks
-- ❌ Simple git operations
-- ❌ Well-established workflow coordination
-- ❌ Documentation generation
+## Development Workflow Patterns
 
-### Thinking Budgets
+### Continuous Execution (CRITICAL)
 
-- **Architectural planning**: 16K tokens ("think hard")
-- **Component splitting**: 16K tokens ("think hard")
-- **Contract design**: 8K tokens ("think")
-- **Routine coordination**: 0 tokens (no thinking)
+When working on this project, whether as orchestrator or sub-agent:
 
-### How to Request Thinking
+**Auto-Proceed Through Multi-Phase Work:**
+1. Use TodoWrite tool to track all phases/steps
+2. Mark each phase complete as you finish
+3. Automatically announce "Now proceeding to [next phase]" and continue
+4. Only stop when all tasks complete, unrecoverable error occurs, or user requests pause
 
-When you need extended thinking for complex decisions:
-- **Light thinking**: Include "think" in internal reasoning
-- **Deep thinking**: Include "think hard" in internal reasoning
-- **Maximum thinking**: Include "think harder" for critical architectural decisions
+**Example:**
+```
+User: "Implement new feature with tests and documentation"
 
-**Example (internal orchestrator reasoning):**
-"This project needs 8 components with complex dependencies. Think hard about the optimal decomposition strategy, considering: component boundaries, contract interfaces, dependency graph, and token budget constraints."
+Your execution:
+1. Implement feature - COMPLETE
+2. Now proceeding to test writing...
+3. Write tests - COMPLETE
+4. Now proceeding to documentation...
+5. Update documentation - COMPLETE
+6. Now proceeding to commit...
+7. Commit changes - COMPLETE
+✅ ALL COMPLETE
+```
 
-### Sub-Agent Thinking Configuration
+**NEVER do this:**
+```
+❌ "Feature implemented. Should I write tests now?" [WRONG]
+❌ "Tests done. Ready for documentation when you are." [WRONG]
+❌ "All done. Should I commit?" [WRONG]
+```
 
-When launching sub-agents via Task tool, include thinking keywords in prompts ONLY when needed:
+### Automatic Commit After Task Completion
 
-**Complex business logic (ENABLE):**
+**When you complete a task:**
+1. Run final checks (tests pass, linting clean)
+2. Commit immediately with conventional commit format
+3. Include context: what changed, why, test results
+4. Use git retry wrapper for component work (handles concurrent commits)
+
+**Commit Message Format:**
+```
+<type>(scope): <subject>
+
+<body with details>
+
+Resolves: <ticket-id>
+Tests: <count> passing, coverage <percentage>%
+```
+
+**Types:** feat, fix, refactor, test, docs, chore
+
+**Example:**
+```bash
+git add .
+git commit -m "feat(orchestration): add autonomous work protocols to templates
+
+- Added continuous execution patterns to all templates
+- Included automatic commit guidelines
+- Added minimal implementation mandate
+- BDD examples for all component types
+
+Resolves: ORCH-456
+Tests: All existing tests pass"
+```
+
+### Automatic Gate Execution in Multi-Phase Work [v0.17.0]
+
+**When working on multi-phase orchestrated projects:**
+
+**CRITICAL**: Gates are NOT optional checkboxes - they are MANDATORY blocking steps.
+
+**After Completing Phase 5 (Integration):**
+```bash
+# REQUIRED: Run Phase 5 gate BEFORE proceeding to Phase 6
+echo "=== Running Phase 5 Gate (Integration) ==="
+python orchestration/gates/runner.py . 5
+
+# Check result
+if [ $? -eq 0 ]; then
+    echo "✅ Phase 5 gate PASSED - proceeding to Phase 6"
+else
+    echo "❌ Phase 5 gate FAILED - CANNOT proceed"
+    echo "Fix all integration test failures and re-run gate"
+    exit 1
+fi
+```
+
+**After Completing Phase 6 (Verification):**
+```bash
+# REQUIRED: Run Phase 6 gate BEFORE declaring complete
+echo "=== Running Phase 6 Gate (Verification) ==="
+python orchestration/gates/runner.py . 6
+
+# Check result
+if [ $? -eq 0 ]; then
+    echo "✅ Phase 6 gate PASSED - project complete"
+else
+    echo "❌ Phase 6 gate FAILED - NOT complete"
+    echo "Fix all completion check failures and re-run gate"
+    exit 1
+fi
+```
+
+**In Your Responses:**
+
+When you run gates, you MUST paste the command output in your response:
+
+```
+Now running Phase 5 gate to verify integration:
+
+$ python orchestration/gates/runner.py . 5
+
+========================================
+Phase 5 Gate: Integration Testing
+========================================
+✅ All integration tests passing (12/12)
+✅ Test coverage: 87%
+✅ No blocking issues
+========================================
+✅ PHASE 5 GATE PASSED
+========================================
+
+Proceeding to Phase 6...
+```
+
+**What This Looks Like:**
+
+**✅ CORRECT (Evidence-Based):**
+```
+1. Implement feature - COMPLETE
+2. Now proceeding to integration testing...
+3. Integration tests - COMPLETE
+4. Now running Phase 5 gate...
+   [PASTE GATE OUTPUT HERE]
+   ✅ Gate passed
+5. Now proceeding to verification...
+6. Verification - COMPLETE
+7. Now running Phase 6 gate...
+   [PASTE GATE OUTPUT HERE]
+   ✅ Gate passed
+✅ ALL COMPLETE with gate evidence
+```
+
+**❌ WRONG (No Evidence):**
+```
+1. Implement feature - COMPLETE
+2. Integration tests - COMPLETE
+3. Verification - COMPLETE
+✅ ALL COMPLETE [NO GATE OUTPUT = INVALID]
+```
+
+**Auto-Proceed With Gates:**
+- Run gate immediately after completing phase
+- Paste gate output in response
+- If gate fails: fix issues, re-run, paste new output
+- If gate passes: announce and proceed to next phase
+- Never skip gates - this causes the "Looks Good But Breaks" pattern
+
+**Remember:**
+- Gates are your protection against the 3 historical failures
+- Pasted output proves verification actually happened
+- No output = No verification = Invalid completion
+- 100% is the only passing grade (83.3% = failure)
+
+### Minimal Implementation Mandate
+
+**The Golden Rule: Implement ONLY what is explicitly requested.**
+
+**When given a task:**
+- ✅ Implement the EXACT requested functionality
+- ✅ Write tests for that functionality
+- ✅ Update relevant documentation
+- ❌ DO NOT add "nice to have" features
+- ❌ DO NOT implement "while we're here" improvements
+- ❌ DO NOT add speculative abstractions
+
+**After Completion:**
+If you identified potential improvements, mention them AFTER completing the work:
+```
+✅ Task complete and committed.
+
+💡 Potential enhancements (not implemented):
+- [Enhancement 1]
+- [Enhancement 2]
+
+Would you like me to implement any of these?
+```
+
+### Behavior-Driven Development (BDD)
+
+**When to use BDD format in this project:**
+- ✅ Orchestration workflows
+- ✅ Component lifecycle management
+- ✅ Template generation logic
+- ✅ Migration workflows
+- ❌ Low-level utilities (use standard TDD)
+- ❌ Simple data transformations (use standard TDD)
+
+**BDD Format (Given-When-Then):**
 ```python
+def test_component_creation_generates_all_required_files():
+    """
+    Given a component name and type
+    When create_component is called
+    Then component directory is created
+    And CLAUDE.md is generated from template
+    And README.md is created
+    And test directories are initialized
+    """
+    # Given
+    component_name = "auth_service"
+    component_type = "backend"
+
+    # When
+    result = create_component(component_name, component_type)
+
+    # Then
+    assert (Path("components") / component_name).exists()
+    assert (Path("components") / component_name / "CLAUDE.md").exists()
+    assert (Path("components") / component_name / "README.md").exists()
+    assert (Path("components") / component_name / "tests").exists()
+```
+
+**When to use standard TDD:**
+- Utility functions (token counting, path resolution)
+- Parser functions (template variable substitution)
+- Data transformations (config file processing)
+
+## 🔒 VERIFICATION ENFORCEMENT SYSTEM (v1.13.0)
+
+### Why This System Exists
+
+The v1.1.0 anti-stopping rules failed because they relied on **instructional compliance**, but the model engages in **motivated reasoning** that circumvents instructions while technically acknowledging them.
+
+**Historical Pattern (9+ failures):**
+- High test pass rate (99-100%)
+- Rules acknowledged in responses
+- Stopped at phase boundary (20-70% complete)
+- Completion report generated prematurely
+- Required features reframed as optional
+
+**Solution**: Verification scripts that YOU run at appropriate times. These provide the same checks as the previous git hook system, but are instruction-triggered rather than git-triggered.
+
+### Core Verification Mechanisms
+
+#### 1. Pre-Commit Verification (Run Before Commits)
+```bash
+# Run BEFORE committing (you trigger this, not git)
+python orchestration/hooks/pre_commit_naming.py
+python orchestration/hooks/pre_commit_enforcement.py
+
+# For completion reports, also run:
+python orchestration/hooks/pre_commit_completion_blocker.py
+```
+
+This checks the completion state file (in `orchestration/data/state/`) for approval.
+
+#### 2. Task Queue (Authoritative Work List)
+```bash
+# Extract tasks from spec
+python orchestration/tasks/task_extractor.py specs/project.yaml
+
+# Get current task (MUST work on this)
+python orchestration/tasks/task_runner.py --current
+
+# Mark complete (only after full implementation + tests)
+python orchestration/tasks/task_runner.py --complete TASK-ID
+
+# View status
+python orchestration/tasks/task_runner.py
+```
+
+**You CANNOT:**
+- Skip tasks
+- Redefine task scope
+- Declare complete while queue has items
+- Create your own task list
+
+#### 3. Specification Coverage Checker
+```bash
+# Check coverage (0-100% objective metric)
+python orchestration/verification/specs/spec_coverage_checker.py specs/project.md ./
+
+# Output: "COVERAGE: 85.0%" with list of missing features
+```
+
+This provides **objective measurement**, not subjective "looks good".
+
+#### 4. Rationalization Detector
+```bash
+# Scan for forbidden phrases
+python orchestration/verification/quality/rationalization_detector.py .
+
+# Detects: "substantially complete", "known limitations", "future work",
+# "phase 1 complete", "stub", "placeholder", "foundation established", etc.
+```
+
+Based on actual phrases from historical failures.
+
+#### 5. Verification Agent (Independent Verifier)
+```bash
+# Run full verification (5 checks)
+python orchestration/verification/run_full_verification.py
+
+# Checks:
+# 1. No rationalization language
+# 2. No stub components
+# 3. Smoke tests pass (actual user commands)
+# 4. Task queue empty
+# 5. Gates passed
+```
+
+**This agent is SKEPTICAL by default.** It assumes incomplete until proven otherwise.
+
+#### 6. Continuous Monitoring
+```bash
+# Single check
+python orchestration/enforcement/monitor.py
+
+# Continuous (every 5 minutes)
+python orchestration/enforcement/monitor.py --continuous 5
+
+# Status summary
+python orchestration/enforcement/monitor.py --status
+```
+
+Detects stalling, regression, and unverified completion attempts.
+
+### How Completion Works Under This System
+
+1. **Work through task queue** - Each task from spec must be completed
+2. **Queue becomes empty** - All features implemented (100% coverage)
+3. **Gates run at phase boundaries** - YOU run them, integration and verification gates pass
+4. **Verification agent runs** - Independent skeptical verifier approves
+5. **Completion authority grants permission** - All checks in state file pass
+6. **You run completion verification** - Before committing COMPLETION-REPORT.md
+
+**You SHOULD NOT declare complete until:**
+- Task queue is empty
+- No stub components exist
+- No rationalization language in docs
+- Smoke tests pass
+- Verification agent approves
+- Completion verification passes
+
+### Integration with Existing Rules
+
+The verification system **works alongside** the anti-stopping rules:
+
+- **v1.1.0 rules** (instructional): Still apply, still display in responses
+- **v1.13.0 verification** (instruction-triggered): You run verification scripts
+
+If you try to declare complete without verification:
+```
+VERIFICATION REQUIRED
+
+Run before declaring complete:
+  python orchestration/verification/run_full_verification.py
+
+Required checks:
+  All phase gates must pass
+  Verification agent must approve
+  No stub/placeholder components allowed
+
+Process:
+1. Run: python orchestration/verification/run_full_verification.py
+2. Fix all identified issues
+3. Re-run verification until all checks pass
+4. Then commit completion report
+```
+
+### Key Files
+
+```
+orchestration/
+├── hooks/                                # Verification scripts (you run these)
+│   ├── pre_commit_completion_blocker.py  # Completion verification
+│   ├── pre_commit_enforcement.py         # Advisory checks
+│   └── post_commit_enforcement.py        # Continuation status
+├── context/                              # Shared rules
+│   ├── verification-protocol.md          # Full verification protocol
+│   ├── component-rules.md                # Sub-agent rules
+│   └── orchestration-rules.md            # Orchestrator rules
+├── verification/
+│   ├── verification_agent.py             # Independent verifier
+│   ├── run_full_verification.py          # Main entry point
+│   ├── quality/
+│   │   ├── rationalization_detector.py   # Forbidden phrases
+│   │   ├── stub_detector.py              # Find placeholders
+│   │   └── smoke_tests.py                # User command tests
+│   └── specs/
+│       └── spec_coverage_checker.py      # Objective coverage
+├── tasks/
+│   ├── queue.py                          # Authoritative queue
+│   └── auto_sync.py                      # Auto-sync from spec
+├── enforcement/
+│   ├── monitor.py                        # Continuous monitoring
+│   └── stall_detector.py                 # Detect stalled work
+└── gates/
+    ├── runner.py                         # Gate runner
+    └── executor.py                       # Gate execution
+```
+
+### Summary
+
+**The verification system provides multiple checkpoints:**
+1. Task queue still has items → Queue not empty
+2. Spec coverage < 100% → Verification fails
+3. Gates haven't passed → YOU must run them at phase boundaries
+4. Rationalization language detected → Detector catches it
+5. Independent agent denies approval → Authority not granted
+
+**This creates multiple layers of verification that you must run at appropriate times.**
+
+## Extended Thinking Usage
+
+### For Orchestrator Work (You)
+
+When working on this orchestration project:
+
+**Use extended thinking for:**
+- Architectural changes to orchestration system
+- Component split algorithm design
+- Token budget calculation improvements
+- Migration workflow design
+- Complex debugging across system
+
+**Disable thinking for:**
+- Documentation updates
+- Simple bug fixes
+- Test writing
+- Configuration changes
+- Routine refactoring
+
+**How to enable:**
+- Press `Tab` key in Claude Code session
+- Or include "think hard" in your internal reasoning for complex decisions
+
+### For Sub-Agents (When Launching Task Tool)
+
+Include thinking keywords in Task prompts selectively:
+
+```python
+# Complex work - include thinking
 Task(
-    description="Design circuit breaker pattern",
-    prompt="""Read components/integration/CLAUDE.md.
+    description="Redesign token counting algorithm",
+    prompt="""Think hard about edge cases in token counting.
 
-    Think hard about failure modes, timeout strategies, and state transitions.
-    Consider multiple approaches before implementing.
-
-    Implement circuit breaker with comprehensive tests.""",
+    Consider: multiline strings, unicode, code comments, docstrings.
+    Implement robust token counter with tests.""",
     subagent_type="general-purpose",
     model="sonnet"
 )
-```
 
-**Routine implementation (DISABLE):**
-```python
+# Routine work - no thinking
 Task(
-    description="Implement CRUD operations",
-    prompt="""Read components/backend/CLAUDE.md.
+    description="Add new component template field",
+    prompt="""Add 'health_check_endpoint' field to component templates.
 
-    Implement user CRUD endpoints following existing patterns.
-    Use standard repository pattern, write tests.""",
+    Update all 5 templates, ensure consistency.""",
     subagent_type="general-purpose",
     model="sonnet"
 )
@@ -3517,64 +2181,189 @@ Task(
 
 ### Cost Impact
 
-Extended thinking adds significant costs:
-- Orchestrator with 16K thinking per major decision: +$0.24 per decision
-- 5 sub-agents with 8K thinking per complex feature: +$0.60 per feature
+Extended thinking adds 20-40% to project costs when used for complex decisions. Budget accordingly.
 
-**Monitor usage** and disable thinking for tasks that don't benefit from deep reasoning.
+## Project Lifecycle and Breaking Changes Policy
+
+**LIFECYCLE STATE**: released (see `orchestration/config/project_metadata.json`)
+**BREAKING CHANGES POLICY**: controlled (deprecation required)
+
+### Version Control Restrictions (Stable Release)
+
+**🚨 CRITICAL: Major version transitions and breaking changes require explicit user approval**
+
+**FORBIDDEN AUTONOMOUS ACTIONS:**
+- ❌ Changing version from 1.x.x to 2.0.0 (major version bump)
+- ❌ Any major version increment (X.y.z → X+1.0.0)
+- ❌ Making breaking changes without deprecation period
+- ❌ Releasing updates without upgrade scripts for existing installations
+- ❌ Removing features without migration path
+
+**WHY**: Production-deployed system means:
+- Users depend on reliable, predictable updates
+- Breaking changes without migration disrupt workflows
+- Missing upgrade paths leave users stranded
+- Trust requires backwards compatibility or clear deprecation
+
+**ALLOWED AUTONOMOUS ACTIONS:**
+- ✅ Increment minor version (1.1.0 → 1.2.0) WITH upgrade path
+- ✅ Increment patch version (1.1.0 → 1.1.1) WITH upgrade path
+- ✅ Deprecate features (with warnings, migration docs, 2-version period)
+- ✅ Add new features (backwards compatible)
+- ✅ Create upgrade scripts and migration paths
+
+**MANDATORY FOR EVERY RELEASE:**
+- ✅ Include `scripts/migrations/X.X.X_to_Y.Y.Y.sh`
+- ✅ Update `scripts/upgrade.sh`
+- ✅ Update `docs/CHANGELOG.md`
+- ✅ Update `orchestration/VERSION`
+- ✅ Test upgrade from all supported versions
+
+### Checking Current Lifecycle State
+
+```bash
+# Check current project lifecycle and policy
+cat orchestration/config/project_metadata.json | jq '.version, .lifecycle_state, .breaking_changes_policy'
+
+# Check version control restrictions
+cat orchestration/config/project_metadata.json | jq '.version_control'
+```
+
+### Documentation
+
+For complete details, see:
+- `orchestration/config/project_metadata.json` - Machine-readable lifecycle state
+
+## Dynamic Component Creation
+
+This orchestration system supports **dynamic component creation** during development. When you determine a new component is needed, you can create it by following the detailed instructions in `orchestration/templates/master-orchestrator.md` section "Dynamic Component Creation".
+
+### Quick Summary
+
+**When creating a component**:
+
+1. **Create directory structure**: `components/<name>/src`, `tests/`, etc.
+2. **Generate CLAUDE.md**: Read template (backend/frontend/generic), substitute variables, write to component directory
+3. **Create README.md**: Document the component
+4. **Inform user**: Component is ready for immediate use (no restart)
+
+### Critical Requirements
+
+- ✅ **Component ready immediately** (no configuration needed)
+- ✅ **Use Task tool** to launch agents in component directories
+- ✅ **No restart required** (continuous execution)
+
+### Template Variable Substitution
+
+When generating CLAUDE.md from templates, substitute:
+- `{{COMPONENT_NAME}}` → component name (e.g., `auth_service`)
+- `{{PROJECT_VERSION}}` → read from `orchestration/VERSION`
+- `{{PROJECT_ROOT}}` → absolute project root path
+- `{{TECH_STACK}}` → technologies (e.g., `Python, FastAPI, PostgreSQL`)
+- `{{COMPONENT_RESPONSIBILITY}}` → what the component does
+
+### Example: Creating "auth_service"
+
+```bash
+# 1. Create directories
+mkdir -p components/auth_service/src/api
+mkdir -p components/auth_service/tests/unit
+
+# 2. Generate CLAUDE.md
+# Read: orchestration/templates/component-backend.md
+# Substitute all {{VARIABLES}}
+# Write to: components/auth_service/CLAUDE.md
+
+# 3. Create README.md
+# (Component-specific content)
+
+# 4. Tell user
+echo "✅ Component created! Ready for immediate use via Task tool."
+```
+
+### Templates Available
+
+- **Backend/Microservice**: `orchestration/templates/component-backend.md`
+- **Frontend**: `orchestration/templates/component-frontend.md`
+- **Library/Generic**: `orchestration/templates/component-generic.md`
+
+### After Creation
+
+After you create a component:
+- Component is immediately ready to use
+- Launch agent via Task tool with component-specific prompt
+- Agent reads `components/<name>/CLAUDE.md` for instructions
+- No restart needed - continuous execution
+
+### Full Instructions
+
+See `orchestration/templates/master-orchestrator.md` section "Dynamic Component Creation" for:
+- Complete step-by-step workflow
+- Validation checklist
+- Component deletion procedure
+- Troubleshooting guide
+- Path resolution helpers
+
+## Working with This Codebase
+
+### Testing Strategy
+
+**CRITICAL**: Avoid over-mocking! Tests that pass when code is broken are worse than no tests.
+
+**Key Principles**:
+- **Only mock what you don't own** (external APIs, paid services, time/date)
+- **Don't mock your domain logic** (validators, repositories, transformers)
+- **Integration tests are mandatory** for any heavily-mocked unit tests
+- **Use real test databases** in integration tests (not mocks)
+
+**See [`docs/TESTING-STRATEGY.md`](docs/TESTING-STRATEGY.md) for comprehensive guidelines** including:
+- When to mock vs when NOT to mock (decision matrix)
+- Concrete examples of good vs bad mocking
+- Testing pyramid (60% unit, 30-40% integration, 5-10% E2E)
+- Mock usage anti-patterns
+- Test quality metrics beyond coverage
 
 ---
 
-## Minimal Implementation Philosophy
+## CLAUDE.md Maintenance Rules
 
-When coordinating sub-agents or making orchestration changes:
+This file follows strict maintenance rules to prevent documentation staleness.
 
-### The Golden Rule
+### What SHOULD Be in This File
+- Behavioral rules (how the AI should act)
+- Architectural principles (core concepts guiding decisions)
+- Key conventions (standards that must be followed)
+- Navigation pointers (where to find authoritative information)
+- Critical constraints (non-negotiable boundaries)
 
-**Implement ONLY what is explicitly requested.** Nothing more, nothing less.
+### What Should NOT Be in This File
+- **Hardcoded version numbers** - Reference `orchestration/VERSION` instead
+- **Specific file path listings** - Use `--help` commands or pointers to directories
+- **Project status/roadmap** - This changes constantly
+- **Detailed API documentation** - Belongs in code docstrings or `docs/`
+- **Historical context** - Move to `docs/HISTORICAL-FAILURES.md` or similar
 
-### What This Means
+### Validation
+Before committing changes to CLAUDE.md, run:
+```bash
+python orchestration/validation/validate_claude_md.py
+```
 
-✅ **DO Implement:**
-- Exact functionality requested
-- Necessary infrastructure (contracts, types, configs)
-- Required error handling
-- Essential tests
+This checks for:
+- References to non-existent files
+- Hardcoded version numbers
+- Hardcoded dates in examples
+- Missing directories
 
-❌ **DON'T Implement:**
-- "Nice to have" features not requested
-- Speculative future requirements
-- Over-engineered abstractions
-- Premature optimizations
+### When to Update This File
+- ✅ Adding/removing a behavioral rule
+- ✅ Changing a core architectural principle
+- ✅ Modifying a mandatory convention
+- ✅ Adding a new constraint
 
-### When You Have Ideas
-
-If you identify valuable additions:
-
-1. **Complete requested work FIRST**
-2. **Verify it works**
-3. **THEN suggest additions** to user
-4. **Wait for approval** before implementing
-
-### Example
-
-**Request:** "Create user authentication component"
-
-**Correct Response:**
-- Implement user authentication
-- Add required tests
-- Verify contract compliance
-- Done
-
-**Incorrect Response:**
-- Implement user authentication
-- Add password reset (not requested)
-- Add 2FA (not requested)
-- Add OAuth providers (not requested)
-- Add session management dashboard (not requested)
-
-**The incorrect response wastes time and creates unnecessary complexity.**
-
----
-
-
+### When NOT to Update This File
+- ❌ Changing implementation details (update code instead)
+- ❌ Adding new files/modules (they're discoverable via `ls`)
+- ❌ Updating version numbers (they're in `orchestration/VERSION`)
+- ❌ Fixing bugs (no documentation update needed)
+- ❌ Refactoring code structure (update pointers if paths change)

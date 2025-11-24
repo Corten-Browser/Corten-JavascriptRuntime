@@ -1,0 +1,148 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Machine-Readable Specification",
+  "type": "object",
+  "required": ["name", "version", "features", "completion_criteria"],
+  "properties": {
+    "name": {
+      "type": "string",
+      "description": "Project name"
+    },
+    "version": {
+      "type": "string",
+      "description": "Specification version"
+    },
+    "description": {
+      "type": "string"
+    },
+    "features": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/feature"
+      },
+      "minItems": 1
+    },
+    "completion_criteria": {
+      "$ref": "#/definitions/completion_criteria"
+    },
+    "phases": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/phase"
+      },
+      "description": "Optional phase breakdown (for progress tracking only, not stopping points)"
+    }
+  },
+  "definitions": {
+    "feature": {
+      "type": "object",
+      "required": ["id", "name", "required", "verification"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[A-Z]+-[0-9]+$",
+          "description": "Unique feature identifier"
+        },
+        "name": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "required": {
+          "type": "boolean",
+          "description": "Is this feature required for completion?"
+        },
+        "verification": {
+          "$ref": "#/definitions/verification"
+        },
+        "dependencies": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Feature IDs this depends on"
+        }
+      }
+    },
+    "verification": {
+      "type": "object",
+      "required": ["type"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["test_pattern", "file_exists", "function_exists", "cli_command", "api_endpoint"]
+        },
+        "pattern": {
+          "type": "string",
+          "description": "Regex or glob pattern"
+        },
+        "command": {
+          "type": "string",
+          "description": "CLI command to verify"
+        },
+        "expected_output": {
+          "type": "string",
+          "description": "Expected output pattern"
+        },
+        "min_tests": {
+          "type": "integer",
+          "description": "Minimum number of tests required"
+        }
+      }
+    },
+    "completion_criteria": {
+      "type": "object",
+      "required": ["all_required_features", "min_test_coverage"],
+      "properties": {
+        "all_required_features": {
+          "type": "boolean",
+          "const": true,
+          "description": "All required features must be implemented"
+        },
+        "min_test_coverage": {
+          "type": "number",
+          "minimum": 80,
+          "maximum": 100
+        },
+        "min_test_pass_rate": {
+          "type": "number",
+          "const": 100,
+          "description": "100% test pass rate required"
+        },
+        "no_stub_components": {
+          "type": "boolean",
+          "const": true
+        },
+        "smoke_test_pass": {
+          "type": "boolean",
+          "const": true
+        }
+      }
+    },
+    "phase": {
+      "type": "object",
+      "required": ["number", "name", "features"],
+      "properties": {
+        "number": {
+          "type": "integer"
+        },
+        "name": {
+          "type": "string"
+        },
+        "features": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Feature IDs in this phase"
+        },
+        "is_stopping_point": {
+          "type": "boolean",
+          "const": false,
+          "description": "Phases are NOT stopping points"
+        }
+      }
+    }
+  }
+}

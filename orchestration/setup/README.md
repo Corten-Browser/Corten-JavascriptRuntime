@@ -204,7 +204,7 @@ This shows exactly what checks are failing.
 
 Check monitoring status:
 ```bash
-python orchestration/monitoring/stall_detector.py
+python orchestration/enforcement/stall_detector.py
 ```
 
 This shows if work has stalled and recommendations.

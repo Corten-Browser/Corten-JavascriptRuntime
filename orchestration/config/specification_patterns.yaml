@@ -1,0 +1,350 @@
+# Specification Analysis Patterns
+# Used by specification_analyzer.py to detect ambiguities and missing requirements
+
+ambiguity_patterns:
+  vague_performance:
+    patterns:
+      - "fast"
+      - "quick"
+      - "slow"
+      - "efficient"
+      - "responsive"
+      - "good performance"
+      - "bad performance"
+      - "performant"
+      - "speedy"
+      - "rapidly"
+    clarification_template: "Define specific performance metrics: response time (e.g., p95 < 200ms), throughput (e.g., > 1000 req/sec), or other measurable targets"
+    severity: "warning"
+    examples:
+      - bad: "The API should be fast"
+        good: "The API should respond in < 200ms at p95"
+
+  vague_error_handling:
+    patterns:
+      - "handle errors"
+      - "appropriate error"
+      - "graceful failure"
+      - "gracefully"
+      - "proper error handling"
+      - "error handling"
+      - "deal with errors"
+      - "manage errors"
+    clarification_template: "Specify error handling strategy: retry count, backoff algorithm, fallback behavior, specific error codes, user-facing messages, logging requirements"
+    severity: "critical"
+    examples:
+      - bad: "Handle errors appropriately"
+        good: "On network error: retry 3x with exponential backoff (1s, 2s, 4s), then return 503 with Retry-After header"
+
+  vague_scale:
+    patterns:
+      - "scalable"
+      - "scale"
+      - "many users"
+      - "lots of users"
+      - "high load"
+      - "heavy load"
+      - "large scale"
+      - "at scale"
+      - "handles load"
+    clarification_template: "Define scale requirements: concurrent users (e.g., 10,000), requests/second (e.g., 5,000), data volume (e.g., 100GB), growth rate (e.g., 20% monthly)"
+    severity: "warning"
+    examples:
+      - bad: "Must be scalable"
+        good: "Must support 10,000 concurrent users with < 200ms response time"
+
+  vague_security:
+    patterns:
+      - "secure"
+      - "safely"
+      - "safe"
+      - "protected"
+      - "security"
+      - "secure storage"
+      - "secure transmission"
+    clarification_template: "Specify security requirements: encryption algorithm (e.g., AES-256), authentication method (e.g., OAuth 2.0), authorization model (e.g., RBAC), compliance standards (e.g., PCI-DSS)"
+    severity: "critical"
+    examples:
+      - bad: "Data must be secure"
+        good: "Encrypt at rest with AES-256, TLS 1.3 in transit, OAuth 2.0 authentication"
+
+  vague_reliability:
+    patterns:
+      - "reliable"
+      - "availability"
+      - "uptime"
+      - "always available"
+      - "highly available"
+      - "fault tolerant"
+    clarification_template: "Define reliability targets: uptime SLA (e.g., 99.9%), RTO (Recovery Time Objective), RPO (Recovery Point Objective), failure handling"
+    severity: "warning"
+    examples:
+      - bad: "System should be reliable"
+        good: "99.9% uptime SLA, RTO < 1 hour, RPO < 5 minutes"
+
+  vague_usability:
+    patterns:
+      - "user-friendly"
+      - "intuitive"
+      - "easy to use"
+      - "simple"
+      - "straightforward"
+      - "accessible"
+    clarification_template: "Define usability requirements: accessibility standards (e.g., WCAG 2.1 AA), supported devices, user testing criteria, specific UX flows"
+    severity: "info"
+    examples:
+      - bad: "Interface should be user-friendly"
+        good: "WCAG 2.1 AA compliant, < 3 clicks to complete checkout, mobile-responsive"
+
+  vague_data_size:
+    patterns:
+      - "large data"
+      - "big data"
+      - "small data"
+      - "huge files"
+      - "massive dataset"
+    clarification_template: "Specify data sizes: max file size (e.g., 100MB), record count (e.g., 1M rows), storage capacity (e.g., 1TB)"
+    severity: "warning"
+    examples:
+      - bad: "Handle large files"
+        good: "Support files up to 100MB, with chunked upload for files > 10MB"
+
+  vague_quality:
+    patterns:
+      - "high quality"
+      - "good quality"
+      - "production quality"
+      - "enterprise grade"
+    clarification_template: "Define quality metrics: test coverage (e.g., > 80%), code review requirements, performance benchmarks, monitoring requirements"
+    severity: "info"
+
+  vague_compatibility:
+    patterns:
+      - "compatible"
+      - "works with"
+      - "supports"
+      - "integrates with"
+    clarification_template: "Specify compatibility requirements: exact versions (e.g., Python 3.9+), API versions, protocol specifications, backward compatibility guarantees"
+    severity: "warning"
+    examples:
+      - bad: "Compatible with browsers"
+        good: "Support Chrome 90+, Firefox 88+, Safari 14+, Edge 90+"
+
+required_specifications:
+  api_endpoint:
+    must_define:
+      - success_response_format: "JSON schema or example of successful response"
+      - error_response_format: "Structure of error responses with codes"
+      - authentication_required: "Auth method (e.g., Bearer token, API key)"
+      - rate_limits: "Requests per time period (e.g., 100/minute)"
+      - timeout_values: "Request timeout (e.g., 30 seconds)"
+      - validation_rules: "Input validation requirements"
+      - http_methods: "Allowed HTTP methods (GET, POST, etc.)"
+      - status_codes: "All possible HTTP status codes returned"
+    optional_but_recommended:
+      - versioning_strategy: "API versioning approach"
+      - pagination: "How paginated results work"
+      - filtering: "Query parameter filtering options"
+      - sorting: "Sorting capabilities"
+
+  data_storage:
+    must_define:
+      - retention_period: "How long data is kept (e.g., 7 years)"
+      - backup_strategy: "Backup frequency and retention"
+      - encryption_requirements: "At-rest and in-transit encryption"
+      - consistency_model: "ACID, eventual consistency, etc."
+      - data_format: "Storage format (JSON, binary, etc.)"
+    optional_but_recommended:
+      - archival_strategy: "Long-term archival approach"
+      - compression: "Data compression method"
+      - partitioning: "Sharding or partitioning strategy"
+
+  external_integration:
+    must_define:
+      - timeout_handling: "Timeout duration and behavior"
+      - retry_strategy: "Retry count, backoff algorithm"
+      - fallback_behavior: "What happens when external service unavailable"
+      - error_scenarios: "Expected error cases and handling"
+      - authentication: "How to authenticate with external service"
+    optional_but_recommended:
+      - circuit_breaker: "Circuit breaker pattern usage"
+      - caching: "Response caching strategy"
+      - monitoring: "Health check approach"
+
+  user_input:
+    must_define:
+      - field_format: "Expected format (email, phone, etc.)"
+      - validation_rules: "Validation logic (regex, length, etc.)"
+      - required_optional: "Which fields are required"
+      - allowed_values: "Enum values or range constraints"
+      - sanitization: "Input sanitization approach"
+    optional_but_recommended:
+      - default_values: "Default field values"
+      - error_messages: "User-facing validation errors"
+
+  batch_operation:
+    must_define:
+      - batch_size: "Max items per batch"
+      - timeout_per_batch: "Processing timeout"
+      - partial_failure_handling: "What happens if some items fail"
+      - ordering_guarantees: "Processing order guarantees"
+    optional_but_recommended:
+      - progress_tracking: "How to track batch progress"
+      - cancellation: "Can batch be cancelled mid-processing"
+
+error_scenario_categories:
+  network_errors:
+    scenarios:
+      - "Connection timeout"
+      - "DNS resolution failure"
+      - "Connection refused"
+      - "Network unreachable"
+      - "SSL/TLS handshake failure"
+    must_specify:
+      - retry_behavior
+      - timeout_duration
+      - fallback_response
+
+  validation_errors:
+    scenarios:
+      - "Invalid format (email, phone, etc.)"
+      - "Out of range values"
+      - "Missing required fields"
+      - "Type mismatch"
+      - "Size limit exceeded"
+    must_specify:
+      - error_codes
+      - user_facing_messages
+      - field_level_errors
+
+  resource_errors:
+    scenarios:
+      - "Database connection pool exhausted"
+      - "Out of memory"
+      - "Disk full"
+      - "Rate limit exceeded"
+      - "Quota exceeded"
+    must_specify:
+      - http_status_code
+      - retry_after_guidance
+      - user_notification
+
+  concurrency_errors:
+    scenarios:
+      - "Optimistic lock failure"
+      - "Deadlock"
+      - "Race condition"
+      - "Duplicate request"
+    must_specify:
+      - retry_strategy
+      - conflict_resolution
+      - idempotency_handling
+
+  external_service_errors:
+    scenarios:
+      - "Service unavailable (503)"
+      - "Service timeout"
+      - "Invalid response format"
+      - "Unexpected status code"
+      - "Circuit breaker open"
+    must_specify:
+      - fallback_behavior
+      - caching_strategy
+      - degraded_mode_operation
+
+  authentication_errors:
+    scenarios:
+      - "Missing credentials"
+      - "Invalid credentials"
+      - "Expired token"
+      - "Insufficient permissions"
+      - "Account locked"
+    must_specify:
+      - http_status_codes
+      - token_refresh_flow
+      - user_feedback
+
+validation_requirements:
+  email_field:
+    must_specify:
+      - format_validation: "RFC 5322 or simpler regex"
+      - max_length: "e.g., 255 characters"
+      - required_optional: "Is field required?"
+      - case_sensitivity: "Normalize to lowercase?"
+    examples:
+      - "email: required, RFC 5322 format, max 255 chars, normalized to lowercase"
+
+  numeric_field:
+    must_specify:
+      - data_type: "integer, decimal, float"
+      - min_max_values: "Range constraints"
+      - precision: "Decimal places if applicable"
+      - required_optional: "Is field required?"
+    examples:
+      - "age: required, integer, 18-120 inclusive"
+      - "amount: required, decimal(10,2), 0.01-999999.99"
+
+  string_field:
+    must_specify:
+      - min_length: "Minimum characters"
+      - max_length: "Maximum characters"
+      - allowed_characters: "Pattern or character set"
+      - required_optional: "Is field required?"
+    examples:
+      - "username: required, 3-20 chars, alphanumeric + underscore"
+      - "bio: optional, max 500 chars, UTF-8 text"
+
+  datetime_field:
+    must_specify:
+      - format: "ISO 8601, Unix timestamp, etc."
+      - timezone_handling: "UTC, local, user timezone?"
+      - min_max_dates: "Valid date range"
+      - required_optional: "Is field required?"
+    examples:
+      - "created_at: required, ISO 8601 UTC, server-generated"
+      - "birth_date: required, YYYY-MM-DD, 1900-01-01 to today"
+
+  enum_field:
+    must_specify:
+      - allowed_values: "Complete list of valid values"
+      - case_sensitivity: "Exact match or case-insensitive?"
+      - default_value: "Default if not provided"
+      - required_optional: "Is field required?"
+    examples:
+      - "status: required, enum(active,inactive,suspended), default=active"
+
+  file_upload_field:
+    must_specify:
+      - max_file_size: "e.g., 10MB"
+      - allowed_mime_types: "e.g., image/jpeg, image/png"
+      - virus_scanning: "Is antivirus required?"
+      - storage_location: "Where files are stored"
+    examples:
+      - "avatar: optional, max 5MB, JPEG/PNG only, S3 storage"
+
+  array_field:
+    must_specify:
+      - min_items: "Minimum array length"
+      - max_items: "Maximum array length"
+      - item_type: "Type of array elements"
+      - duplicates_allowed: "Can array contain duplicates?"
+    examples:
+      - "tags: optional, 0-10 items, string, unique values only"
+
+operations_requiring_error_scenarios:
+  - "database query"
+  - "database write"
+  - "API call"
+  - "HTTP request"
+  - "file read"
+  - "file write"
+  - "network communication"
+  - "external service"
+  - "payment processing"
+  - "authentication"
+  - "authorization"
+  - "data transformation"
+  - "batch processing"
+  - "async operation"
+  - "cache access"
+  - "message queue"

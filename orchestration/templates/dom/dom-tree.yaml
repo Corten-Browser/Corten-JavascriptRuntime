@@ -1,0 +1,98 @@
+template_id: "dom-dom-tree"
+template_name: "DOM Tree Data Structure"
+category: "dom"
+difficulty: "hard"
+estimated_loc: "8000-12000"
+
+keywords:
+  - "dom"
+  - "tree"
+  - "element"
+  - "node"
+  - "document"
+  - "html"
+
+parameters:
+  - name: "node_types"
+    type: "array"
+    options: ["element", "text", "comment", "document", "document_fragment"]
+  - name: "tree_features"
+    type: "array"
+    options: ["live_collections", "mutation_observers", "tree_walker"]
+
+core_interfaces:
+  - name: "Node"
+    methods:
+      - "fn node_type(&self) -> NodeType"
+      - "fn parent_node(&self) -> Option<NodeRef>"
+      - "fn child_nodes(&self) -> NodeList"
+      - "fn append_child(&mut self, child: Node) -> Result<(), DomError>"
+  - name: "Element"
+    methods:
+      - "fn tag_name(&self) -> &str"
+      - "fn get_attribute(&self, name: &str) -> Option<&str>"
+      - "fn set_attribute(&mut self, name: &str, value: &str)"
+
+recommended_libraries:
+  rust:
+    - name: "html5ever"
+      version: "0.26"
+      required: true
+      purpose: "HTML parsing to DOM"
+      registry_url: "https://crates.io/crates/html5ever"
+    - name: "servo-arc"
+      version: "0.3"
+      required: true
+      purpose: "Shared ownership for nodes"
+      registry_url: "https://crates.io/crates/servo-arc"
+    - name: "string_cache"
+      version: "0.8"
+      required: false
+      purpose: "Interned strings for tag/attribute names"
+      registry_url: "https://crates.io/crates/string_cache"
+  python:
+    - name: "lxml"
+      version: "5.1"
+      required: true
+      purpose: "XML/HTML processing"
+      registry_url: "https://pypi.org/project/lxml/"
+    - name: "html5lib"
+      version: "1.1"
+      required: true
+      purpose: "HTML5 parser"
+      registry_url: "https://pypi.org/project/html5lib/"
+
+acceptance_criteria:
+  - "Tree structure maintains parent/child relationships"
+  - "AppendChild/removeChild update relationships correctly"
+  - "querySelector returns correct elements"
+  - "Mutation events fire on tree modifications"
+  - "Performance: Manipulate 10,000 nodes in < 200ms"
+
+test_strategy:
+  unit_tests:
+    - "Node creation and initialization"
+    - "Tree manipulation (append, remove, insert)"
+    - "Attribute get/set operations"
+  integration_tests:
+    - "Full document parsing and manipulation"
+    - "querySelector with complex selectors"
+  public_test_suites:
+    - name: "DOM WPT Tests"
+      url: "https://github.com/web-platform-tests/wpt/tree/master/dom"
+      target_pass_rate: 85
+
+implementation_hints:
+  - "Use arena allocation for nodes (typed-arena crate)"
+  - "Store children as Vec for O(1) append"
+  - "Use Rc<RefCell<>> for shared mutable access"
+
+common_pitfalls:
+  - issue: "Circular references causing memory leaks"
+    solution: "Use Weak pointers for parent references"
+  - issue: "Mutation during iteration"
+    solution: "Clone node list before iterating"
+
+related_templates:
+  - "template://dom/element-interface"
+  - "template://dom/event-system"

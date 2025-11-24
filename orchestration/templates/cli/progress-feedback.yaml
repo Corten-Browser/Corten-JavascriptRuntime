@@ -1,0 +1,177 @@
+template_id: "cli-progress-feedback"
+template_name: "CLI Progress Bars and Status Indicators"
+category: "cli"
+difficulty: "easy"
+estimated_loc: "500-1500"
+
+keywords:
+  - "progress"
+  - "progress bar"
+  - "spinner"
+  - "status"
+  - "tqdm"
+  - "indicatif"
+  - "cli feedback"
+  - "loading"
+  - "rich"
+
+parameters:
+  - name: "indicator_types"
+    type: "array"
+    options: ["progress_bar", "spinner", "multi_progress", "table"]
+  - name: "features"
+    type: "array"
+    options: ["eta", "speed", "color", "nested_progress"]
+
+core_interfaces:
+  - name: "ProgressBar"
+    methods:
+      - "fn new(total: u64) -> ProgressBar"
+      - "fn inc(&mut self, delta: u64)"
+      - "fn set_message(&mut self, message: &str)"
+      - "fn finish(&self)"
+  - name: "Spinner"
+    methods:
+      - "fn new(message: &str) -> Spinner"
+      - "fn tick(&mut self)"
+      - "fn finish_with_message(&self, message: &str)"
+
+recommended_libraries:
+  rust:
+    - name: "indicatif"
+      version: "0.17"
+      required: true
+      purpose: "Progress bars and spinners"
+      registry_url: "https://crates.io/crates/indicatif"
+    - name: "console"
+      version: "0.15"
+      required: false
+      purpose: "Terminal colors and styling"
+      registry_url: "https://crates.io/crates/console"
+  python:
+    - name: "tqdm"
+      version: "4.66"
+      required: true
+      purpose: "Fast, extensible progress bar"
+      registry_url: "https://pypi.org/project/tqdm/"
+    - name: "rich"
+      version: "13.7"
+      required: true
+      purpose: "Rich terminal formatting (tables, progress, etc.)"
+      registry_url: "https://pypi.org/project/rich/"
+    - name: "click"
+      version: "8.1"
+      required: false
+      purpose: "click.progressbar for simple cases"
+      registry_url: "https://pypi.org/project/click/"
+
+acceptance_criteria:
+  - "Display progress bar with percentage"
+  - "Show estimated time remaining (ETA)"
+  - "Display processing speed (items/sec)"
+  - "Support spinners for indeterminate tasks"
+  - "Handle multiple concurrent progress bars"
+  - "Clean terminal output (no artifacts)"
+  - "Color support (optional, check terminal capability)"
+  - "Performance: < 1ms overhead per update"
+
+test_strategy:
+  unit_tests:
+    - "Progress calculation (percentage, ETA)"
+    - "Message formatting"
+  integration_tests:
+    - "Full task with progress updates"
+    - "Multiple nested progress bars"
+  visual_tests:
+    - "Manual verification in different terminals"
+    - "Test on Windows Command Prompt, PowerShell, Unix terminals"
+  benchmarks:
+    - "Update frequency impact on performance"
+
+implementation_hints:
+  - "Use tqdm for Python (simple, fast, widely compatible)"
+  - "Use rich.progress for advanced Python (tables, multiple bars)"
+  - "Use indicatif for Rust (excellent API, good defaults)"
+  - "Update progress in chunks (every 100 items, not every item)"
+  - "Use spinners for network requests / indeterminate tasks"
+  - "Add descriptive messages ('Processing file X...')"
+  - "Disable progress bars when output redirected (not a TTY)"
+
+common_pitfalls:
+  - issue: "Progress bar flickering"
+    solution: "Update less frequently (batch updates)"
+  - issue: "Broken output when redirecting to file"
+    solution: "Detect TTY: if sys.stdout.isatty() / console::Term::stdout().is_term()"
+  - issue: "Progress bar doesn't clear after completion"
+    solution: "Call .finish() or .clear() explicitly"
+  - issue: "Performance degradation from frequent updates"
+    solution: "Update every N iterations (N=100 or 1000)"
+  - issue: "Colors not working in some terminals"
+    solution: "Check for color support, disable if not available"
+
+progress_indicators:
+  progress_bar:
+    description: "Determinate progress (known total)"
+    use_case: "File processing, batch operations"
+    example: "[████████████░░░░░░░░] 60% (ETA: 2m 30s)"
+  spinner:
+    description: "Indeterminate progress (unknown duration)"
+    use_case: "Network requests, waiting for external process"
+    example: "⠋ Waiting for server response..."
+  multi_progress:
+    description: "Multiple concurrent progress bars"
+    use_case: "Parallel downloads, multi-threaded processing"
+    example: "File 1: [██████████] 100%\nFile 2: [████░░░░░░] 40%"
+
+example_python_tqdm: |
+  from tqdm import tqdm
+  import time
+
+  # Simple progress bar
+  for i in tqdm(range(100), desc="Processing"):
+      time.sleep(0.01)  # Simulate work
+
+  # With custom format
+  with tqdm(total=1000, desc="Files", unit="file", unit_scale=True) as pbar:
+      for i in range(1000):
+          # Do work
+          pbar.update(1)
+          pbar.set_postfix({"current": f"file_{i}.txt"})
+
+example_python_rich: |
+  from rich.progress import Progress
+  import time
+
+  with Progress() as progress:
+      task1 = progress.add_task("[red]Downloading...", total=100)
+      task2 = progress.add_task("[green]Processing...", total=100)
+
+      while not progress.finished:
+          progress.update(task1, advance=0.9)
+          progress.update(task2, advance=0.3)
+          time.sleep(0.02)
+
+example_rust_indicatif: |
+  use indicatif::{ProgressBar, ProgressStyle};
+  use std::thread;
+  use std::time::Duration;
+
+  let pb = ProgressBar::new(100);
+  pb.set_style(
+      ProgressStyle::default_bar()
+          .template("[{elapsed_precise}] {bar:40.cyan/blue} {pos:>7}/{len:7} {msg}")
+          .unwrap()
+          .progress_chars("##-")
+  );
+
+  for i in 0..100 {
+      pb.set_message(format!("Processing item {}", i));
+      pb.inc(1);
+      thread::sleep(Duration::from_millis(50));
+  }
+
+  pb.finish_with_message("Done!");
+
+related_templates:
+  - "template://cli/argument-parsing"
+  - "template://quality/logging-observability"

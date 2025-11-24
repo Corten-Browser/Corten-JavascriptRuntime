@@ -1,0 +1,429 @@
+# Semantic Verification Rules
+# Part of v0.4.0 quality enhancement system
+#
+# This file defines the semantic correctness rules used by semantic_verifier.py
+# to verify business logic completeness, error handling, data flow, and security.
+
+version: "1.0.0"
+last_updated: "2025-11-11"
+
+# Business Logic Patterns
+# Defines required elements for common business logic patterns
+business_logic_patterns:
+  password_reset:
+    description: "Password reset workflow verification"
+    required_elements:
+      - token_generation
+      - token_storage
+      - expiry_check
+      - invalidation_after_use
+      - rate_limiting
+    detection_keywords:
+      - reset_password
+      - password_reset
+      - forgot_password
+      - request_reset
+    severity: critical
+
+  user_registration:
+    description: "User registration workflow verification"
+    required_elements:
+      - email_uniqueness_check
+      - password_hashing
+      - activation_email
+      - duplicate_prevention
+    detection_keywords:
+      - register
+      - signup
+      - create_user
+      - register_user
+    severity: critical
+
+  authentication:
+    description: "User authentication workflow verification"
+    required_elements:
+      - password_verification
+      - session_creation
+      - failed_attempt_tracking
+      - account_lockout
+    detection_keywords:
+      - login
+      - authenticate
+      - sign_in
+      - verify_credentials
+    severity: critical
+
+  payment_processing:
+    description: "Payment processing workflow verification"
+    required_elements:
+      - amount_validation
+      - idempotency_check
+      - transaction_logging
+      - rollback_mechanism
+      - fraud_check
+    detection_keywords:
+      - payment
+      - charge
+      - process_payment
+      - transaction
+      - purchase
+    severity: critical
+
+  data_export:
+    description: "Data export workflow verification"
+    required_elements:
+      - authorization_check
+      - data_filtering
+      - size_limits
+      - format_validation
+      - audit_logging
+    detection_keywords:
+      - export
+      - download
+      - export_data
+      - generate_report
+    severity: warning
+
+  email_sending:
+    description: "Email sending workflow verification"
+    required_elements:
+      - recipient_validation
+      - rate_limiting
+      - template_validation
+      - error_handling
+      - delivery_tracking
+    detection_keywords:
+      - send_email
+      - send_mail
+      - email_notification
+      - mail_send
+    severity: warning
+
+# Error Handling Requirements
+# Defines required error handling for risky operations
+error_handling_requirements:
+  database_operations:
+    description: "Database operation error handling"
+    must_handle:
+      - connection_failure
+      - timeout
+      - constraint_violation
+      - deadlock
+      - transaction_rollback
+    detection_patterns:
+      - '\\.execute\\('
+      - '\\.query\\('
+      - '\\.insert\\('
+      - '\\.update\\('
+      - '\\.delete\\('
+      - '\\.commit\\('
+    severity: critical
+
+  external_api_calls:
+    description: "External API call error handling"
+    must_handle:
+      - timeout
+      - connection_refused
+      - invalid_response
+      - rate_limit_exceeded
+      - authentication_failure
+      - ssl_error
+    detection_patterns:
+      - 'requests\\.'
+      - 'httpx\\.'
+      - 'urllib\\.'
+      - 'http\\.client'
+      - 'aiohttp\\.'
+    severity: critical
+
+  file_operations:
+    description: "File operation error handling"
+    must_handle:
+      - file_not_found
+      - permission_denied
+      - disk_full
+      - invalid_path
+    detection_patterns:
+      - 'open\\('
+      - '\\.read\\('
+      - '\\.write\\('
+      - 'Path\\('
+      - 'os\\.path'
+    severity: warning
+
+  cache_operations:
+    description: "Cache operation error handling"
+    must_handle:
+      - connection_failure
+      - timeout
+      - key_not_found
+      - serialization_error
+    detection_patterns:
+      - 'redis\\.'
+      - 'memcache\\.'
+      - '\\.get\\('
+      - '\\.set\\('
+      - 'cache\\.'
+    severity: warning
+
+  message_queue_operations:
+    description: "Message queue error handling"
+    must_handle:
+      - connection_failure
+      - timeout
+      - queue_full
+      - serialization_error
+      - dead_letter_handling
+    detection_patterns:
+      - 'rabbitmq'
+      - 'kafka'
+      - 'celery'
+      - 'publish\\('
+      - 'consume\\('
+    severity: critical
+
+# Data Flow Validation
+# Rules for data validation and transformation
+data_flow_validation:
+  input_validation:
+    description: "Input validation requirements"
+    required_checks:
+      - type_validation
+      - range_validation
+      - format_validation
+      - sanitization
+    entry_points:
+      - api_endpoints
+      - cli_commands
+      - message_handlers
+      - file_parsers
+    severity: critical
+
+  output_validation:
+    description: "Output validation requirements"
+    required_checks:
+      - format_consistency
+      - encoding_validation
+      - size_limits
+      - schema_compliance
+    exit_points:
+      - api_responses
+      - file_writes
+      - external_api_calls
+    severity: warning
+
+  data_transformation:
+    description: "Data transformation validation"
+    required_checks:
+      - preserve_data_integrity
+      - handle_null_values
+      - maintain_consistency
+      - validate_results
+    severity: warning
+
+# Security Patterns
+# Security requirements and vulnerability detection
+security_patterns:
+  authentication_requirements:
+    description: "Authentication enforcement"
+    required_decorators:
+      - require_auth
+      - login_required
+      - authenticated
+      - require_permission
+      - authorize
+    endpoint_patterns:
+      - '@route'
+      - '@get'
+      - '@post'
+      - '@put'
+      - '@delete'
+      - '@patch'
+    exceptions:  # Endpoints that don't need auth
+      - health
+      - metrics
+      - ping
+      - status
+      - version
+    severity: warning
+
+  pii_protection:
+    description: "PII data protection"
+    pii_fields:
+      - password
+      - ssn
+      - social_security
+      - credit_card
+      - card_number
+      - cvv
+      - pin
+      - secret
+      - token
+      - api_key
+      - private_key
+      - address
+      - phone
+      - email  # In some contexts
+    forbidden_actions:
+      - logging
+      - url_parameters
+      - error_messages
+      - debug_output
+    severity: critical
+
+  sql_injection_prevention:
+    description: "SQL injection vulnerability detection"
+    vulnerable_patterns:
+      - 'execute\\s*\\(\\s*f["\']'  # f-string in execute
+      - 'execute\\s*\\(\\s*["\'].*\\+'  # String concatenation
+      - 'query\\s*\\(\\s*f["\']'
+      - 'query\\s*\\(\\s*["\'].*\\+'
+      - '\\.format\\(.*execute'
+      - '%.*execute'
+    safe_patterns:
+      - 'execute\\(.*,\\s*\\('  # Parameterized with tuple
+      - 'execute\\(.*,\\s*\\['  # Parameterized with list
+      - 'execute\\(.*params='  # Named params
+    severity: critical
+
+  xss_prevention:
+    description: "XSS vulnerability detection"
+    vulnerable_patterns:
+      - 'innerHTML.*=.*request'
+      - 'dangerouslySetInnerHTML'
+      - 'document\\.write\\(.*request'
+      - 'eval\\(.*request'
+    safe_patterns:
+      - 'escape\\('
+      - 'sanitize\\('
+      - 'bleach\\.'
+      - 'html\\.escape'
+    severity: critical
+
+  csrf_protection:
+    description: "CSRF protection verification"
+    required_for:
+      - POST
+      - PUT
+      - DELETE
+      - PATCH
+    protection_mechanisms:
+      - csrf_token
+      - csrf_protect
+      - same_origin_check
+    severity: warning
+
+  secrets_management:
+    description: "Secrets management verification"
+    forbidden_locations:
+      - hardcoded_in_source
+      - environment_variables  # Use secrets manager instead
+      - configuration_files
+      - version_control
+    safe_locations:
+      - secrets_manager
+      - vault
+      - encrypted_store
+    severity: critical
+
+# Code Quality Patterns
+# General code quality and maintainability
+code_quality_patterns:
+  function_complexity:
+    description: "Function complexity limits"
+    max_lines: 50
+    max_branches: 10
+    max_nesting_depth: 4
+    severity: warning
+
+  naming_conventions:
+    description: "Naming convention enforcement"
+    patterns:
+      functions: snake_case
+      classes: PascalCase
+      constants: UPPER_SNAKE_CASE
+      private: _prefix
+    severity: info
+
+  documentation:
+    description: "Documentation requirements"
+    required_for:
+      - public_functions
+      - classes
+      - modules
+      - complex_algorithms
+    min_docstring_length: 10
+    severity: info
+
+# Testing Requirements
+# Testing coverage and quality requirements
+testing_requirements:
+  business_logic:
+    description: "Business logic testing requirements"
+    required_tests:
+      - happy_path
+      - error_cases
+      - edge_cases
+      - boundary_conditions
+    min_coverage: 80
+    severity: critical
+
+  integration_tests:
+    description: "Integration testing requirements"
+    required_for:
+      - external_api_integration
+      - database_operations
+      - message_queue_operations
+      - cache_operations
+    severity: warning
+
+  security_tests:
+    description: "Security testing requirements"
+    required_tests:
+      - authentication_tests
+      - authorization_tests
+      - input_validation_tests
+      - injection_prevention_tests
+    severity: critical
+
+# Custom Rules (Project-Specific)
+# Add project-specific rules here
+custom_rules: {}
+
+# Rule Severity Levels
+severity_levels:
+  critical:
+    description: "Must fix - blocks deployment"
+    fail_build: true
+  warning:
+    description: "Should fix - review required"
+    fail_build: false
+  info:
+    description: "Nice to have - improvement suggestion"
+    fail_build: false
+
+# Verification Settings
+verification_settings:
+  # Skip verification for these file patterns
+  exclude_patterns:
+    - "*/test_*.py"
+    - "*/tests/*"
+    - "*/__pycache__/*"
+    - "*/migrations/*"
+    - "*/venv/*"
+    - "*/.git/*"
+
+  # Minimum severity to report
+  min_severity: "info"
+
+  # Maximum issues before stopping (0 = unlimited)
+  max_issues: 0
+
+  # Generate detailed reports
+  detailed_reports: true
+
+  # Save results to JSON
+  save_json: true
+
+  # Output directory for reports
+  output_dir: "verification_reports"

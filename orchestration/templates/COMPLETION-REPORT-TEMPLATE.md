@@ -170,7 +170,7 @@ Coverage: 87%
 [PASTE PHASE 5 GATE OUTPUT HERE - MANDATORY]
 
 Required command:
-$ python orchestration/phase_gates/gate_runner.py . 5
+$ python orchestration/gates/runner.py . 5
 
 OR if using enforced wrapper:
 $ python orchestration/orchestrate_enforced.py run-phase 5
@@ -233,7 +233,7 @@ tests/integration/test_end_to_end.py::test_full_workflow PASSED
 [PASTE PHASE 6 GATE OUTPUT HERE - MANDATORY]
 
 Required command:
-$ python orchestration/phase_gates/gate_runner.py . 6
+$ python orchestration/gates/runner.py . 6
 
 OR if using enforced wrapper:
 $ python orchestration/orchestrate_enforced.py run-phase 6

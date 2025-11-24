@@ -1,0 +1,168 @@
+template_id: "audio-signal-processing"
+template_name: "Audio Signal Processing and Analysis"
+category: "audio"
+difficulty: "hard"
+estimated_loc: "3000-6000"
+
+keywords:
+  - "signal processing"
+  - "fft"
+  - "spectrogram"
+  - "filter"
+  - "frequency"
+  - "audio analysis"
+  - "dsp"
+  - "fourier"
+  - "windowing"
+
+parameters:
+  - name: "processing_types"
+    type: "array"
+    options: ["filtering", "fft", "spectrogram", "resampling", "normalization"]
+  - name: "window_function"
+    type: "string"
+    options: ["hann", "hamming", "blackman", "rectangular"]
+    default: "hann"
+
+core_interfaces:
+  - name: "SignalProcessor"
+    methods:
+      - "fn fft(&self, signal: &[f32]) -> Vec<Complex<f32>>"
+      - "fn spectrogram(&self, signal: &[f32], window_size: usize, hop: usize) -> Matrix<f32>"
+      - "fn filter(&self, signal: &[f32], filter: Filter) -> Vec<f32>"
+      - "fn resample(&self, signal: &[f32], from_rate: u32, to_rate: u32) -> Vec<f32>"
+  - name: "Filter"
+    methods:
+      - "fn lowpass(cutoff: f32, sample_rate: u32) -> Filter"
+      - "fn highpass(cutoff: f32, sample_rate: u32) -> Filter"
+      - "fn bandpass(low: f32, high: f32, sample_rate: u32) -> Filter"
+
+recommended_libraries:
+  rust:
+    - name: "rustfft"
+      version: "6.1"
+      required: true
+      purpose: "Fast Fourier Transform"
+      registry_url: "https://crates.io/crates/rustfft"
+    - name: "dasp"
+      version: "0.11"
+      required: false
+      purpose: "Digital audio signal processing"
+      registry_url: "https://crates.io/crates/dasp"
+    - name: "rubato"
+      version: "0.14"
+      required: false
+      purpose: "Audio resampling"
+      registry_url: "https://crates.io/crates/rubato"
+  python:
+    - name: "scipy"
+      version: "1.11"
+      required: true
+      purpose: "scipy.signal for filtering, FFT, spectrograms"
+      registry_url: "https://pypi.org/project/scipy/"
+    - name: "librosa"
+      version: "0.10"
+      required: true
+      purpose: "Audio and music analysis"
+      registry_url: "https://pypi.org/project/librosa/"
+    - name: "numpy"
+      version: "1.26"
+      required: true
+      purpose: "Array operations"
+      registry_url: "https://pypi.org/project/numpy/"
+
+acceptance_criteria:
+  - "Compute FFT (Fast Fourier Transform)"
+  - "Generate spectrograms (time-frequency representation)"
+  - "Apply filters (lowpass, highpass, bandpass)"
+  - "Resample audio (change sample rate)"
+  - "Window functions (Hann, Hamming, etc.)"
+  - "Normalize audio (peak, RMS, LUFS)"
+  - "Performance: FFT of 1 second audio (44.1kHz) in < 10ms"
+
+test_strategy:
+  unit_tests:
+    - "FFT correctness (compare with known results)"
+    - "Filter frequency response"
+    - "Window function shape"
+    - "Resampling accuracy"
+  integration_tests:
+    - "Full spectrogram generation"
+    - "Filtering preserves signal shape"
+  validation_tests:
+    - "Compare with reference implementations (MATLAB, scipy)"
+    - "Signal-to-noise ratio after processing"
+  benchmarks:
+    - "FFT performance vs size"
+    - "Spectrogram generation time"
+
+implementation_hints:
+  - "Use rustfft for Rust, scipy.fft for Python"
+  - "Apply window function before FFT (reduce spectral leakage)"
+  - "Use overlap for spectrograms (hop = window_size / 2)"
+  - "Choose FFT size as power of 2 (fastest)"
+  - "Normalize FFT output (divide by window size)"
+  - "Use scipy.signal.butter for Butterworth filters"
+  - "Use librosa.resample for high-quality resampling"
+
+common_pitfalls:
+  - issue: "Spectral leakage in FFT"
+    solution: "Apply window function (Hann, Hamming) before FFT"
+  - issue: "Aliasing when downsampling"
+    solution: "Apply lowpass filter before downsampling"
+  - issue: "Slow FFT for non-power-of-2 sizes"
+    solution: "Zero-pad to next power of 2"
+  - issue: "Filter ringing artifacts"
+    solution: "Use higher-order filter or different design (FIR vs IIR)"
+  - issue: "DC offset causing issues"
+    solution: "Remove DC component: signal -= signal.mean()"
+  - issue: "Numerical instability in filters"
+    solution: "Use second-order sections (sos) representation"
+
+signal_processing_concepts:
+  fft:
+    description: "Convert time domain → frequency domain"
+    use_case: "Identify frequency content, pitch detection"
+  spectrogram:
+    description: "Time-frequency representation (2D)"
+    use_case: "Visualize audio, feature extraction"
+  filtering:
+    description: "Remove unwanted frequencies"
+    use_case: "Noise reduction, bass boost, treble cut"
+  resampling:
+    description: "Change sample rate"
+    use_case: "Standardize to 44.1kHz, downsample for ML"
+  windowing:
+    description: "Apply window function to reduce edge effects"
+    use_case: "Improve FFT quality, reduce spectral leakage"
+
+example_usage: |
+  # Python with scipy and librosa
+  import numpy as np
+  import scipy.signal as signal
+  import librosa
+
+  # Load audio
+  audio, sr = librosa.load("audio.mp3", sr=44100)
+
+  # Compute spectrogram
+  D = librosa.stft(audio, n_fft=2048, hop_length=512, window='hann')
+  magnitude = np.abs(D)
+  power = magnitude ** 2
+
+  # Apply lowpass filter (cutoff 5kHz)
+  nyquist = sr / 2
+  cutoff = 5000 / nyquist
+  b, a = signal.butter(5, cutoff, btype='low')
+  filtered = signal.filtfilt(b, a, audio)
+
+  # Resample to 22.05kHz
+  resampled = librosa.resample(audio, orig_sr=sr, target_sr=22050)
+
+  # Normalize (peak normalization)
+  normalized = audio / np.max(np.abs(audio))
+
+related_templates:
+  - "template://audio/audio-file-io"
+  - "template://audio/feature-extraction"
+  - "template://scientific/data-analysis"

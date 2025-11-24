@@ -1,0 +1,60 @@
+{
+  "lifecycle_state": "released",
+  "breaking_changes_policy": "controlled",
+  "upgrade_policy": {
+    "backwards_compatible": true,
+    "deprecation_required": true,
+    "deprecation_period_versions": 2,
+    "migration_scripts_required": true,
+    "existing_installations_must_upgrade": true
+  },
+  "version_control": {
+    "allow_major_bump": true,
+    "require_user_approval": true,
+    "last_user_approved_version": "1.0.0",
+    "major_version_lock": false,
+    "restrictions": [
+      "Breaking changes require deprecation period (2 versions minimum)",
+      "New versions must include upgrade path for existing installations",
+      "API changes must maintain backwards compatibility",
+      "Major version bumps (1.x.x to 2.0.0) require explicit user approval"
+    ]
+  },
+  "architecture": {
+    "agent_execution": "task-tool",
+    "configuration": "orchestration-config.json",
+    "parallel_limit_configurable": true,
+    "restart_required": false
+  },
+  "distribution": {
+    "package_structure_required": true,
+    "no_hardcoded_paths": true,
+    "installable_via_pip": true,
+    "comprehensive_readme": true,
+    "multi_language_support": true,
+    "supported_languages": ["python", "javascript", "go", "rust"]
+  },
+  "enforcement": {
+    "gate_enforcement": true,
+    "state_tracking": true,
+    "evidence_based_reporting": true,
+    "blocking_gates": [5, 6],
+    "completion_report_required": true
+  },
+  "migration_notes": [
+    "1.8.0: Testing gap remediation - 8-layer defense-in-depth system prevents application layer bugs. E2E test infrastructure (3 templates: CLI subprocess execution with DB validation, Web service with HTTP requests, Library installation). Test data generators (6 types: audio WAV with sine waves, SQLite databases, CSV, JSON, text, images - no mocks). UAT executor runs actual user commands. Schema-contract validator detects DB/API mismatches. Runtime validation decorators (@validate_schema) catch missing fields at persistence. Phase 5 Gate enforces E2E tests for CLI/Web (100% pass rate required). Comprehensive docs (E2E-TESTING-GUIDE.md, TEST-LEVEL-REQUIREMENTS.md). Would have caught file_hash bug at 3+ points. Based on FailureAssessment/TESTING_GAP_ANALYSIS.md. Adds 2,915+ lines across 12 files.",
+    "1.7.2: Component naming convention enforcement - Comprehensive 6-layer enforcement system (documentation, prevention, detection, migration, auto-fix, pre-commit hooks). Universal pattern ^[a-z][a-z0-9_]* works across all languages. Multi-language migration system (Python, JS/TS, Rust, Go, C++, Java). Configuration-driven auto-fix policies. Includes 37 new files, 55+ tests, 550+ line user guide.",
+    "1.7.1: Critical installation fixes - Added VERSION file to SYSTEM_MANIFEST.json, improved system file synchronization, enhanced upgrade reliability",
+    "1.7.0: Orchestrate command consolidation - Merged /orchestrate-full into /orchestrate with --level flag. Added --help, --resume capabilities. Single command architecture (industry standard).",
+    "1.5.0: Template library expansion + hybrid feature extraction - Adds 40 feature templates (GUI/PySide6, AI/LLM, Audio, Scientific, CLI, Data, Testing, Deployment/Podman). Implements hybrid extraction (automated + LLM supplementation via /extract-features command). Removes version field from project-metadata.json (VERSION file is single source of truth).",
+    "1.0.0: STABLE RELEASE - Production deployment. Breaking changes now require deprecation. All future updates MUST include upgrade capability for existing installations. Upgrade scripts mandatory.",
+    "0.17.0: Gate enforcement system - Multi-layered defense (documentation + technical + process) prevents premature completion. Adds enforced wrapper, state tracking, evidence-based reports. Solves 'Looks Good But Breaks' pattern from Music Analyzer v1-v3 failures",
+    "0.16.0: Multi-language distribution support - Extends Checks 14-16 to JavaScript/TypeScript, Go, Rust via plugin architecture",
+    "0.15.0: Distribution-first redesign - Adds Checks 14-16, package structure standard, prevents hardcoded path failures",
+    "0.14.0: Programmatic enforcement via phase gates - Prevents premature stopping",
+    "0.13.0: Feature coverage testing - ALL declared features must be tested",
+    "0.12.0: README accuracy testing - Documentation examples validated",
+    "0.2.0: Removed MCP architecture, replaced with Task tool for parallel execution - BREAKING CHANGE",
+    "0.1.0: Initial release with MCP-based approach (deprecated)"
+  ]
+}

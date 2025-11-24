@@ -1,0 +1,137 @@
+template_id: "scientific-scientific-visualization"
+template_name: "Scientific Data Visualization"
+category: "scientific"
+difficulty: "medium"
+estimated_loc: "2000-5000"
+
+keywords:
+  - "visualization"
+  - "plotting"
+  - "chart"
+  - "graph"
+  - "plot"
+  - "matplotlib"
+  - "figure"
+  - "heatmap"
+  - "scatter"
+  - "interactive"
+
+parameters:
+  - name: "plot_types"
+    type: "array"
+    options: ["line", "scatter", "heatmap", "3d", "animation"]
+  - name: "interactivity"
+    type: "string"
+    options: ["static", "interactive", "web"]
+    default: "static"
+
+core_interfaces:
+  - name: "Visualizer"
+    methods:
+      - "fn line_plot(&mut self, x: &[f64], y: &[f64], label: &str) -> Plot"
+      - "fn scatter_plot(&mut self, x: &[f64], y: &[f64]) -> Plot"
+      - "fn heatmap(&mut self, data: &Matrix) -> Plot"
+      - "fn save(&self, path: &Path, format: ImageFormat)"
+  - name: "InteractivePlot"
+    methods:
+      - "fn add_hover_tooltip(&mut self, format: &str)"
+      - "fn add_zoom_pan(&mut self)"
+      - "fn export_html(&self, path: &Path)"
+
+recommended_libraries:
+  rust:
+    - name: "plotters"
+      version: "0.3"
+      required: true
+      purpose: "2D plotting library (static images)"
+      registry_url: "https://crates.io/crates/plotters"
+    - name: "plotly"
+      version: "0.8"
+      required: false
+      purpose: "Interactive plots (Plotly.js wrapper)"
+      registry_url: "https://crates.io/crates/plotly"
+    - name: "egui"
+      version: "0.25"
+      required: false
+      purpose: "Immediate mode GUI with plotting"
+      registry_url: "https://crates.io/crates/egui"
+    - name: "rerun"
+      version: "0.11"
+      required: false
+      purpose: "Visualize multimodal data over time"
+      registry_url: "https://crates.io/crates/rerun"
+  python:
+    - name: "matplotlib"
+      version: "3.8"
+      required: true
+      purpose: "Publication-quality 2D plotting"
+      registry_url: "https://pypi.org/project/matplotlib/"
+    - name: "seaborn"
+      version: "0.13"
+      required: true
+      purpose: "Statistical visualization (built on matplotlib)"
+      registry_url: "https://pypi.org/project/seaborn/"
+    - name: "plotly"
+      version: "5.18"
+      required: true
+      purpose: "Interactive plots and dashboards"
+      registry_url: "https://pypi.org/project/plotly/"
+    - name: "bokeh"
+      version: "3.3"
+      required: false
+      purpose: "Alternative interactive visualization"
+      registry_url: "https://pypi.org/project/bokeh/"
+
+acceptance_criteria:
+  - "Generate publication-quality plots (300+ DPI)"
+  - "Support multiple plot types (line, scatter, bar, heatmap, 3D)"
+  - "Export to multiple formats (PNG, SVG, PDF, HTML)"
+  - "Handle large datasets (100k+ points)"
+  - "Interactive features (zoom, pan, hover tooltips)"
+  - "Annotations and labels (axes, title, legend)"
+  - "Performance: Generate 10-panel figure in < 2 seconds"
+
+test_strategy:
+  unit_tests:
+    - "Plot generation (each type)"
+    - "Export to different formats"
+    - "Styling and theming"
+    - "Annotation placement"
+  integration_tests:
+    - "Multi-panel figures"
+    - "Large dataset handling"
+    - "Interactive plot features"
+  visual_regression_tests:
+    - "Compare generated plots against reference images"
+    - "Check for rendering artifacts"
+  benchmarks:
+    - "Rendering time vs data size"
+    - "Memory usage for large plots"
+
+implementation_hints:
+  - "Use matplotlib for Python (most mature, publication-ready)"
+  - "seaborn for statistical plots with better defaults"
+  - "plotly for interactive web-based visualizations"
+  - "plotters for Rust (pure Rust, no external deps)"
+  - "Set consistent style/theme across all plots"
+  - "Use vector formats (SVG, PDF) for scalability"
+  - "Downsample large datasets for performance (plot every nth point)"
+
+common_pitfalls:
+  - issue: "Plots too slow with large datasets"
+    solution: "Downsample, use rasterization for scatter plots"
+  - issue: "Poor figure quality in publications"
+    solution: "Use vector formats (SVG/PDF), DPI ≥ 300 for raster"
+  - issue: "Inconsistent styling across plots"
+    solution: "Define style sheet, apply globally (matplotlibrc)"
+  - issue: "Overlapping labels and annotations"
+    solution: "Use automatic layout (tight_layout), adjust manually"
+  - issue: "Interactive plots not working offline"
+    solution: "Embed JavaScript libraries in HTML export"
+
+depends_on:
+  - "template://scientific/data-analysis"
+
+related_templates:
+  - "template://scientific/numerical-simulation"
+  - "template://gui/pyside6-application"

@@ -1,0 +1,21 @@
+repos:
+- repo: local
+  hooks:
+  - id: orchestration-naming
+    name: Component naming validation
+    entry: python3 orchestration/hooks/pre_commit_naming.py
+    language: system
+    pass_filenames: false
+    always_run: true
+  - id: orchestration-enforcement
+    name: Orchestration enforcement
+    entry: python3 orchestration/hooks/pre_commit_enforcement.py
+    language: system
+    pass_filenames: false
+    always_run: true
+  - id: orchestration-completion-blocker
+    name: Completion blocker
+    entry: python3 orchestration/hooks/pre_commit_completion_blocker.py
+    language: system
+    pass_filenames: false
+    always_run: true

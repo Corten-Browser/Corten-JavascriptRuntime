@@ -1,0 +1,107 @@
+template_id: "shell-window-management"
+template_name: "Window Management and Chrome UI"
+category: "shell"
+difficulty: "hard"
+estimated_loc: "7000-12000"
+
+keywords:
+  - "window"
+  - "chrome"
+  - "tab"
+  - "toolbar"
+  - "menu"
+  - "ui"
+  - "shell"
+
+parameters:
+  - name: "ui_framework"
+    type: "string"
+    options: ["GTK", "Qt", "native"]
+  - name: "features"
+    type: "array"
+    options: ["tabs", "toolbar", "address_bar", "menus", "bookmarks"]
+
+core_interfaces:
+  - name: "WindowManager"
+    methods:
+      - "fn create_window(&mut self, config: WindowConfig) -> WindowId"
+      - "fn close_window(&mut self, window_id: WindowId)"
+      - "fn set_title(&mut self, window_id: WindowId, title: &str)"
+      - "fn resize(&mut self, window_id: WindowId, width: u32, height: u32)"
+  - name: "TabManager"
+    methods:
+      - "fn create_tab(&mut self, window_id: WindowId, url: &str) -> TabId"
+      - "fn close_tab(&mut self, tab_id: TabId)"
+      - "fn switch_tab(&mut self, window_id: WindowId, tab_id: TabId)"
+
+recommended_libraries:
+  rust:
+    - name: "winit"
+      version: "0.29"
+      required: true
+      purpose: "Cross-platform window creation"
+      registry_url: "https://crates.io/crates/winit"
+    - name: "egui"
+      version: "0.25"
+      required: false
+      purpose: "Immediate mode GUI for chrome UI"
+      registry_url: "https://crates.io/crates/egui"
+    - name: "iced"
+      version: "0.12"
+      required: false
+      purpose: "Elm-inspired GUI framework"
+      registry_url: "https://crates.io/crates/iced"
+  python:
+    - name: "PyQt6"
+      version: "6.6"
+      required: true
+      purpose: "Qt bindings for Python"
+      registry_url: "https://pypi.org/project/PyQt6/"
+    - name: "PyGObject"
+      version: "3.46"
+      required: false
+      purpose: "GTK bindings for Python"
+      registry_url: "https://pypi.org/project/PyGObject/"
+
+acceptance_criteria:
+  - "Create and display native windows"
+  - "Tab bar with add/close/switch functionality"
+  - "Address bar with URL input"
+  - "Toolbar with navigation buttons"
+  - "Menu bar (File, Edit, View, etc.)"
+  - "Handle window resize and minimize/maximize"
+  - "Performance: Window creation in < 100ms"
+
+test_strategy:
+  unit_tests:
+    - "Window creation/destruction"
+    - "Tab management operations"
+    - "Event handling (click, resize)"
+  integration_tests:
+    - "Full window lifecycle"
+    - "Multi-tab interactions"
+    - "Keyboard shortcuts"
+  benchmarks:
+    - "Window creation time"
+    - "Tab switching latency"
+
+implementation_hints:
+  - "Use winit for cross-platform window handling"
+  - "Integrate with OS native decorations"
+  - "Implement keyboard shortcuts (Ctrl+T, Ctrl+W)"
+  - "Use retained mode GUI for chrome (egui/iced)"
+
+common_pitfalls:
+  - issue: "Window flicker on resize"
+    solution: "Double-buffer rendering, defer repaints"
+  - issue: "Tabs not updating when page loads"
+    solution: "Implement observer pattern for page state"
+  - issue: "Memory leaks from unclosed tabs"
+    solution: "Properly destroy tab resources on close"
+  - issue: "Platform-specific window behavior"
+    solution: "Abstract platform differences behind traits"
+
+related_templates:
+  - "template://shell/tab-management"
+  - "template://shell/history-navigation"
+  - "template://rendering/paint-system"

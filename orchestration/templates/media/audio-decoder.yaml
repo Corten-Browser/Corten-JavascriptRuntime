@@ -1,0 +1,100 @@
+template_id: "media-audio-decoder"
+template_name: "Audio Codec Decoder"
+category: "media"
+difficulty: "hard"
+estimated_loc: "6000-10000"
+
+keywords:
+  - "audio"
+  - "decoder"
+  - "codec"
+  - "mp3"
+  - "aac"
+  - "opus"
+  - "vorbis"
+  - "pcm"
+
+parameters:
+  - name: "codecs"
+    type: "array"
+    options: ["MP3", "AAC", "Opus", "Vorbis", "FLAC"]
+  - name: "output_format"
+    type: "string"
+    options: ["f32", "i16", "i32"]
+    default: "f32"
+
+core_interfaces:
+  - name: "AudioDecoder"
+    methods:
+      - "fn new(codec: AudioCodec) -> Result<AudioDecoder, Error>"
+      - "fn decode_packet(&mut self, packet: &Packet) -> Result<AudioBuffer, Error>"
+      - "fn sample_rate(&self) -> u32"
+      - "fn channels(&self) -> u16"
+
+recommended_libraries:
+  rust:
+    - name: "symphonia"
+      version: "0.5"
+      required: true
+      purpose: "Pure Rust audio decoding"
+      registry_url: "https://crates.io/crates/symphonia"
+    - name: "cpal"
+      version: "0.15"
+      required: false
+      purpose: "Cross-platform audio I/O"
+      registry_url: "https://crates.io/crates/cpal"
+    - name: "rodio"
+      version: "0.17"
+      required: false
+      purpose: "High-level audio playback"
+      registry_url: "https://crates.io/crates/rodio"
+  python:
+    - name: "av"
+      version: "11.0"
+      required: true
+      purpose: "PyAV - FFmpeg bindings"
+      registry_url: "https://pypi.org/project/av/"
+    - name: "pydub"
+      version: "0.25"
+      required: false
+      purpose: "Audio processing library"
+      registry_url: "https://pypi.org/project/pydub/"
+
+acceptance_criteria:
+  - "Decode MP3 audio streams"
+  - "Decode AAC, Opus, Vorbis, FLAC"
+  - "Output PCM samples (f32 or i16)"
+  - "Handle mono, stereo, multi-channel"
+  - "Support variable bitrate (VBR)"
+  - "Performance: Decode faster than real-time (> 1x speed)"
+
+test_strategy:
+  unit_tests:
+    - "Decoder initialization"
+    - "Packet decoding (single packet)"
+    - "Sample format conversion"
+  integration_tests:
+    - "Full audio file decoding"
+    - "Multi-codec support"
+    - "Resampling (if needed)"
+  benchmarks:
+    - "Decode throughput (samples/sec)"
+    - "Memory usage per buffer"
+
+implementation_hints:
+  - "Use symphonia for pure Rust decoding"
+  - "Buffer decoded samples (avoid reallocations)"
+  - "Support planar and interleaved formats"
+  - "Implement sample rate conversion if needed"
+
+common_pitfalls:
+  - issue: "Audio crackling/pops"
+    solution: "Ensure continuous playback, no buffer underruns"
+  - issue: "Incorrect channel mapping"
+    solution: "Follow channel layout conventions (L, R, C, LFE, ...)"
+  - issue: "Memory leaks from unreleased buffers"
+    solution: "Use buffer pool, reuse allocations"
+
+related_templates:
+  - "template://media/video-decoder"
+  - "template://media/media-streaming"

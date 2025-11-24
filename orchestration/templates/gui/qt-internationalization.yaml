@@ -1,0 +1,153 @@
+template_id: "gui-qt-internationalization"
+template_name: "Qt Internationalization and Translation"
+category: "gui"
+difficulty: "medium"
+estimated_loc: "1000-3000"
+
+keywords:
+  - "internationalization"
+  - "i18n"
+  - "l10n"
+  - "translation"
+  - "localization"
+  - "multilingual"
+  - "language"
+  - "linguist"
+  - "qt"
+  - "tr()"
+
+parameters:
+  - name: "languages"
+    type: "array"
+    description: "Target languages (ISO 639-1 codes)"
+  - name: "features"
+    type: "array"
+    options: ["runtime_switching", "rtl_support", "plural_forms", "context"]
+
+core_interfaces:
+  - name: "TranslationManager"
+    methods:
+      - "def load_translation(self, language: str) -> bool"
+      - "def available_languages(self) -> List[str]"
+      - "def current_language(self) -> str"
+      - "def switch_language(self, language: str)"
+
+recommended_libraries:
+  rust:
+    - name: "fluent"
+      version: "0.16"
+      required: false
+      purpose: "Mozilla's localization system (not Qt)"
+      registry_url: "https://crates.io/crates/fluent"
+    - name: "gettext"
+      version: "0.4"
+      required: false
+      purpose: "GNU gettext for Rust (not Qt)"
+      registry_url: "https://crates.io/crates/gettext"
+  python:
+    - name: "PySide6"
+      version: "6.6"
+      required: true
+      purpose: "Qt framework with built-in i18n support"
+      registry_url: "https://pypi.org/project/PySide6/"
+    - name: "polib"
+      version: "1.2"
+      required: false
+      purpose: "Manipulate .po files (gettext format)"
+      registry_url: "https://pypi.org/project/polib/"
+    - name: "babel"
+      version: "2.14"
+      required: false
+      purpose: "Date/number/currency formatting per locale"
+      registry_url: "https://pypi.org/project/Babel/"
+
+acceptance_criteria:
+  - "Extract translatable strings with pylupdate6"
+  - "Translate strings in Qt Linguist"
+  - "Compile translations to .qm files with lrelease"
+  - "Load translations at runtime"
+  - "Switch languages dynamically without restart"
+  - "Support right-to-left (RTL) languages"
+  - "Handle plural forms correctly"
+  - "Performance: Language switch in < 100ms"
+
+test_strategy:
+  unit_tests:
+    - "Translation loading and lookup"
+    - "Plural form handling (1 item, 2 items, n items)"
+    - "Context-specific translations"
+  integration_tests:
+    - "Full translation workflow (extract → translate → compile → load)"
+    - "Runtime language switching"
+    - "RTL layout mirroring"
+  validation_tests:
+    - "Translation coverage (no missing strings)"
+    - "Pseudo-localization for testing"
+
+implementation_hints:
+  - "Use self.tr() for translatable strings in Qt widgets"
+  - "Run pylupdate6 to extract strings to .ts files"
+  - "Use Qt Linguist GUI for translation (better than editing XML)"
+  - "Run lrelease to compile .ts → .qm files"
+  - "Load translations with QTranslator in main()"
+  - "Use QCoreApplication.translate() for non-widget code"
+  - "Add context parameter for ambiguous strings: self.tr('Open', 'FileMenu')"
+  - "Use QLocale for date/number formatting"
+
+common_pitfalls:
+  - issue: "Translations not applied"
+    solution: "Install QTranslator before creating QApplication"
+  - issue: "Some strings not translatable"
+    solution: "Use tr() for ALL user-visible strings, including window titles"
+  - issue: "Plural forms incorrect"
+    solution: "Use tr() with %n placeholder: tr('%n file(s)', '', count)"
+  - issue: "RTL languages broken"
+    solution: "Enable layoutDirection auto-switching, test with Arabic"
+  - issue: "Hardcoded string concatenation"
+    solution: "Use placeholders: tr('Hello %1').arg(name), not 'Hello ' + name"
+  - issue: "Missing context causing wrong translation"
+    solution: "Add context: tr('File', 'noun') vs tr('File', 'verb')"
+
+workflow_steps:
+  - step: "1. Mark strings"
+    description: "Use self.tr('String') in all Qt code"
+  - step: "2. Extract"
+    description: "pylupdate6 app.py -ts translations/app_nl.ts"
+  - step: "3. Translate"
+    description: "Open .ts file in Qt Linguist, add translations"
+  - step: "4. Compile"
+    description: "lrelease translations/app_nl.ts"
+  - step: "5. Load"
+    description: "QTranslator.load('translations/app_nl.qm') in main()"
+  - step: "6. Test"
+    description: "Run app with QLocale.setDefault(QLocale.Dutch)"
+
+example_code: |
+  # Main application
+  app = QApplication(sys.argv)
+
+  # Load translation
+  translator = QTranslator()
+  if translator.load(QLocale.system(), 'app', '_', 'translations'):
+      app.installTranslator(translator)
+
+  window = MainWindow()
+  window.show()
+
+  # In MainWindow class
+  def setup_ui(self):
+      self.setWindowTitle(self.tr('My Application'))
+      self.label = QLabel(self.tr('Welcome!'))
+
+  def switch_language(self, language_code):
+      # Remove old translator
+      qApp.removeTranslator(self.translator)
+      # Load new translator
+      self.translator.load(QLocale(language_code), 'app', '_', 'translations')
+      qApp.installTranslator(self.translator)
+      # Retranslate UI
+      self.retranslateUi()
+
+related_templates:
+  - "template://gui/pyside6-application"
+  - "template://cli/argument-parsing"

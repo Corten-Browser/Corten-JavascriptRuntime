@@ -1,0 +1,231 @@
+template_id: "data-database-abstraction"
+template_name: "Database ORM and Query Abstraction"
+category: "data"
+difficulty: "hard"
+estimated_loc: "3000-7000"
+
+keywords:
+  - "database"
+  - "orm"
+  - "sql"
+  - "query"
+  - "sqlalchemy"
+  - "diesel"
+  - "postgres"
+  - "sqlite"
+  - "migration"
+
+parameters:
+  - name: "database_type"
+    type: "string"
+    options: ["sqlite", "postgresql", "mysql", "multi"]
+    default: "sqlite"
+  - name: "orm_style"
+    type: "string"
+    options: ["active_record", "data_mapper", "query_builder"]
+    default: "data_mapper"
+  - name: "features"
+    type: "array"
+    options: ["migrations", "connection_pooling", "async", "transactions"]
+
+core_interfaces:
+  - name: "Database"
+    methods:
+      - "async fn connect(url: &str) -> Result<Database, Error>"
+      - "async fn execute(&self, query: Query) -> Result<Vec<Row>, Error>"
+      - "async fn transaction<F>(&self, f: F) -> Result<T, Error>"
+  - name: "Model"
+    methods:
+      - "async fn create(&self) -> Result<Self, Error>"
+      - "async fn save(&mut self) -> Result<(), Error>"
+      - "async fn delete(&self) -> Result<(), Error>"
+      - "async fn find(id: i64) -> Result<Self, Error>"
+      - "async fn all() -> Result<Vec<Self>, Error>"
+
+recommended_libraries:
+  rust:
+    - name: "diesel"
+      version: "2.1"
+      required: true
+      purpose: "ORM and query builder"
+      registry_url: "https://crates.io/crates/diesel"
+    - name: "sqlx"
+      version: "0.7"
+      required: false
+      purpose: "Async SQL toolkit (compile-time checked queries)"
+      registry_url: "https://crates.io/crates/sqlx"
+    - name: "sea-orm"
+      version: "0.12"
+      required: false
+      purpose: "Async ORM (similar to TypeORM)"
+      registry_url: "https://crates.io/crates/sea-orm"
+  python:
+    - name: "sqlalchemy"
+      version: "2.0"
+      required: true
+      purpose: "SQL toolkit and ORM"
+      registry_url: "https://pypi.org/project/SQLAlchemy/"
+    - name: "alembic"
+      version: "1.13"
+      required: true
+      purpose: "Database migration tool (for SQLAlchemy)"
+      registry_url: "https://pypi.org/project/alembic/"
+    - name: "peewee"
+      version: "3.17"
+      required: false
+      purpose: "Simple, small ORM"
+      registry_url: "https://pypi.org/project/peewee/"
+    - name: "tortoise-orm"
+      version: "0.20"
+      required: false
+      purpose: "Async ORM (Django-like)"
+      registry_url: "https://pypi.org/project/tortoise-orm/"
+
+acceptance_criteria:
+  - "Connect to database (SQLite, PostgreSQL, MySQL)"
+  - "Define models/schemas"
+  - "CRUD operations (Create, Read, Update, Delete)"
+  - "Query filtering and ordering"
+  - "Relationships (one-to-many, many-to-many)"
+  - "Transactions (commit/rollback)"
+  - "Connection pooling"
+  - "Schema migrations"
+  - "Performance: 1,000 inserts in < 1 second (batch)"
+
+test_strategy:
+  unit_tests:
+    - "Model validation and constraints"
+    - "Query construction"
+    - "Relationship loading"
+  integration_tests:
+    - "Full CRUD workflows"
+    - "Transaction rollback on error"
+    - "Migration up/down"
+  database_tests:
+    - "Test on SQLite (fast, in-memory)"
+    - "Test on PostgreSQL (production-like)"
+  benchmarks:
+    - "Query performance (simple vs complex)"
+    - "Bulk insert performance"
+
+implementation_hints:
+  - "Use SQLAlchemy 2.0 for Python (modern async support)"
+  - "Use Diesel for Rust (type-safe, compile-time queries)"
+  - "Define models as classes/structs"
+  - "Use migrations for schema changes (alembic, diesel CLI)"
+  - "Enable connection pooling (default in most ORMs)"
+  - "Use async for I/O-bound applications"
+  - "Use transactions for multi-step operations"
+  - "Index frequently queried columns"
+
+common_pitfalls:
+  - issue: "N+1 query problem (slow joins)"
+    solution: "Use eager loading: joinedload() (SQLAlchemy), with() (Diesel)"
+  - issue: "SQL injection vulnerabilities"
+    solution: "Always use parameterized queries (ORM handles this)"
+  - issue: "Connection exhaustion"
+    solution: "Use connection pooling, close connections properly"
+  - issue: "Migration conflicts in team"
+    solution: "Sequential migration numbering, code review migrations"
+  - issue: "Slow bulk inserts"
+    solution: "Use bulk_insert_mappings() or execute_many()"
+  - issue: "Deadlocks in transactions"
+    solution: "Use consistent ordering, short transactions"
+
+database_patterns:
+  active_record:
+    description: "Model methods perform DB operations"
+    example: "user.save(), user.delete()"
+    pros: "Simple, intuitive"
+    cons: "Tight coupling"
+  data_mapper:
+    description: "Separate mapper handles DB operations"
+    example: "session.add(user), session.commit()"
+    pros: "Loose coupling, testable"
+    cons: "More boilerplate"
+  query_builder:
+    description: "Fluent API for building queries"
+    example: "query().filter(age > 18).order_by(name)"
+    pros: "Flexible, composable"
+    cons: "Not as type-safe"
+
+example_python_sqlalchemy: |
+  from sqlalchemy import create_engine, Column, Integer, String
+  from sqlalchemy.ext.declarative import declarative_base
+  from sqlalchemy.orm import sessionmaker
+
+  Base = declarative_base()
+
+  class User(Base):
+      __tablename__ = 'users'
+
+      id = Column(Integer, primary_key=True)
+      name = Column(String(100), nullable=False)
+      email = Column(String(100), unique=True)
+      age = Column(Integer)
+
+  # Create engine and session
+  engine = create_engine('sqlite:///app.db')
+  Base.metadata.create_all(engine)
+  Session = sessionmaker(bind=engine)
+  session = Session()
+
+  # CRUD operations
+  user = User(name='Alice', email='alice@example.com', age=30)
+  session.add(user)
+  session.commit()
+
+  # Query
+  users = session.query(User).filter(User.age >= 18).all()
+
+example_rust_diesel: |
+  use diesel::prelude::*;
+  use diesel::sqlite::SqliteConnection;
+
+  #[derive(Queryable, Insertable)]
+  #[diesel(table_name = users)]
+  struct User {
+      id: i32,
+      name: String,
+      email: String,
+      age: i32,
+  }
+
+  diesel::table! {
+      users (id) {
+          id -> Integer,
+          name -> Text,
+          email -> Text,
+          age -> Integer,
+      }
+  }
+
+  fn establish_connection() -> SqliteConnection {
+      let database_url = "app.db";
+      SqliteConnection::establish(database_url).unwrap()
+  }
+
+  fn create_user(conn: &mut SqliteConnection, name: &str, email: &str, age: i32) {
+      let new_user = User {
+          id: 0,
+          name: name.to_string(),
+          email: email.to_string(),
+          age,
+      };
+
+      diesel::insert_into(users::table)
+          .values(&new_user)
+          .execute(conn)
+          .expect("Error saving user");
+  }
+
+  // Query
+  let results = users::table
+      .filter(users::age.ge(18))
+      .load::<User>(conn)
+      .expect("Error loading users");
+
+related_templates:
+  - "template://data/data-validation"
+  - "template://scientific/data-analysis"
+  - "template://deployment/podman-containerization"

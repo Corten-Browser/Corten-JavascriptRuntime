@@ -1,0 +1,98 @@
+template_id: "networking-websocket"
+template_name: "WebSocket Protocol Implementation"
+category: "networking"
+difficulty: "medium"
+estimated_loc: "4000-7000"
+
+keywords:
+  - "websocket"
+  - "ws"
+  - "wss"
+  - "bidirectional"
+  - "real-time"
+  - "framing"
+  - "handshake"
+
+parameters:
+  - name: "protocol_version"
+    type: "string"
+    options: ["RFC 6455"]
+    default: "RFC 6455"
+  - name: "features"
+    type: "array"
+    options: ["ping_pong", "compression", "masking", "fragmentation"]
+
+core_interfaces:
+  - name: "WebSocket"
+    methods:
+      - "async fn connect(url: &str) -> Result<WebSocket, Error>"
+      - "async fn send(&mut self, data: Message) -> Result<(), Error>"
+      - "async fn receive(&mut self) -> Result<Message, Error>"
+      - "async fn close(self) -> Result<(), Error>"
+
+recommended_libraries:
+  rust:
+    - name: "tokio-tungstenite"
+      version: "0.21"
+      required: true
+      purpose: "Async WebSocket implementation"
+      registry_url: "https://crates.io/crates/tokio-tungstenite"
+    - name: "tungstenite"
+      version: "0.21"
+      required: true
+      purpose: "WebSocket protocol implementation"
+      registry_url: "https://crates.io/crates/tungstenite"
+  python:
+    - name: "websockets"
+      version: "12.0"
+      required: true
+      purpose: "Async WebSocket library"
+      registry_url: "https://pypi.org/project/websockets/"
+    - name: "aiohttp"
+      version: "3.9"
+      required: false
+      purpose: "Alternative with WebSocket support"
+      registry_url: "https://pypi.org/project/aiohttp/"
+
+acceptance_criteria:
+  - "Successful WebSocket handshake (HTTP Upgrade)"
+  - "Send/receive text and binary frames"
+  - "Handle ping/pong frames automatically"
+  - "Support frame fragmentation"
+  - "Clean connection close with status codes"
+  - "Performance: 10,000 messages/sec on localhost"
+
+test_strategy:
+  unit_tests:
+    - "Frame parsing (text, binary, control frames)"
+    - "Message fragmentation/defragmentation"
+    - "Masking/unmasking operations"
+  integration_tests:
+    - "Full handshake with test server"
+    - "Bidirectional communication"
+    - "Connection close handling"
+  public_test_suites:
+    - name: "Autobahn Testsuite"
+      url: "https://github.com/crossbario/autobahn-testsuite"
+      target_pass_rate: 95
+
+implementation_hints:
+  - "Use tokio-tungstenite for async WebSocket"
+  - "Implement automatic ping/pong responses"
+  - "Handle close frames per RFC 6455"
+  - "Support both ws:// and wss:// (TLS)"
+
+common_pitfalls:
+  - issue: "Not masking client frames"
+    solution: "RFC 6455 requires client-to-server masking"
+  - issue: "Blocking on read/write"
+    solution: "Use async/await throughout"
+  - issue: "Not handling connection close properly"
+    solution: "Respond to close frames before closing socket"
+
+depends_on:
+  - "template://networking/tls-client"
+
+related_templates:
+  - "template://networking/http-client"
+  - "template://networking/http2-support"

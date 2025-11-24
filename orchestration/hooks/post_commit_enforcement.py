@@ -13,17 +13,21 @@ from pathlib import Path
 from datetime import datetime
 
 # Add parent directory to path
-sys.path.insert(0, str(Path(__file__).parent.parent))
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from notification.continuation_message import (
+from orchestration.core.paths import DataPaths
+from orchestration.enforcement.continuation_message import (
     generate_forceful_message,
     generate_verification_needed_message
 )
 
+# Global paths instance
+_paths = DataPaths()
+
 
 def load_queue_state() -> dict:
     """Load task queue state."""
-    queue_file = Path("orchestration/task_queue/queue_state.json")
+    queue_file = _paths.queue_state
     if queue_file.exists():
         try:
             return json.loads(queue_file.read_text())
@@ -34,7 +38,7 @@ def load_queue_state() -> dict:
 
 def load_verification_state() -> dict:
     """Load verification state."""
-    state_file = Path("orchestration/verification/state/completion_state.json")
+    state_file = _paths.completion_state
     if state_file.exists():
         try:
             return json.loads(state_file.read_text())
@@ -45,7 +49,7 @@ def load_verification_state() -> dict:
 
 def load_config() -> dict:
     """Load enforcement config."""
-    config_file = Path("orchestration/enforcement_config.json")
+    config_file = _paths.enforcement_config
     if config_file.exists():
         try:
             return json.loads(config_file.read_text())
@@ -76,10 +80,8 @@ def get_remaining_tasks(tasks: list) -> list:
 
 def log_activity(event_type: str, details: dict):
     """Log enforcement activity."""
-    log_file = Path("orchestration/monitoring/activity_log.json")
-
-    if not log_file.parent.exists():
-        log_file.parent.mkdir(parents=True, exist_ok=True)
+    log_file = _paths.activity_log
+    log_file.parent.mkdir(parents=True, exist_ok=True)
 
     if log_file.exists():
         try:

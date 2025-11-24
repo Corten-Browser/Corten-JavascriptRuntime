@@ -1,0 +1,80 @@
+template_id: "fonts-font-loader"
+template_name: "Font Loading and Caching"
+category: "fonts"
+difficulty: "medium"
+estimated_loc: "3000-5000"
+
+keywords:
+  - "font"
+  - "loading"
+  - "typeface"
+  - "ttf"
+  - "woff"
+  - "otf"
+
+parameters:
+  - name: "font_formats"
+    type: "array"
+    options: ["ttf", "otf", "woff", "woff2"]
+  - name: "loading_strategy"
+    type: "string"
+    options: ["sync", "async", "preload"]
+    default: "async"
+
+core_interfaces:
+  - name: "FontLoader"
+    methods:
+      - "async fn load_font(url: &str) -> Result<Font, FontError>"
+      - "fn get_cached_font(&self, family: &str, style: &FontStyle) -> Option<FontRef>"
+
+recommended_libraries:
+  rust:
+    - name: "font-kit"
+      version: "0.13"
+      required: true
+      purpose: "Cross-platform font loading"
+      registry_url: "https://crates.io/crates/font-kit"
+    - name: "fontdb"
+      version: "0.16"
+      required: true
+      purpose: "Font database and matching"
+      registry_url: "https://crates.io/crates/fontdb"
+  python:
+    - name: "fonttools"
+      version: "4.47"
+      required: true
+      purpose: "Font file manipulation"
+      registry_url: "https://pypi.org/project/fonttools/"
+
+acceptance_criteria:
+  - "Loads TTF/OTF fonts from filesystem"
+  - "Loads WOFF/WOFF2 fonts from URLs"
+  - "Font matching by family, weight, style"
+  - "Cache prevents duplicate loads"
+  - "Performance: Load font in < 100ms"
+
+test_strategy:
+  unit_tests:
+    - "Font file parsing (TTF, WOFF2)"
+    - "Font matching algorithm"
+  integration_tests:
+    - "Full loading pipeline from URL"
+    - "Cache hit/miss behavior"
+  benchmarks:
+    - "Load time per font format"
+    - "Cache lookup performance"
+
+implementation_hints:
+  - "Use font-kit for cross-platform support"
+  - "Cache parsed fonts with LRU eviction"
+  - "Support @font-face CSS declarations"
+
+common_pitfalls:
+  - issue: "Not validating font files"
+    solution: "Check magic bytes and run validation"
+  - issue: "Memory bloat from uncached fonts"
+    solution: "Implement LRU cache with size limits"
+
+related_templates:
+  - "template://fonts/text-shaping"
+  - "template://fonts/font-rasterization"
