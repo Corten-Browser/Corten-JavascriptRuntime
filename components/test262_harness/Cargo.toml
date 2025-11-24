@@ -7,6 +7,7 @@ edition.workspace = true
 parser = { path = "../parser" }
 interpreter = { path = "../interpreter" }
 builtins = { path = "../builtins" }
+core_types = { path = "../core_types" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 serde_yaml = "0.9"
@@ -15,3 +16,7 @@ walkdir = "2.4"
 
 [dev-dependencies]
 tempfile = "3.8"
+
+[[bin]]
+name = "test262_runner"
+path = "src/bin/runner.rs"

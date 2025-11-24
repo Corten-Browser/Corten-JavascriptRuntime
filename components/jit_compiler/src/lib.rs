@@ -37,14 +37,24 @@ pub mod codegen;
 pub mod compiled_code;
 pub mod cranelift_backend;
 pub mod deopt;
+pub mod inlining;
 pub mod ir;
 pub mod optimizing;
 pub mod osr;
+pub mod type_specialization;
 
 // Re-export main types at crate root
 pub use baseline::BaselineJIT;
 pub use compiled_code::CompiledCode;
 pub use cranelift_backend::{CompiledFunction, CraneliftBackend};
 pub use deopt::{Deoptimizer, InterpreterState};
+pub use inlining::{
+    CallSiteInfo, FunctionInfo, InlinedFrameInfo, Inliner, InliningBudget, InliningConfig,
+    InliningDecision, InliningDeoptPoint, InliningOracle, InliningRejection,
+};
 pub use optimizing::OptimizingJIT;
 pub use osr::{FrameMapping, OSREntry};
+pub use type_specialization::{
+    DeoptTrigger, PropertyAccessSpec, SpecializationDecision, SpecializationStats,
+    SpecializedType, TypeGuard, TypeSpecializer, TypeSpecializerConfig,
+};

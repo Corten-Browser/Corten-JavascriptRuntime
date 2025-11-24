@@ -70,6 +70,10 @@ pub enum Opcode {
     Neg,
     /// Logical NOT (invert truthiness)
     Not,
+    /// typeof operator - push type string
+    Typeof,
+    /// void operator - evaluate expression, push undefined
+    Void,
 
     // Comparison operations
     /// Loose equality (==)

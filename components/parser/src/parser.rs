@@ -435,7 +435,13 @@ impl<'a> Parser<'a> {
     fn parse_return_statement(&mut self) -> Result<Statement, JsError> {
         self.expect_keyword(Keyword::Return)?;
 
-        let argument = if self.check_punctuator(Punctuator::Semicolon)? || self.is_at_end()? {
+        // ASI Restricted Production: If there's a line terminator after 'return',
+        // treat it as 'return;' with no expression (per ECMAScript 12.9.1)
+        let argument = if self.check_punctuator(Punctuator::Semicolon)?
+            || self.is_at_end()?
+            || self.check_punctuator(Punctuator::RBrace)?
+            || self.check_restricted_production()
+        {
             None
         } else {
             Some(self.parse_expression()?)
@@ -568,6 +574,21 @@ impl<'a> Parser<'a> {
 
     fn parse_throw_statement(&mut self) -> Result<Statement, JsError> {
         self.expect_keyword(Keyword::Throw)?;
+
+        // Peek the next token to ensure line terminator state is updated
+        let _ = self.lexer.peek_token()?;
+
+        // ASI Restricted Production: Throw MUST have an expression on the same line
+        // A line terminator between 'throw' and expression is a syntax error
+        if self.lexer.line_terminator_before_token {
+            return Err(JsError {
+                kind: core_types::ErrorKind::SyntaxError,
+                message: "Illegal newline after throw".to_string(),
+                stack: vec![],
+                source_position: self.last_position.clone(),
+            });
+        }
+
         let argument = self.parse_expression()?;
         self.consume_semicolon()?;
         Ok(Statement::ThrowStatement {
@@ -864,6 +885,7 @@ impl<'a> Parser<'a> {
             Token::Punctuator(Punctuator::Plus) => Some(UnaryOperator::Plus),
             Token::Punctuator(Punctuator::Tilde) => Some(UnaryOperator::BitwiseNot),
             Token::Keyword(Keyword::Typeof) => Some(UnaryOperator::Typeof),
+            Token::Keyword(Keyword::Void) => Some(UnaryOperator::Void),
             _ => None,
         };
 
@@ -1144,13 +1166,8 @@ impl<'a> Parser<'a> {
                     position: None,
                 })
             }
-            Token::Keyword(Keyword::Undefined) => {
-                self.lexer.next_token()?;
-                Ok(Expression::Literal {
-                    value: Literal::Undefined,
-                    position: None,
-                })
-            }
+            // Note: 'undefined' is NOT a keyword - it's handled as an identifier
+            // and resolved at runtime from the global scope
             Token::Keyword(Keyword::This) => {
                 self.lexer.next_token()?;
                 Ok(Expression::ThisExpression { position: None })
@@ -1427,8 +1444,8 @@ impl<'a> Parser<'a> {
             Token::Identifier(name) => Ok(name),
             Token::Keyword(kw) => {
                 // Allow keywords to be used as property/method names
+                // Note: 'constructor' is now an identifier, not a keyword
                 Ok(match kw {
-                    Keyword::Constructor => "constructor".to_string(),
                     Keyword::Let => "let".to_string(),
                     Keyword::Const => "const".to_string(),
                     Keyword::Var => "var".to_string(),
@@ -1450,8 +1467,9 @@ impl<'a> Parser<'a> {
                     Keyword::True => "true".to_string(),
                     Keyword::False => "false".to_string(),
                     Keyword::Null => "null".to_string(),
-                    Keyword::Undefined => "undefined".to_string(),
+                    // Note: 'undefined' is NOT a keyword
                     Keyword::Typeof => "typeof".to_string(),
+                    Keyword::Void => "void".to_string(),
                     Keyword::Instanceof => "instanceof".to_string(),
                     Keyword::In => "in".to_string(),
                     Keyword::Try => "try".to_string(),
@@ -1472,12 +1490,44 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// Consume a semicolon, implementing Automatic Semicolon Insertion (ASI)
+    /// per ECMAScript specification section 12.9
     fn consume_semicolon(&mut self) -> Result<(), JsError> {
+        // If there's an explicit semicolon, consume it
         if self.check_punctuator(Punctuator::Semicolon)? {
             self.lexer.next_token()?;
+            return Ok(());
         }
-        // Automatic semicolon insertion (simplified)
-        Ok(())
+
+        // ASI Rule 1: Insert semicolon if the next token is preceded by
+        // a line terminator and cannot legally follow the previous token
+        if self.lexer.line_terminator_before_token {
+            return Ok(());
+        }
+
+        // ASI Rule 2: Insert semicolon at end of file
+        if self.is_at_end()? {
+            return Ok(());
+        }
+
+        // ASI Rule 3: Insert semicolon before closing brace
+        if self.check_punctuator(Punctuator::RBrace)? {
+            return Ok(());
+        }
+
+        // If none of the ASI rules apply and there's no semicolon, it's an error
+        Err(JsError {
+            kind: core_types::ErrorKind::SyntaxError,
+            message: "Expected semicolon".to_string(),
+            stack: vec![],
+            source_position: self.last_position.clone(),
+        })
+    }
+
+    /// Check if ASI should apply for restricted productions
+    /// (return, break, continue, throw must not have line terminator before operand)
+    fn check_restricted_production(&self) -> bool {
+        self.lexer.line_terminator_before_token
     }
 }
 
@@ -1518,5 +1568,45 @@ mod tests {
         let mut parser = Parser::new("const f = () => 1;");
         let ast = parser.parse().unwrap();
         assert!(matches!(ast, ASTNode::Program(_)));
+    }
+
+    // Automatic Semicolon Insertion (ASI) tests
+    #[test]
+    fn test_asi_at_end_of_file() {
+        // ASI Rule 2: Insert semicolon at EOF
+        let mut parser = Parser::new("let x = 1");
+        let ast = parser.parse().unwrap();
+        assert!(matches!(ast, ASTNode::Program(_)));
+    }
+
+    #[test]
+    fn test_asi_before_closing_brace() {
+        // ASI Rule 3: Insert semicolon before }
+        let mut parser = Parser::new("function f() { return 1 }");
+        let ast = parser.parse().unwrap();
+        assert!(matches!(ast, ASTNode::Program(_)));
+    }
+
+    #[test]
+    fn test_asi_after_newline() {
+        // ASI Rule 1: Insert semicolon when next token is on new line
+        let mut parser = Parser::new("let x = 1\nlet y = 2");
+        let ast = parser.parse().unwrap();
+        assert!(matches!(ast, ASTNode::Program(_)));
+    }
+
+    #[test]
+    fn test_asi_return_with_newline() {
+        // Restricted production: return followed by newline becomes return;
+        let mut parser = Parser::new("function f() {\nreturn\n1\n}");
+        let ast = parser.parse().unwrap();
+        assert!(matches!(ast, ASTNode::Program(_)));
+    }
+
+    #[test]
+    fn test_asi_throw_newline_error() {
+        // Restricted production: throw with newline is an error
+        let mut parser = Parser::new("throw\nError()");
+        assert!(parser.parse().is_err());
     }
 }

@@ -84,3 +84,4 @@ orchestration/data/logs/*
 orchestration/data/checkpoints/*
 orchestration/data/reports/*
 !orchestration/data/*/.gitkeep
+test262/
