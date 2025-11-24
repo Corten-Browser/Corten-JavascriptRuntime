@@ -1,5 +1,7 @@
 use crate::report::TestReport;
 use crate::test_file::TestFile;
+use core_types::{JsError, ErrorKind, Value};
+use interpreter::VM;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use walkdir::WalkDir;
@@ -16,6 +18,64 @@ pub enum TestResult {
     /// Test timed out
     Timeout,
 }
+
+/// Test262 harness prelude that provides assert functions
+pub const HARNESS_PRELUDE: &str = r#"
+// Test262 $262 object and assert functions
+var $262 = {
+    createRealm: function() { return {}; },
+    detachArrayBuffer: function(ab) { },
+    evalScript: function(code) { return eval(code); },
+    gc: function() { },
+    global: this,
+    IsHTMLDDA: { toString: function() { return ''; } },
+    agent: {
+        start: function() {},
+        broadcast: function() {},
+        getReport: function() { return null; },
+        sleep: function() {},
+        monotonicNow: function() { return 0; }
+    }
+};
+
+function assert(condition, message) {
+    if (!condition) {
+        throw new Error("Assertion failed: " + (message || ""));
+    }
+}
+
+assert.sameValue = function(actual, expected, message) {
+    if (actual !== expected) {
+        throw new Error("Expected " + expected + " but got " + actual + (message ? ": " + message : ""));
+    }
+};
+
+assert.notSameValue = function(actual, unexpected, message) {
+    if (actual === unexpected) {
+        throw new Error("Value should not be " + unexpected + (message ? ": " + message : ""));
+    }
+};
+
+assert.throws = function(expectedErrorType, fn, message) {
+    var thrown = false;
+    try {
+        fn();
+    } catch (e) {
+        thrown = true;
+        if (expectedErrorType && !(e instanceof expectedErrorType)) {
+            throw new Error("Expected " + expectedErrorType.name + " but got " + e.name);
+        }
+    }
+    if (!thrown) {
+        throw new Error("Expected exception but none was thrown" + (message ? ": " + message : ""));
+    }
+};
+
+// print function for compatibility
+if (typeof print === 'undefined') {
+    var print = function() {};
+}
+"#;
 
 impl TestResult {
     /// Check if the result is a pass
@@ -47,6 +107,8 @@ pub struct Test262Harness {
     timeout_ms: u64,
     /// Results of executed tests
     results: HashMap<String, TestResult>,
+    /// Whether to execute tests (vs just parse)
+    execute_tests: bool,
 }
 
 impl Test262Harness {
@@ -94,6 +156,7 @@ impl Test262Harness {
             supported_features: features,
             timeout_ms: 10000,
             results: HashMap::new(),
+            execute_tests: true,
         }
     }
 
@@ -103,7 +166,18 @@ impl Test262Harness {
             supported_features: features,
             timeout_ms: 10000,
             results: HashMap::new(),
+            execute_tests: true,
         }
+    }
+
+    /// Enable or disable test execution (vs parse-only)
+    pub fn set_execute(&mut self, execute: bool) {
+        self.execute_tests = execute;
+    }
+
+    /// Check if test execution is enabled
+    pub fn is_execute_enabled(&self) -> bool {
+        self.execute_tests
     }
 
     /// Add a supported feature
@@ -171,18 +245,64 @@ impl Test262Harness {
             // Positive test: expect parsing to succeed
             match parse_result {
                 Err(e) => TestResult::Fail(format!("Parse error: {:?}", e)),
-                Ok(_ast) => {
-                    // TODO: Execute the AST and check runtime expectations
-                    // For now, pass if parsed successfully for positive tests
+                Ok(ast) => {
+                    // If execution is disabled, pass on successful parse
+                    if !self.execute_tests {
+                        return TestResult::Pass;
+                    }
+
+                    // Generate bytecode from AST
+                    let mut generator = parser::BytecodeGenerator::new();
+                    let bytecode = match generator.generate(&ast) {
+                        Ok(bc) => bc,
+                        Err(e) => return TestResult::Fail(format!("Bytecode generation error: {:?}", e)),
+                    };
+
+                    // Create a fresh VM for each test
+                    let mut vm = VM::new();
+
+                    // Register nested functions
+                    let nested_functions = generator.take_nested_functions();
+                    for func_bytecode in nested_functions {
+                        vm.register_function(func_bytecode);
+                    }
+
+                    // Execute the bytecode
+                    let exec_result = vm.execute(&bytecode);
+
                     if test.metadata.expects_runtime_error() {
-                        // Would need to execute and verify runtime error
-                        TestResult::Pass // Placeholder
+                        // Expect runtime error
+                        match exec_result {
+                            Err(e) => {
+                                // Check if error type matches expected
+                                if let Some(expected_type) = test.metadata.expected_error_type() {
+                                    let error_str = format!("{:?}", e.kind);
+                                    if self.is_matching_error_type(&error_str, expected_type) {
+                                        TestResult::Pass
+                                    } else {
+                                        TestResult::Fail(format!(
+                                            "Expected {} but got: {:?}",
+                                            expected_type, e
+                                        ))
+                                    }
+                                } else {
+                                    TestResult::Pass
+                                }
+                            }
+                            Ok(_) => {
+                                TestResult::Fail("Expected runtime error but execution succeeded".to_string())
+                            }
+                        }
                     } else if test.metadata.expects_resolution_error() {
                         // Would need to resolve modules and verify error
-                        TestResult::Pass // Placeholder
+                        // For now, skip module resolution tests
+                        TestResult::Skip("Module resolution not implemented".to_string())
                     } else {
-                        // Would execute and verify no error
-                        TestResult::Pass // Placeholder
+                        // Expect success
+                        match exec_result {
+                            Ok(_) => TestResult::Pass,
+                            Err(e) => TestResult::Fail(format!("Runtime error: {:?}", e)),
+                        }
                     }
                 }
             }
