@@ -76,8 +76,7 @@ Task(
 
     Implement [specific functionality].
     Follow TDD, achieve 80%+ coverage.\""",
-    subagent_type="general-purpose",
-    model="sonnet"
+    subagent_type="general-purpose"
 )
         """.strip()
     }
@@ -124,7 +123,7 @@ Phase 3: Contracts & Setup
 
 Phase 4: Parallel Development
 - Launch sub-agents for all affected components
-- Use model="sonnet" for all sub-agents
+- Sub-agents inherit orchestrator's model
 - Enforce strict TDD (tests before code)
 - Achieve 80%+ test coverage per component
 - Monitor for context limits

@@ -365,9 +365,85 @@ NOTE: INCOMPLETE tasks require /orchestrate verification before COMPLETED.
 
 ---
 
+## CRITICAL: User Confirmation Handling Protocol
+
+**This section contains mandatory rules for handling user confirmations. Follow these rules EXACTLY.**
+
+### Confirmation Format
+
+All confirmation prompts MUST use this format:
+
+```
+Proceed with [action]? [y/N]:
+```
+
+The `[y/N]` format means:
+- `y` = Yes (proceed) - must be explicitly entered
+- `N` = No (cancel) - this is the DEFAULT (uppercase indicates default)
+
+### Acceptance Criteria (MANDATORY)
+
+**✅ ONLY these responses mean "YES" (proceed with action):**
+- `y` (lowercase)
+- `Y` (uppercase)
+- `yes` (lowercase)
+- `Yes` (capitalized)
+- `YES` (uppercase)
+- Any other case variation of "y" or "yes" (e.g., `yEs`, `YeS`)
+
+**❌ ALL OTHER responses mean "NO" (cancel action):**
+- `n` or `N`
+- `no`, `No`, `NO`, or any case variation
+- Empty response (user just pressed Enter)
+- Any other text input (`maybe`, `sure`, `ok`, `1`, etc.)
+- Whitespace only
+- Timeout or no response
+
+### Implementation Rules
+
+**When implementing confirmations:**
+
+```python
+# Get user input and strip whitespace
+response = input("Proceed with [action]? [y/N]: ").strip()
+
+# Check if response is explicitly "y" or "yes" (case-insensitive)
+if response.lower() not in ['y', 'yes']:
+    print("Action cancelled.")
+    return  # STOP - do not proceed with action
+
+# Only reach this point if user explicitly confirmed
+print("Proceeding with action...")
+```
+
+**NEVER:**
+- ❌ Assume the user wants to proceed
+- ❌ Treat 'N', 'n', 'no', or 'NO' as confirmation
+- ❌ Treat empty input (just Enter) as confirmation
+- ❌ Proceed on ambiguous input
+- ❌ Interpret uppercase 'N' differently from lowercase 'n'
+- ❌ Use any logic like `if response != 'n'` (wrong - this proceeds on 'N'!)
+
+**ALWAYS:**
+- ✅ Use explicit whitelist: `if response.lower() not in ['y', 'yes']`
+- ✅ Default behavior is CANCEL (do nothing)
+- ✅ Respect the user's choice
+- ✅ Print clear cancellation message when action is cancelled
+
+### Why This Matters
+
+**Historical bug:** A user entered 'N' (uppercase) expecting to cancel, but the action proceeded anyway. This happened because:
+1. The prompt showed `[Y/n]` (suggesting Y was default)
+2. The code may have used `if response != 'y'` logic
+3. 'N' != 'y', so it proceeded (WRONG!)
+
+**The fix:** Explicit whitelist that only accepts "y" or "yes" (any case), everything else cancels.
+
+---
+
 ## Step 4: User Confirmation
 
-**CRITICAL: Never auto-update the queue. Always get user confirmation.**
+**CRITICAL: Never auto-update the queue. Always get user confirmation per the protocol above.**
 
 Present options to user:
 
@@ -402,17 +478,17 @@ Review each task individually:
 TASK-001: Implement audio file loading
   Location: components/audio_processor/src/loader.py
   Confidence: HIGH
-  Mark as INCOMPLETE? [Y/n]:
+  Mark as INCOMPLETE? [y/N]:
 
 TASK-002: Create configuration manager
   Location: components/config_manager/src/config.py
   Confidence: HIGH
-  Mark as INCOMPLETE? [Y/n]:
+  Mark as INCOMPLETE? [y/N]:
 
 TASK-003: Build CLI interface
   Location: components/cli_interface/src/main.py
   Confidence: MEDIUM (no tests)
-  Mark as INCOMPLETE? [Y/n]:
+  Mark as INCOMPLETE? [y/N]:
 
 [... continue for each recommended task ...]
 ```

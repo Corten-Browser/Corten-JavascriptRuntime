@@ -48,54 +48,76 @@ Major version transitions are **BUSINESS DECISIONS** not technical ones:
 
 # 🎯 MODEL STRATEGY
 
-## Orchestrator Model (Your Model)
-**User-controlled** via `/model` command:
-- **Sonnet 4.5** (default): Optimal for well-specified projects
-  - Best coding model (77.2% SWE-bench)
-  - 30+ hours coherent autonomous operation
-  - $3/$15 per 1M tokens
-- **Opus 4.1** (optional): For complex/ambiguous specifications
-  - Superior architectural reasoning (70.6% graduate-level)
-  - Design-level correctness
-  - $15 per 1M input tokens (5x more expensive)
+## Unified Model Approach (v1.15.0+)
 
-## Sub-Agent Model (ALWAYS Sonnet)
-**System-controlled** - YOU must enforce:
-- **ALWAYS use Sonnet 4.5** for all sub-agents
-- **NEVER let sub-agents inherit Opus** (no coding benefit at 5x cost)
-- **Explicit specification required** in every Task tool invocation
+**Sub-agents inherit the orchestrator's model by default.** Use `/model` to control model selection:
 
-### CRITICAL: How to Launch Sub-Agents
+- **`/model sonnet`** (default): Sonnet 4.5 throughout the project
+  - Best for well-specified projects
+  - Excellent coding performance (77.2% SWE-bench)
+  - Most cost-effective ($3/$15 per 1M tokens)
 
-**✅ CORRECT** - Always specify `model="sonnet"`:
+- **`/model opus`**: Opus 4.5 throughout the project
+  - Best for complex/ambiguous specifications
+  - Superior reasoning for architectural decisions
+  - Higher cost ($5/$25 per 1M tokens, ~1.67x more)
+
+### How It Works
+
+When you launch sub-agents using the Task tool, they **automatically inherit your model** unless you specify otherwise:
+
 ```python
-Task(
-    description="Implement authentication service",
-    prompt="Read components/auth_service/CLAUDE.md and implement...",
-    subagent_type="general-purpose",
-    model="sonnet"  # ← REQUIRED: Forces Sonnet for coding
-)
-```
-
-**❌ WRONG** - Never omit model (would inherit Opus if you're using it):
-```python
+# Default: Sub-agent inherits your model
 Task(
     description="Implement authentication service",
     prompt="Read components/auth_service/CLAUDE.md and implement...",
     subagent_type="general-purpose"
-    # ← MISSING model="sonnet" - would use your model (possibly Opus!)
+    # No model parameter → inherits your model
 )
 ```
 
-### Why This Matters
+### Cost Comparison (5-component project)
 
-| Scenario | Orchestrator | Sub-Agents | Cost per Project |
-|----------|-------------|------------|------------------|
-| Optimal (default) | Sonnet | Sonnet (forced) | $1.65 |
-| Hybrid (protected) | Opus | Sonnet (forced) | $2.25 |
-| Expensive mistake | Opus | Opus (inherited) | $8.25 |
+| Configuration | Orchestrator | Sub-Agents | Estimated Cost |
+|---------------|--------------|------------|----------------|
+| Sonnet throughout (default) | Sonnet 4.5 | Sonnet 4.5 (inherited) | ~$2.66 |
+| Opus throughout | Opus 4.5 | Opus 4.5 (inherited) | ~$4.44 |
 
-**Your job**: Prevent the $8.25 scenario by always specifying `model="sonnet"` for sub-agents.
+**Cost difference**: ~$1.78 (67% increase) for Opus vs Sonnet on typical projects.
+
+### When to Choose Each Model
+
+**Choose Sonnet 4.5 (default)** when:
+- ✅ Requirements are well-specified
+- ✅ Project scope is clear
+- ✅ Cost optimization is important
+- ✅ Coding performance is the priority
+
+**Choose Opus 4.5** when:
+- ✅ Specifications are complex or ambiguous
+- ✅ Architectural decisions are uncertain
+- ✅ Design-level correctness matters more than cost
+- ✅ Graduate-level reasoning required
+
+### Optional: Per-Agent Model Override
+
+In rare cases where you need different models for specific agents, you can override:
+
+```python
+# Rare: Override inheritance for specific agent
+Task(
+    description="Complex architectural design",
+    prompt="Design the authentication architecture...",
+    subagent_type="general-purpose",
+    model="opus"  # Override: Use Opus for this specific agent
+)
+```
+
+**Note**: This is rarely needed. Most projects should use a single model throughout for consistency.
+
+### Historical Context
+
+**Prior to v1.15.0**, this system enforced `model="sonnet"` for all sub-agents to prevent cost overruns when Opus 4.1 was 5x more expensive than Sonnet. With Opus 4.5's improved pricing (only 1.67x more), enforcement complexity is no longer justified. Model inheritance provides flexibility while keeping costs predictable.
 
 ---
 
@@ -1312,8 +1334,8 @@ Return a summary when done.
 Task(
     description="Implement {{COMPONENT_NAME}} component",
     prompt="[Use template above, substituting {{VARIABLES}}]",
-    subagent_type="general-purpose",
-    model="sonnet"  # REQUIRED: Always use Sonnet for coding
+    subagent_type="general-purpose"
+    # model parameter omitted → inherits orchestrator's model
 )
 ```
 
@@ -1325,26 +1347,23 @@ Example with 5 components, max_agents=3:
 # Read max_agents from config (3)
 max_agents = 3
 
-# Launch Tasks (max 3 concurrent) - ALL with model="sonnet"
+# Launch Tasks (max 3 concurrent) - all inherit orchestrator's model
 Task(
     description="Implement backend-api component",
     prompt="[Component-specific prompt with task details]",
-    subagent_type="general-purpose",
-    model="sonnet"  # REQUIRED
+    subagent_type="general-purpose"
 )
 
 Task(
     description="Implement frontend component",
     prompt="[Component-specific prompt with task details]",
-    subagent_type="general-purpose",
-    model="sonnet"  # REQUIRED
+    subagent_type="general-purpose"
 )
 
 Task(
     description="Implement auth_service component",
     prompt="[Component-specific prompt with task details]",
-    subagent_type="general-purpose",
-    model="sonnet"  # REQUIRED
+    subagent_type="general-purpose"
 )
 
 # Queue (waiting for slot):
@@ -1358,8 +1377,7 @@ Task(
 Task(
     description="Implement payment_api component",
     prompt="[Component-specific prompt with task details]",
-    subagent_type="general-purpose",
-    model="sonnet"  # REQUIRED
+    subagent_type="general-purpose"
 )
 
 # [Continue until all complete]
@@ -1516,8 +1534,7 @@ When done, all 8 completion checks must pass.
     Task(
         description=f"Fix remaining issues in {verification.component_name}",
         prompt=relaunch_prompt,
-        subagent_type="general-purpose",
-        model="sonnet"
+        subagent_type="general-purpose"
     )
 
     # Wait for completion, then verify again
@@ -1697,16 +1714,14 @@ if checkpoint:
     Task(
         description=f"Continue {checkpoint.component_name} (iteration {checkpoint.iteration + 1})",
         prompt=resume_prompt,
-        subagent_type="general-purpose",
-        model="sonnet"
+        subagent_type="general-purpose"
     )
 else:
     # No checkpoint, launch normally
     Task(
         description="Implement audio_processor",
         prompt="Read components/audio_processor/CLAUDE.md...",
-        subagent_type="general-purpose",
-        model="sonnet"
+        subagent_type="general-purpose"
     )
 ```
 
@@ -1935,8 +1950,7 @@ def launch_component_agent(component_name, spec_content, component_type, depende
         description=f"Implement {component_name} (iteration {iteration}, "
                     f"{estimate.estimated_minutes}min, {estimate.complexity_level})",
         prompt=prompt,
-        subagent_type="general-purpose",
-        model="sonnet"
+        subagent_type="general-purpose"
     )
 
     # Step 4: Track for checkpoint if complex
@@ -2454,8 +2468,7 @@ You may read from: contracts/, components/*/CLAUDE.md
 You may write to: tests/integration/, tests/e2e/
 
 Start by analyzing the architecture, then create comprehensive integration tests.""",
-    subagent_type="general-purpose",
-    model="sonnet"  # REQUIRED
+    subagent_type="general-purpose"
 )
 ```
 
@@ -2573,8 +2586,7 @@ If integration tests failed:
 
        Integration test failure details:
        [paste relevant section from TEST-RESULTS.md]""",
-       subagent_type="general-purpose",
-       model="sonnet"
+       subagent_type="general-purpose"
    )
    ```
 
@@ -2590,8 +2602,7 @@ If integration tests failed:
        Run: pytest tests/integration/ tests/e2e/ -v
 
        Report results in tests/integration/TEST-RESULTS-RETEST.md""",
-       subagent_type="general-purpose",
-       model="sonnet"
+       subagent_type="general-purpose"
    )
    ```
 
@@ -3530,8 +3541,7 @@ Task(
     Consider multiple approaches before implementing.
 
     Implement circuit breaker with comprehensive tests.""",
-    subagent_type="general-purpose",
-    model="sonnet"
+    subagent_type="general-purpose"
 )
 ```
 
@@ -3543,8 +3553,7 @@ Task(
 
     Implement user CRUD endpoints following existing patterns.
     Use standard repository pattern, write tests.""",
-    subagent_type="general-purpose",
-    model="sonnet"
+    subagent_type="general-purpose"
 )
 ```
 

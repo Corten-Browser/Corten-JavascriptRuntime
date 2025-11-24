@@ -109,8 +109,8 @@ def reset_tasks(confirm: bool = True):
         print("WARNING: This will clear all completion timestamps and")
         print("         verification results for the above tasks.")
         print()
-        response = input("Proceed with reset? [y/N]: ")
-        if response.lower() != 'y':
+        response = input("Proceed with reset? [y/N]: ").strip()
+        if response.lower() not in ['y', 'yes']:
             print("Reset cancelled.")
             return 0
 

@@ -4,52 +4,70 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 # 🎯 MODEL STRATEGY
 
-## Two-Tier Model Selection
+## Unified Model Approach (v1.15.0+)
 
-This orchestration system uses a strategic two-tier model selection approach:
+Sub-agents **inherit the orchestrator's model by default**. Use `/model` to control the model for your entire orchestration session:
 
-### Your Model (Orchestrator-Level)
-**User-controlled** via `/model` command:
-- **Sonnet 4.5** (default, recommended): Better coding (77.2% SWE-bench), 30+ hour autonomy, 5x cheaper ($3/$15 per 1M tokens)
-- **Opus 4.1** (optional): Slight reasoning edge (70.6% graduate-level), higher cost ($15/$75 per 1M tokens), use for complex/vague specifications
+- `/model opus` - Use Opus 4.5 throughout (best coding/reasoning, ~1.67x cost vs Sonnet)
+- `/model sonnet` - Use Sonnet 4.5 throughout (fast, cost-effective, default)
 
-### Sub-Agent Model (Component-Level)
-**System-controlled** (ALWAYS Sonnet):
-- **ALL component agents MUST use Sonnet 4.5**
-- Enforced via explicit `model="sonnet"` in Task tool invocations
-- Why: Coding doesn't benefit from Opus, but costs 5x more
-- You are responsible for enforcing this
+### Model Comparison
 
-## When Working as Orchestrator
+| Model | Strengths | Input Cost | Output Cost | Use When |
+|-------|-----------|------------|-------------|----------|
+| **Opus 4.5** | Superior coding (marketed for "building agents and coding"), best reasoning | $5/MTok ($0.50 cached) | $25/MTok | Complex specs, novel architecture, debugging subtle issues |
+| **Sonnet 4.5** | Excellent coding (77.2% SWE-bench), fast, cost-effective | $3/MTok ($0.30 cached) | $15/MTok | Well-defined specs, straightforward implementation |
 
-**CRITICAL**: When launching sub-agents using the Task tool, you MUST ALWAYS specify `model="sonnet"`:
+### Cost Impact (5-component project)
+
+| Configuration | Estimated Cost | Difference |
+|---------------|----------------|------------|
+| Sonnet throughout | ~$2.66 | Baseline |
+| Opus throughout | ~$4.44 | +$1.78 (67% more) |
+
+**Decision:** At only 1.67x cost difference, Opus 4.5's superior coding ability makes it a viable choice throughout. Choose based on your needs and budget.
+
+### When to Use Opus 4.5
+
+✅ **Choose Opus if:**
+- Complex specifications with ambiguity requiring interpretation
+- Novel architectural decisions needed
+- Debugging subtle, hard-to-reproduce issues
+- Budget allows ~1.67x cost increase for better results
+
+✅ **Choose Sonnet if:**
+- Well-defined specifications
+- Straightforward implementation work
+- Cost is primary concern
+- Already achieving good results with Sonnet
+
+### Model Override (Rarely Needed)
+
+You can still specify `model=` explicitly if you want mixed models (uncommon):
 
 ```python
-# ✅ CORRECT - Always specify model="sonnet"
-Task(
-    description="Implement backend component",
-    prompt="Read components/backend/CLAUDE.md and implement...",
-    subagent_type="general-purpose",
-    model="sonnet"  # ← REQUIRED
-)
-
-# ❌ WRONG - Omitting model would make sub-agent inherit your model
+# Default: inherit orchestrator's model
 Task(
     description="Implement backend component",
     prompt="Read components/backend/CLAUDE.md and implement...",
     subagent_type="general-purpose"
-    # ← MISSING model="sonnet" - would use YOUR model!
+    # No model= needed - inherits automatically
+)
+
+# Override only if needed (rare)
+Task(
+    description="Simple data transformation",
+    prompt="...",
+    subagent_type="general-purpose",
+    model="sonnet"  # Force Sonnet even if orchestrator uses Opus
 )
 ```
 
-**Why this matters**: If you're using Opus and forget to specify `model="sonnet"` for sub-agents, they'll inherit Opus, causing 5x cost increase with NO coding benefit.
+### Historical Context
 
-## Cost Impact
+**Prior to v1.15.0:** System enforced `model="sonnet"` for all sub-agents because Opus 4.1 cost 5x more ($15/$75 vs $3/$15 per MTok) with marginal coding benefit. Opus 4.5's improved pricing (1.67x vs 5x) and superior coding ability eliminated the need for this enforcement.
 
-For a project with 5 components:
-- **Sonnet + Sonnet (enforced)**: $1.65 ✅ Optimal
-- **Opus + Sonnet (enforced)**: $2.25 (reasonable if specs are complex)
-- **~~Opus + Opus~~**: $8.25 ❌ Never happens (you enforce Sonnet for sub-agents)
+See `docs/MODEL-STRATEGY.md` for detailed analysis
 
 ---
 
