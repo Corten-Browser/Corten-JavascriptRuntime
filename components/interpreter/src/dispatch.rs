@@ -4,7 +4,7 @@
 
 use async_runtime::PromiseState;
 use bytecode_system::{BytecodeChunk, Opcode, UpvalueDescriptor};
-use builtins::{ConsoleObject, JsValue as BuiltinValue, MathObject};
+use builtins::{ConsoleObject, JSONObject, JsValue as BuiltinValue, MathObject};
 use core_types::{ErrorKind, JsError, Value};
 use std::any::Any;
 use std::cell::RefCell;
@@ -90,6 +90,18 @@ impl Dispatcher {
         globals.insert(
             "Promise".to_string(),
             Value::NativeFunction("Promise".to_string()),
+        );
+
+        // Inject JSON global object
+        globals.insert(
+            "JSON".to_string(),
+            Value::NativeObject(Rc::new(RefCell::new(JSONObject)) as Rc<RefCell<dyn Any>>),
+        );
+
+        // Inject Array constructor
+        globals.insert(
+            "Array".to_string(),
+            Value::NativeFunction("Array".to_string()),
         );
 
         Self {
@@ -429,7 +441,38 @@ impl Dispatcher {
                             if let Some(gc_obj) = borrowed.downcast_ref::<Box<dyn Any>>() {
                                 // Check if it's a GCObject wrapped in Box<dyn Any>
                                 if let Some(gc_object) = gc_obj.downcast_ref::<GCObject>() {
-                                    let value = gc_object.get(&name);
+                                    // Check if this is an array (has numeric "length" property)
+                                    let is_array = matches!(gc_object.get("length"), Value::Smi(_));
+
+                                    let value = if is_array {
+                                        // Check for array prototype methods first
+                                        match name.as_str() {
+                                            "map" => Value::NativeFunction("Array.prototype.map".to_string()),
+                                            "filter" => Value::NativeFunction("Array.prototype.filter".to_string()),
+                                            "forEach" => Value::NativeFunction("Array.prototype.forEach".to_string()),
+                                            "reduce" => Value::NativeFunction("Array.prototype.reduce".to_string()),
+                                            "find" => Value::NativeFunction("Array.prototype.find".to_string()),
+                                            "findIndex" => Value::NativeFunction("Array.prototype.findIndex".to_string()),
+                                            "some" => Value::NativeFunction("Array.prototype.some".to_string()),
+                                            "every" => Value::NativeFunction("Array.prototype.every".to_string()),
+                                            "includes" => Value::NativeFunction("Array.prototype.includes".to_string()),
+                                            "indexOf" => Value::NativeFunction("Array.prototype.indexOf".to_string()),
+                                            "push" => Value::NativeFunction("Array.prototype.push".to_string()),
+                                            "pop" => Value::NativeFunction("Array.prototype.pop".to_string()),
+                                            "shift" => Value::NativeFunction("Array.prototype.shift".to_string()),
+                                            "unshift" => Value::NativeFunction("Array.prototype.unshift".to_string()),
+                                            "slice" => Value::NativeFunction("Array.prototype.slice".to_string()),
+                                            "splice" => Value::NativeFunction("Array.prototype.splice".to_string()),
+                                            "concat" => Value::NativeFunction("Array.prototype.concat".to_string()),
+                                            "join" => Value::NativeFunction("Array.prototype.join".to_string()),
+                                            "reverse" => Value::NativeFunction("Array.prototype.reverse".to_string()),
+                                            "sort" => Value::NativeFunction("Array.prototype.sort".to_string()),
+                                            _ => gc_object.get(&name), // Regular property access
+                                        }
+                                    } else {
+                                        // Not an array, regular property access
+                                        gc_object.get(&name)
+                                    };
                                     drop(borrowed);
                                     self.stack.push(value);
                                 } else {
@@ -495,7 +538,19 @@ impl Dispatcher {
                                     "E" => self.stack.push(Value::Double(MathObject::E)),
                                     _ => self.stack.push(Value::Undefined),
                                 }
+                            } else if borrowed.is::<JSONObject>() {
+                                // Return JSON method based on property name
+                                match name.as_str() {
+                                    "stringify" => self
+                                        .stack
+                                        .push(Value::NativeFunction("JSON.stringify".to_string())),
+                                    "parse" => self
+                                        .stack
+                                        .push(Value::NativeFunction("JSON.parse".to_string())),
+                                    _ => self.stack.push(Value::Undefined),
+                                }
                             } else {
+                                // Unknown NativeObject type
                                 self.stack.push(Value::Undefined);
                             }
                         }
@@ -1010,6 +1065,54 @@ impl Dispatcher {
                 };
                 Ok(PromiseConstructor::reject(error))
             }
+            // JSON methods
+            "JSON.stringify" => {
+                if let Some(value) = args.first() {
+                    let json_str = self.value_to_json_string(value);
+                    Ok(Value::String(json_str))
+                } else {
+                    Ok(Value::String("undefined".to_string()))
+                }
+            }
+            "JSON.parse" => {
+                if let Some(Value::String(s)) = args.first() {
+                    self.parse_json_string(s)
+                } else {
+                    Err(JsError {
+                        kind: ErrorKind::SyntaxError,
+                        message: "JSON.parse requires a string argument".to_string(),
+                        stack: vec![],
+                        source_position: None,
+                    })
+                }
+            }
+            // Array prototype methods (using method receiver pattern)
+            // Note: For prototype methods, the first arg is `this` (the array)
+            "Array.prototype.push" => {
+                // This would need the array reference passed - simplified for now
+                Err(JsError {
+                    kind: ErrorKind::TypeError,
+                    message: "Array.prototype.push is not yet implemented for runtime calls".to_string(),
+                    stack: vec![],
+                    source_position: None,
+                })
+            }
+            "Array.prototype.map" | "Array.prototype.filter" | "Array.prototype.forEach" |
+            "Array.prototype.reduce" | "Array.prototype.find" | "Array.prototype.findIndex" |
+            "Array.prototype.some" | "Array.prototype.every" | "Array.prototype.includes" |
+            "Array.prototype.indexOf" | "Array.prototype.pop" | "Array.prototype.shift" |
+            "Array.prototype.unshift" | "Array.prototype.slice" | "Array.prototype.splice" |
+            "Array.prototype.concat" | "Array.prototype.join" | "Array.prototype.reverse" |
+            "Array.prototype.sort" => {
+                // Array prototype methods require callback integration which
+                // needs the call stack context. Return a descriptive error for now.
+                Err(JsError {
+                    kind: ErrorKind::TypeError,
+                    message: format!("{} requires callback support not yet implemented", name),
+                    stack: vec![],
+                    source_position: None,
+                })
+            }
             _ => Err(JsError {
                 kind: ErrorKind::TypeError,
                 message: format!("{} is not a function", name),
@@ -1032,6 +1135,165 @@ impl Dispatcher {
             Value::NativeObject(_) => BuiltinValue::object(),
             Value::NativeFunction(name) => BuiltinValue::string(format!("function {}() {{ [native code] }}", name)),
         }
+    }
+
+    /// Convert a Value to JSON string
+    fn value_to_json_string(&self, value: &Value) -> String {
+        match value {
+            Value::Undefined => "undefined".to_string(),
+            Value::Null => "null".to_string(),
+            Value::Boolean(b) => if *b { "true".to_string() } else { "false".to_string() },
+            Value::Smi(n) => n.to_string(),
+            Value::Double(n) => {
+                if n.is_nan() {
+                    "null".to_string()
+                } else if n.is_infinite() {
+                    "null".to_string()
+                } else {
+                    n.to_string()
+                }
+            }
+            Value::String(s) => format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n").replace('\r', "\\r").replace('\t', "\\t")),
+            Value::NativeObject(obj) => {
+                let borrowed = obj.borrow();
+                if let Some(gc_obj) = borrowed.downcast_ref::<Box<dyn Any>>() {
+                    if let Some(gc_object) = gc_obj.downcast_ref::<GCObject>() {
+                        // Check if it's an array (has length property)
+                        if let Value::Smi(len) = gc_object.get("length") {
+                            // Stringify as array
+                            let mut parts = Vec::new();
+                            for i in 0..len {
+                                let elem = gc_object.get(&i.to_string());
+                                parts.push(self.value_to_json_string(&elem));
+                            }
+                            return format!("[{}]", parts.join(","));
+                        } else {
+                            // Stringify as object
+                            // Note: GCObject doesn't expose keys iterator, so we output empty object
+                            return "{}".to_string();
+                        }
+                    }
+                }
+                "{}".to_string()
+            }
+            Value::HeapObject(_) => "{}".to_string(),
+            Value::NativeFunction(_) => "undefined".to_string(), // Functions become undefined in JSON
+        }
+    }
+
+    /// Parse a JSON string into a Value
+    fn parse_json_string(&self, json: &str) -> Result<Value, JsError> {
+        let trimmed = json.trim();
+
+        // Handle primitive values
+        if trimmed == "null" {
+            return Ok(Value::Null);
+        }
+        if trimmed == "true" {
+            return Ok(Value::Boolean(true));
+        }
+        if trimmed == "false" {
+            return Ok(Value::Boolean(false));
+        }
+
+        // Handle numbers
+        if let Ok(n) = trimmed.parse::<f64>() {
+            if n.fract() == 0.0 && n >= i32::MIN as f64 && n <= i32::MAX as f64 {
+                return Ok(Value::Smi(n as i32));
+            }
+            return Ok(Value::Double(n));
+        }
+
+        // Handle strings
+        if trimmed.starts_with('"') && trimmed.ends_with('"') {
+            let inner = &trimmed[1..trimmed.len()-1];
+            let unescaped = inner
+                .replace("\\\"", "\"")
+                .replace("\\\\", "\\")
+                .replace("\\n", "\n")
+                .replace("\\r", "\r")
+                .replace("\\t", "\t");
+            return Ok(Value::String(unescaped));
+        }
+
+        // Handle arrays (simplified - single-level)
+        if trimmed.starts_with('[') && trimmed.ends_with(']') {
+            if let Some(ref heap) = self.heap {
+                let gc_object = heap.create_object();
+                let boxed: Box<dyn Any> = Box::new(gc_object);
+                let obj_ref = Rc::new(RefCell::new(boxed)) as Rc<RefCell<dyn Any>>;
+
+                let inner = &trimmed[1..trimmed.len()-1].trim();
+                if !inner.is_empty() {
+                    // Simple comma split (doesn't handle nested structures)
+                    let elements: Vec<&str> = inner.split(',').collect();
+                    let len = elements.len();
+
+                    let mut borrowed = obj_ref.borrow_mut();
+                    if let Some(gc_obj) = borrowed.downcast_mut::<Box<dyn Any>>() {
+                        if let Some(gc_object) = gc_obj.downcast_mut::<GCObject>() {
+                            for (i, elem) in elements.iter().enumerate() {
+                                if let Ok(val) = self.parse_json_string(elem.trim()) {
+                                    gc_object.set(i.to_string(), val);
+                                }
+                            }
+                            gc_object.set("length".to_string(), Value::Smi(len as i32));
+                        }
+                    }
+                } else {
+                    // Empty array
+                    let mut borrowed = obj_ref.borrow_mut();
+                    if let Some(gc_obj) = borrowed.downcast_mut::<Box<dyn Any>>() {
+                        if let Some(gc_object) = gc_obj.downcast_mut::<GCObject>() {
+                            gc_object.set("length".to_string(), Value::Smi(0));
+                        }
+                    }
+                }
+
+                return Ok(Value::NativeObject(obj_ref));
+            }
+            return Ok(Value::Undefined);
+        }
+
+        // Handle objects (simplified)
+        if trimmed.starts_with('{') && trimmed.ends_with('}') {
+            if let Some(ref heap) = self.heap {
+                let gc_object = heap.create_object();
+                let boxed: Box<dyn Any> = Box::new(gc_object);
+                let obj_ref = Rc::new(RefCell::new(boxed)) as Rc<RefCell<dyn Any>>;
+
+                // Simple key:value parsing (doesn't handle nested structures)
+                let inner = &trimmed[1..trimmed.len()-1].trim();
+                if !inner.is_empty() {
+                    for pair in inner.split(',') {
+                        let pair = pair.trim();
+                        if let Some(colon_idx) = pair.find(':') {
+                            let key = pair[..colon_idx].trim().trim_matches('"');
+                            let val_str = pair[colon_idx+1..].trim();
+
+                            if let Ok(val) = self.parse_json_string(val_str) {
+                                let mut borrowed = obj_ref.borrow_mut();
+                                if let Some(gc_obj) = borrowed.downcast_mut::<Box<dyn Any>>() {
+                                    if let Some(gc_object) = gc_obj.downcast_mut::<GCObject>() {
+                                        gc_object.set(key.to_string(), val);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                return Ok(Value::NativeObject(obj_ref));
+            }
+            return Ok(Value::Undefined);
+        }
+
+        Err(JsError {
+            kind: ErrorKind::SyntaxError,
+            message: format!("Unexpected token in JSON: {}", trimmed),
+            stack: vec![],
+            source_position: None,
+        })
     }
 
     /// Execute a function call with pre-extracted arguments
@@ -1560,11 +1822,13 @@ mod tests {
     #[test]
     fn test_dispatcher_new() {
         let dispatcher = Dispatcher::new();
-        // Globals contains console, Math, and Promise by default
-        assert_eq!(dispatcher.globals.len(), 3);
+        // Globals contains console, Math, Promise, JSON, and Array by default
+        assert_eq!(dispatcher.globals.len(), 5);
         assert!(dispatcher.globals.contains_key("console"));
         assert!(dispatcher.globals.contains_key("Math"));
         assert!(dispatcher.globals.contains_key("Promise"));
+        assert!(dispatcher.globals.contains_key("JSON"));
+        assert!(dispatcher.globals.contains_key("Array"));
         assert!(dispatcher.stack.is_empty());
         assert!(dispatcher.open_upvalues.is_empty());
         assert!(dispatcher.current_upvalues.is_empty());
@@ -1573,11 +1837,13 @@ mod tests {
     #[test]
     fn test_dispatcher_default() {
         let dispatcher = Dispatcher::default();
-        // Default has console, Math, and Promise globals
-        assert_eq!(dispatcher.globals.len(), 3);
+        // Default has console, Math, Promise, JSON, and Array globals
+        assert_eq!(dispatcher.globals.len(), 5);
         assert!(dispatcher.globals.contains_key("console"));
         assert!(dispatcher.globals.contains_key("Math"));
         assert!(dispatcher.globals.contains_key("Promise"));
+        assert!(dispatcher.globals.contains_key("JSON"));
+        assert!(dispatcher.globals.contains_key("Array"));
     }
 
     #[test]
