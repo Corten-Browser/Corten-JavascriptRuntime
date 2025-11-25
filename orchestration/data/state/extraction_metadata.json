@@ -1,19 +1,19 @@
 {
-  "last_extraction": "2025-11-24T07:10:00.000000",
+  "last_extraction": "2025-11-25T00:00:00.000000",
   "extraction_method": "hybrid",
   "spec_files": [
     {
       "path": "specifications/javascript-runtime-specification-V2.md",
       "features_extracted": 73,
       "extraction_method": "llm",
-      "last_processed": "2025-11-24T07:10:00.000000"
+      "last_processed": "2025-11-25T00:00:00.000000"
     }
   ],
   "total_features": 73,
   "automated_features": 0,
   "llm_features": 73,
   "llm_extraction_complete": true,
-  "llm_extraction_timestamp": "2025-11-24T07:10:00.000000",
+  "llm_extraction_timestamp": "2025-11-25T00:00:00.000000",
   "automated_extraction_success": false,
   "detected_language": "rust",
   "language_confidence": "high",
@@ -32,10 +32,43 @@
     "workers": 4,
     "testing": 1
   },
+  "requirement_types": {
+    "feature": 72,
+    "compliance": 1,
+    "performance": 0,
+    "constraint": 0,
+    "integration": 0,
+    "quality": 0
+  },
+  "compliance_requirements": {
+    "total": 1,
+    "with_anti_bypass_clauses": 1,
+    "external_suites_referenced": ["Test262"]
+  },
+  "anti_bypass_protection": {
+    "enabled": true,
+    "clauses_generated": 5,
+    "requirements_protected": ["FEAT-073"]
+  },
+  "acronyms_resolved": {
+    "Test262": {
+      "full_name": "Test262",
+      "url": "https://github.com/tc39/test262",
+      "type": "conformance_suite"
+    }
+  },
   "template_matches": {
     "javascript-js-runtime-integration": 1,
     "javascript-event-loop": 3,
     "javascript-wasm-support": 1,
     "devtools-debugger": 1
-  }
+  },
+  "enrichment_history": [
+    {
+      "timestamp": "2025-11-25T00:00:00.000000",
+      "action": "Added anti-bypass clauses to compliance requirements",
+      "requirements_enriched": ["FEAT-073"],
+      "fields_added": ["type", "source", "external_reference", "verification", "not_satisfied_by", "acceptance_criteria"]
+    }
+  ]
 }

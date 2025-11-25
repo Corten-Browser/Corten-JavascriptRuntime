@@ -1437,6 +1437,69 @@
       "dependencies": [],
       "estimated_loc": "3000-5000",
       "difficulty": "medium",
+      "type": "compliance",
+      "source": {
+        "file": "specifications/javascript-runtime-specification-V2.md",
+        "line": 449,
+        "verbatim": "Target 70-80% initial conformance, reaching 95%+ for production."
+      },
+      "external_reference": {
+        "name": "Test262",
+        "acronym": "Test262",
+        "url": "https://github.com/tc39/test262",
+        "type": "conformance_suite",
+        "common_test_paths": [
+          "test/language/",
+          "test/built-ins/",
+          "test/harness/",
+          "test/annexB/"
+        ]
+      },
+      "verification": {
+        "method": "external_suite",
+        "suite_name": "Test262",
+        "suite_url": "https://github.com/tc39/test262",
+        "threshold": {
+          "metric": "pass_rate",
+          "value": 0.95,
+          "operator": ">="
+        },
+        "evidence_required": [
+          "Test262 harness execution log",
+          "Results JSON from test262-harness run",
+          "Summary of failing tests with issue tracking",
+          "Pass rate percentage calculation"
+        ]
+      },
+      "not_satisfied_by": [
+        {
+          "description": "Internal tests mimicking Test262 naming conventions",
+          "rationale": "Must run actual Test262 suite from https://github.com/tc39/test262, not internally-created tests with similar names"
+        },
+        {
+          "description": "Subset of Test262 tests (cherry-picked)",
+          "rationale": "Must run ALL tests in specified paths (test/language/, test/built-ins/, etc.), not a curated subset"
+        },
+        {
+          "description": "Mocked or stubbed test harness",
+          "rationale": "Must execute tests against real JavaScript runtime output using official test262-harness"
+        },
+        {
+          "description": "Self-reported pass rates without execution evidence",
+          "rationale": "Must provide Test262 harness execution logs and results JSON as proof"
+        },
+        {
+          "description": "Passing only 'expected to fail' tests",
+          "rationale": "Pass rate calculated against TOTAL tests, including those marked as expected failures"
+        }
+      ],
+      "acceptance_criteria": [
+        "Test262 suite cloned from official repository",
+        "test262-harness configured and running",
+        "All test categories executed (language, built-ins, annexB)",
+        "Pass rate >= 95% verified via harness output",
+        "Failing tests documented with issue tracking for future fixes"
+      ],
       "test_strategy": {
         "public_test_suites": [
           {
@@ -1448,7 +1511,9 @@
       },
       "created_at": "2025-11-24T07:10:00.000000",
       "reset_at": "2025-11-24T19:23:40.913637Z",
-      "reset_from": "completed"
+      "reset_from": "completed",
+      "enriched_by_llm": true,
+      "enriched_at": "2025-11-25T00:00:00.000000Z"
     }
   ]
 }
