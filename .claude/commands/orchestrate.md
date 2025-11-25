@@ -636,7 +636,7 @@ When executing Level 3 (Phases 1-6), checkpoint system integrates automatically:
 
 **At orchestration start:**
 ```python
-from orchestration.checkpointing.orchestration_with_checkpoints import CheckpointedOrchestration
+from orchestration.checkpoints.orchestration_with_checkpoints import CheckpointedOrchestration
 
 orchestrator = CheckpointedOrchestration(".")
 if not resuming:

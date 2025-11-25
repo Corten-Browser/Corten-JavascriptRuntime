@@ -1,0 +1,508 @@
+# Built-in Acronym Database
+# LLM Extraction Specification v1.0.0 - Section 6.1
+#
+# This database provides authoritative expansions for common technical acronyms.
+# Projects can extend this with domain-specific glossaries.
+
+version: "1.0.0"
+
+acronyms:
+  # ============================================================================
+  # Web Platform
+  # ============================================================================
+  WPT:
+    full_name: "Web Platform Tests"
+    definition: "A cross-browser test suite for web platform standards"
+    url: "https://github.com/web-platform-tests/wpt"
+    authoritative_source: "https://web-platform-tests.org/"
+    type: "conformance_suite"
+    common_test_paths:
+      - css/
+      - dom/
+      - html/
+      - fetch/
+      - url/
+      - encoding/
+      - streams/
+      - webidl/
+
+  W3C:
+    full_name: "World Wide Web Consortium"
+    definition: "International standards organization for the World Wide Web"
+    url: "https://www.w3.org/"
+    type: "standards_organization"
+
+  WHATWG:
+    full_name: "Web Hypertext Application Technology Working Group"
+    definition: "Community maintaining HTML and DOM standards"
+    url: "https://whatwg.org/"
+    type: "standards_organization"
+
+  CSS:
+    full_name: "Cascading Style Sheets"
+    definition: "Style sheet language for describing presentation of documents"
+    url: "https://www.w3.org/Style/CSS/"
+    type: "specification"
+
+  CSSWG:
+    full_name: "CSS Working Group"
+    definition: "W3C working group responsible for CSS specifications"
+    url: "https://www.w3.org/Style/CSS/"
+    type: "standards_body"
+
+  DOM:
+    full_name: "Document Object Model"
+    definition: "Programming interface for HTML and XML documents"
+    url: "https://dom.spec.whatwg.org/"
+    type: "specification"
+
+  HTML:
+    full_name: "HyperText Markup Language"
+    definition: "Standard markup language for documents on the web"
+    url: "https://html.spec.whatwg.org/"
+    type: "specification"
+
+  SVG:
+    full_name: "Scalable Vector Graphics"
+    definition: "XML-based vector image format"
+    url: "https://www.w3.org/Graphics/SVG/"
+    type: "specification"
+
+  XML:
+    full_name: "Extensible Markup Language"
+    definition: "Markup language for encoding documents"
+    url: "https://www.w3.org/XML/"
+    type: "format"
+
+  XHTML:
+    full_name: "Extensible HyperText Markup Language"
+    definition: "HTML reformulated as XML"
+    url: "https://www.w3.org/TR/xhtml1/"
+    type: "specification"
+
+  URL:
+    full_name: "Uniform Resource Locator"
+    definition: "Reference to a web resource"
+    url: "https://url.spec.whatwg.org/"
+    type: "specification"
+
+  URI:
+    full_name: "Uniform Resource Identifier"
+    definition: "String identifying a resource"
+    url: "https://www.rfc-editor.org/rfc/rfc3986"
+    type: "specification"
+
+  CORS:
+    full_name: "Cross-Origin Resource Sharing"
+    definition: "Mechanism for secure cross-origin requests"
+    url: "https://fetch.spec.whatwg.org/#http-cors-protocol"
+    type: "specification"
+
+  XHR:
+    full_name: "XMLHttpRequest"
+    definition: "API for transferring data between browser and server"
+    url: "https://xhr.spec.whatwg.org/"
+    type: "specification"
+
+  # ============================================================================
+  # JavaScript / ECMAScript
+  # ============================================================================
+  ECMAScript:
+    full_name: "ECMAScript Language Specification"
+    definition: "Standard for JavaScript programming language"
+    url: "https://tc39.es/ecma262/"
+    type: "specification"
+    aliases: ["ES", "ES5", "ES6", "ES2015", "ES2016", "ES2017", "ES2018", "ES2019", "ES2020", "ES2021", "ES2022", "ES2023", "ES2024"]
+
+  TC39:
+    full_name: "Technical Committee 39"
+    definition: "ECMA committee responsible for ECMAScript"
+    url: "https://tc39.es/"
+    type: "standards_body"
+
+  Test262:
+    full_name: "Test262"
+    definition: "Official ECMAScript conformance test suite"
+    url: "https://github.com/tc39/test262"
+    type: "conformance_suite"
+    common_test_paths:
+      - test/language/
+      - test/built-ins/
+      - test/harness/
+      - test/annexB/
+
+  JSX:
+    full_name: "JavaScript XML"
+    definition: "Syntax extension for JavaScript used with React"
+    type: "syntax"
+
+  AST:
+    full_name: "Abstract Syntax Tree"
+    definition: "Tree representation of source code structure"
+    type: "concept"
+
+  # ============================================================================
+  # Programming Standards
+  # ============================================================================
+  POSIX:
+    full_name: "Portable Operating System Interface"
+    definition: "Family of standards for maintaining compatibility between operating systems"
+    url: "https://pubs.opengroup.org/onlinepubs/9699919799/"
+    type: "specification"
+
+  IEEE:
+    full_name: "Institute of Electrical and Electronics Engineers"
+    definition: "Professional association and standards organization"
+    url: "https://www.ieee.org/"
+    type: "standards_organization"
+
+  ISO:
+    full_name: "International Organization for Standardization"
+    definition: "International standards development organization"
+    url: "https://www.iso.org/"
+    type: "standards_organization"
+
+  ANSI:
+    full_name: "American National Standards Institute"
+    definition: "Private nonprofit standards organization"
+    url: "https://www.ansi.org/"
+    type: "standards_organization"
+
+  RFC:
+    full_name: "Request for Comments"
+    definition: "Publication of IETF describing internet standards"
+    url: "https://www.rfc-editor.org/"
+    type: "specification_series"
+
+  IETF:
+    full_name: "Internet Engineering Task Force"
+    definition: "Open standards organization for the Internet"
+    url: "https://www.ietf.org/"
+    type: "standards_organization"
+
+  # ============================================================================
+  # Testing Methodologies
+  # ============================================================================
+  TDD:
+    full_name: "Test-Driven Development"
+    definition: "Software development process where tests are written before code"
+    type: "methodology"
+
+  BDD:
+    full_name: "Behavior-Driven Development"
+    definition: "Development process based on expected behavior specifications"
+    type: "methodology"
+
+  ATDD:
+    full_name: "Acceptance Test-Driven Development"
+    definition: "Development based on acceptance criteria"
+    type: "methodology"
+
+  UAT:
+    full_name: "User Acceptance Testing"
+    definition: "Testing to verify system meets business requirements"
+    type: "testing"
+
+  E2E:
+    full_name: "End-to-End"
+    definition: "Testing entire application flow"
+    type: "testing"
+
+  # ============================================================================
+  # CI/CD
+  # ============================================================================
+  CI:
+    full_name: "Continuous Integration"
+    definition: "Practice of automating integration of code changes"
+    type: "practice"
+
+  CD:
+    full_name: "Continuous Deployment"
+    definition: "Practice of automatically deploying code changes"
+    type: "practice"
+    note: "Also 'Continuous Delivery' in some contexts"
+
+  # ============================================================================
+  # Security
+  # ============================================================================
+  OWASP:
+    full_name: "Open Web Application Security Project"
+    definition: "Nonprofit organization focused on software security"
+    url: "https://owasp.org/"
+    type: "organization"
+
+  CVE:
+    full_name: "Common Vulnerabilities and Exposures"
+    definition: "List of publicly disclosed security vulnerabilities"
+    url: "https://cve.mitre.org/"
+    type: "database"
+
+  XSS:
+    full_name: "Cross-Site Scripting"
+    definition: "Security vulnerability allowing injection of scripts"
+    type: "vulnerability"
+
+  CSRF:
+    full_name: "Cross-Site Request Forgery"
+    definition: "Attack forcing users to execute unwanted actions"
+    type: "vulnerability"
+
+  SQL:
+    full_name: "Structured Query Language"
+    definition: "Language for managing relational databases"
+    type: "language"
+
+  # ============================================================================
+  # Performance Metrics
+  # ============================================================================
+  FPS:
+    full_name: "Frames Per Second"
+    definition: "Frequency of frames displayed"
+    type: "metric"
+
+  TTI:
+    full_name: "Time to Interactive"
+    definition: "Time until page becomes fully interactive"
+    type: "metric"
+
+  TTFB:
+    full_name: "Time to First Byte"
+    definition: "Time until first byte received from server"
+    type: "metric"
+
+  FCP:
+    full_name: "First Contentful Paint"
+    definition: "Time when first content is rendered"
+    type: "metric"
+
+  LCP:
+    full_name: "Largest Contentful Paint"
+    definition: "Time when largest content element is rendered"
+    type: "metric"
+
+  CLS:
+    full_name: "Cumulative Layout Shift"
+    definition: "Measure of visual stability"
+    type: "metric"
+
+  INP:
+    full_name: "Interaction to Next Paint"
+    definition: "Measure of responsiveness to user interactions"
+    type: "metric"
+
+  # ============================================================================
+  # Data Formats
+  # ============================================================================
+  JSON:
+    full_name: "JavaScript Object Notation"
+    definition: "Lightweight data interchange format"
+    url: "https://www.json.org/"
+    type: "format"
+
+  YAML:
+    full_name: "YAML Ain't Markup Language"
+    definition: "Human-readable data serialization format"
+    url: "https://yaml.org/"
+    type: "format"
+
+  TOML:
+    full_name: "Tom's Obvious Minimal Language"
+    definition: "Minimal configuration file format"
+    url: "https://toml.io/"
+    type: "format"
+
+  CSV:
+    full_name: "Comma-Separated Values"
+    definition: "Delimited text file format"
+    type: "format"
+
+  # ============================================================================
+  # APIs and Protocols
+  # ============================================================================
+  REST:
+    full_name: "Representational State Transfer"
+    definition: "Architectural style for distributed systems"
+    type: "architecture"
+
+  API:
+    full_name: "Application Programming Interface"
+    definition: "Interface for software components to communicate"
+    type: "concept"
+
+  HTTP:
+    full_name: "Hypertext Transfer Protocol"
+    definition: "Protocol for distributed hypermedia systems"
+    url: "https://httpwg.org/specs/"
+    type: "protocol"
+
+  HTTPS:
+    full_name: "Hypertext Transfer Protocol Secure"
+    definition: "HTTP with encryption via TLS"
+    type: "protocol"
+
+  TCP:
+    full_name: "Transmission Control Protocol"
+    definition: "Connection-oriented transport protocol"
+    type: "protocol"
+
+  UDP:
+    full_name: "User Datagram Protocol"
+    definition: "Connectionless transport protocol"
+    type: "protocol"
+
+  DNS:
+    full_name: "Domain Name System"
+    definition: "Hierarchical naming system for computers"
+    type: "protocol"
+
+  TLS:
+    full_name: "Transport Layer Security"
+    definition: "Cryptographic protocol for secure communications"
+    type: "protocol"
+
+  SSL:
+    full_name: "Secure Sockets Layer"
+    definition: "Deprecated cryptographic protocol (predecessor to TLS)"
+    type: "protocol"
+
+  WebSocket:
+    full_name: "WebSocket Protocol"
+    definition: "Protocol for full-duplex communication over TCP"
+    url: "https://websockets.spec.whatwg.org/"
+    type: "protocol"
+
+  gRPC:
+    full_name: "gRPC Remote Procedure Call"
+    definition: "High-performance RPC framework"
+    url: "https://grpc.io/"
+    type: "protocol"
+
+  GraphQL:
+    full_name: "Graph Query Language"
+    definition: "Query language for APIs"
+    url: "https://graphql.org/"
+    type: "query_language"
+
+  # ============================================================================
+  # CSS-Specific
+  # ============================================================================
+  CSSOM:
+    full_name: "CSS Object Model"
+    definition: "API for manipulating CSS from JavaScript"
+    url: "https://drafts.csswg.org/cssom/"
+    type: "specification"
+
+  BFC:
+    full_name: "Block Formatting Context"
+    definition: "Region for block box layout"
+    type: "css_concept"
+
+  IFC:
+    full_name: "Inline Formatting Context"
+    definition: "Region for inline box layout"
+    type: "css_concept"
+
+  HSL:
+    full_name: "Hue, Saturation, Lightness"
+    definition: "Color model based on human perception"
+    type: "color_model"
+
+  RGB:
+    full_name: "Red, Green, Blue"
+    definition: "Additive color model"
+    type: "color_model"
+
+  # ============================================================================
+  # Development Tools
+  # ============================================================================
+  IDE:
+    full_name: "Integrated Development Environment"
+    definition: "Software application for software development"
+    type: "tool_category"
+
+  VCS:
+    full_name: "Version Control System"
+    definition: "System for tracking changes to code"
+    type: "tool_category"
+
+  SCM:
+    full_name: "Source Code Management"
+    definition: "System for managing source code versions"
+    type: "tool_category"
+
+  # ============================================================================
+  # Architecture
+  # ============================================================================
+  MVC:
+    full_name: "Model-View-Controller"
+    definition: "Software design pattern"
+    type: "architecture"
+
+  MVVM:
+    full_name: "Model-View-ViewModel"
+    definition: "Software design pattern"
+    type: "architecture"
+
+  SPA:
+    full_name: "Single-Page Application"
+    definition: "Web app loading single HTML page"
+    type: "architecture"
+
+  SSR:
+    full_name: "Server-Side Rendering"
+    definition: "Rendering web pages on the server"
+    type: "architecture"
+
+  SSG:
+    full_name: "Static Site Generation"
+    definition: "Pre-rendering pages at build time"
+    type: "architecture"
+
+  PWA:
+    full_name: "Progressive Web App"
+    definition: "Web app with native-like capabilities"
+    type: "architecture"
+
+  # ============================================================================
+  # Cloud and Infrastructure
+  # ============================================================================
+  AWS:
+    full_name: "Amazon Web Services"
+    definition: "Cloud computing platform"
+    url: "https://aws.amazon.com/"
+    type: "platform"
+
+  GCP:
+    full_name: "Google Cloud Platform"
+    definition: "Cloud computing services"
+    url: "https://cloud.google.com/"
+    type: "platform"
+
+  CLI:
+    full_name: "Command Line Interface"
+    definition: "Text-based interface for programs"
+    type: "interface"
+
+  GUI:
+    full_name: "Graphical User Interface"
+    definition: "Visual interface for programs"
+    type: "interface"
+
+  # ============================================================================
+  # Documentation
+  # ============================================================================
+  README:
+    full_name: "README"
+    definition: "Documentation file describing a project"
+    type: "documentation"
+
+  CHANGELOG:
+    full_name: "Change Log"
+    definition: "Record of notable changes"
+    type: "documentation"
+
+  SemVer:
+    full_name: "Semantic Versioning"
+    definition: "Versioning scheme MAJOR.MINOR.PATCH"
+    url: "https://semver.org/"
+    type: "convention"

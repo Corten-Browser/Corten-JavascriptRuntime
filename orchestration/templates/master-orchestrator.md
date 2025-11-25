@@ -1668,7 +1668,7 @@ Use checkpoints to handle complex components that can't be completed in one sess
 When agent completes but work is unfinished:
 
 ```python
-from orchestration.checkpointing.checkpoint_manager import CheckpointManager, Checkpoint
+from orchestration.checkpoints.checkpoint_manager import CheckpointManager, Checkpoint
 
 manager = CheckpointManager(project_root)
 
