@@ -325,10 +325,11 @@ fn test_constructor_with_arguments() {
 
     let mut chunk = BytecodeChunk::new();
 
-    // Stack order matches parser: push arguments first, then constructor
+    // Stack order matches parser: push constructor first, then arguments
+    // Per dispatch.rs: "Parser generates: push constructor, push arg1, push arg2, ..., CallNew"
+    chunk.emit(Opcode::CreateClosure(constructor_idx, vec![])); // Push constructor first
     let arg_val = chunk.add_constant(bytecode_system::Value::Number(42.0));
-    chunk.emit(Opcode::LoadConstant(arg_val)); // Push argument first
-    chunk.emit(Opcode::CreateClosure(constructor_idx, vec![])); // Then constructor
+    chunk.emit(Opcode::LoadConstant(arg_val)); // Then argument
     chunk.emit(Opcode::CallNew(1));
     chunk.emit(Opcode::StoreLocal(RegisterId(0)));
 
@@ -461,9 +462,11 @@ fn test_parser_generated_class_with_nested_function() {
     chunk.emit(Opcode::StoreGlobal("Foo".to_string())); // Store as global "Foo"
 
     // Instantiation: let f = new Foo(5);
+    // Stack order: push constructor first, then arguments
+    // Per dispatch.rs: "Parser generates: push constructor, push arg1, push arg2, ..., CallNew"
+    chunk.emit(Opcode::LoadGlobal("Foo".to_string())); // Load constructor first
     let five_val = chunk.add_constant(bytecode_system::Value::Number(5.0));
-    chunk.emit(Opcode::LoadConstant(five_val)); // Push argument 5
-    chunk.emit(Opcode::LoadGlobal("Foo".to_string())); // Load constructor
+    chunk.emit(Opcode::LoadConstant(five_val)); // Then argument 5
     chunk.emit(Opcode::CallNew(1)); // Call constructor with 1 argument
     chunk.emit(Opcode::StoreLocal(RegisterId(0))); // Store instance in register 0
 
