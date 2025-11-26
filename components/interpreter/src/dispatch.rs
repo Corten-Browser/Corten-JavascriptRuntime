@@ -4,7 +4,7 @@
 
 use async_runtime::PromiseState;
 use bytecode_system::{BytecodeChunk, Opcode, UpvalueDescriptor};
-use builtins::{Array, ConsoleObject, JSONObject, JsValue as BuiltinValue, MathObject, NumberObject};
+use builtins::{ConsoleObject, JSONObject, JsValue as BuiltinValue, MathObject, NumberObject};
 use core_types::{ErrorKind, JsError, Value};
 use std::any::Any;
 use std::cell::RefCell;
@@ -1345,14 +1345,17 @@ impl Dispatcher {
                 Ok(Value::Double(NumberObject::parse_float(&s)))
             }
             // Error constructors
-            // Array static methods
             "Array.isArray" => {
                 if let Some(value) = args.first() {
-                    // Check if the value is a heap object with a "length" property (array)
-                    let is_array = if let Value::HeapObject(obj_id) = value {
-                        if let Some(ref heap) = self.heap {
-                            let gc_obj = heap.get_object(*obj_id);
-                            matches!(gc_obj.get("length"), Value::Smi(_))
+                    // Check if the value is a NativeObject with a "length" property (array)
+                    let is_array = if let Value::NativeObject(obj_ref) = value {
+                        let borrowed = obj_ref.borrow();
+                        if let Some(gc_obj) = borrowed.downcast_ref::<Box<dyn Any>>() {
+                            if let Some(gc_object) = gc_obj.downcast_ref::<GCObject>() {
+                                matches!(gc_object.get("length"), Value::Smi(_))
+                            } else {
+                                false
+                            }
                         } else {
                             false
                         }
