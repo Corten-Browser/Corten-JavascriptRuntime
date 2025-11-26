@@ -30,6 +30,12 @@ pub struct Parser<'a> {
     lexer: Lexer<'a>,
     source: &'a str,
     last_position: Option<core_types::SourcePosition>,
+    /// Track if we're in strict mode
+    strict_mode: bool,
+    /// Track loop depth for break/continue validation
+    loop_depth: usize,
+    /// Track function depth for return validation
+    function_depth: usize,
 }
 
 impl<'a> Parser<'a> {
@@ -39,6 +45,9 @@ impl<'a> Parser<'a> {
             lexer: Lexer::new(source),
             source,
             last_position: None,
+            strict_mode: false,
+            loop_depth: 0,
+            function_depth: 0,
         }
     }
 
@@ -1600,9 +1609,8 @@ impl<'a> Parser<'a> {
     fn is_valid_assignment_target(&self, expr: &Expression) -> bool {
         matches!(
             expr,
-            Expression::Identifier(_)
-                | Expression::MemberAccess { .. }
-                | Expression::ComputedMemberAccess { .. }
+            Expression::Identifier { .. }
+                | Expression::MemberExpression { .. }
         )
     }
 
@@ -1717,5 +1725,77 @@ mod tests {
         // Restricted production: throw with newline is an error
         let mut parser = Parser::new("throw\nError()");
         assert!(parser.parse().is_err());
+    }
+
+    // Syntax strictness tests
+
+    #[test]
+    fn test_reject_let_in_if_consequent() {
+        let mut parser = Parser::new("if (true) let x = 1;");
+        let result = parser.parse();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().message.contains("Lexical declaration"));
+    }
+
+    #[test]
+    fn test_reject_const_in_if_alternate() {
+        let mut parser = Parser::new("if (false) ; else const y = 2;");
+        let result = parser.parse();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().message.contains("Lexical declaration"));
+    }
+
+    #[test]
+    fn test_reject_class_in_while_body() {
+        let mut parser = Parser::new("while (true) class C {}");
+        let result = parser.parse();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().message.contains("Class declaration"));
+    }
+
+    #[test]
+    fn test_reject_let_in_for_body() {
+        let mut parser = Parser::new("for (let i = 0; i < 10; i++) let x = 1;");
+        let result = parser.parse();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().message.contains("Lexical declaration"));
+    }
+
+    #[test]
+    fn test_reject_break_outside_loop() {
+        let mut parser = Parser::new("break;");
+        let result = parser.parse();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().message.contains("Illegal break"));
+    }
+
+    #[test]
+    fn test_reject_continue_outside_loop() {
+        let mut parser = Parser::new("continue;");
+        let result = parser.parse();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().message.contains("Illegal continue"));
+    }
+
+    #[test]
+    fn test_accept_break_in_while_loop() {
+        let mut parser = Parser::new("while (true) { break; }");
+        let result = parser.parse();
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_accept_continue_in_for_loop() {
+        let mut parser = Parser::new("for (let i = 0; i < 10; i++) { continue; }");
+        let result = parser.parse();
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_accept_block_statement_in_if() {
+        // Block statements are allowed in single-statement contexts
+        let mut parser = Parser::new("if (true) { let x = 1; }");
+        let result = parser.parse();
+        assert!(result.is_ok());
     }
 }

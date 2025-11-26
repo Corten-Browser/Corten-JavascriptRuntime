@@ -693,6 +693,10 @@ impl BytecodeGenerator {
                 Literal::Boolean(false) => {
                     self.chunk.emit(Opcode::LoadFalse);
                 }
+                Literal::BigInt(_s) => {
+                    // TODO: Implement BigInt support in bytecode
+                    unimplemented!("BigInt literals not yet supported in bytecode")
+                }
                 Literal::Null => {
                     self.chunk.emit(Opcode::LoadNull);
                 }
