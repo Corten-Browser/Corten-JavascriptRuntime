@@ -838,10 +838,13 @@ impl<'a> Parser<'a> {
             let body = Box::new(self.parse_substatement()?);
             self.loop_depth -= 1;
 
-            // Convert expression to pattern
-            let left = self.expression_to_pattern(left_expr)?;
+            // Convert expression to pattern if possible, otherwise keep as expression
+            let left = match self.expression_to_pattern(left_expr.clone()) {
+                Ok(pattern) => ForInOfLeft::Pattern(pattern),
+                Err(_) => ForInOfLeft::Expression(left_expr),
+            };
             return Ok(Statement::ForInStatement {
-                left: ForInOfLeft::Pattern(left),
+                left,
                 right,
                 body,
                 position: None,
@@ -856,10 +859,13 @@ impl<'a> Parser<'a> {
             let body = Box::new(self.parse_substatement()?);
             self.loop_depth -= 1;
 
-            // Convert expression to pattern
-            let left = self.expression_to_pattern(left_expr)?;
+            // Convert expression to pattern if possible, otherwise keep as expression
+            let left = match self.expression_to_pattern(left_expr.clone()) {
+                Ok(pattern) => ForInOfLeft::Pattern(pattern),
+                Err(_) => ForInOfLeft::Expression(left_expr),
+            };
             return Ok(Statement::ForOfStatement {
-                left: ForInOfLeft::Pattern(left),
+                left,
                 right,
                 body,
                 r#await: false,

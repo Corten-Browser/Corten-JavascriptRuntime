@@ -237,6 +237,9 @@ impl ScopeAnalyzer {
                     ForInOfLeft::Pattern(pattern) => {
                         self.visit_pattern_refs(pattern)?;
                     }
+                    ForInOfLeft::Expression(expr) => {
+                        self.visit_expression(expr)?;
+                    }
                 }
 
                 self.visit_expression(right)?;
@@ -259,6 +262,9 @@ impl ScopeAnalyzer {
                     }
                     ForInOfLeft::Pattern(pattern) => {
                         self.visit_pattern_refs(pattern)?;
+                    }
+                    ForInOfLeft::Expression(expr) => {
+                        self.visit_expression(expr)?;
                     }
                 }
 

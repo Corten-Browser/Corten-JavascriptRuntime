@@ -686,6 +686,8 @@ pub enum ForInOfLeft {
     },
     /// Existing variable or pattern
     Pattern(Pattern),
+    /// Left-hand side expression (e.g., member expression like x.y or x[0])
+    Expression(Expression),
 }
 
 /// Catch clause
