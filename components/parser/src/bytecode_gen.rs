@@ -845,23 +845,38 @@ impl BytecodeGenerator {
 
                 match operator {
                     LogicalOperator::And => {
+                        // For &&: return left if falsy, else return right
+                        // Stack: [left] -> Dup -> [left, left] -> JumpIfFalse -> [left]
+                        // If falsy: jump to end with left on stack
+                        // If truthy: Pop left, evaluate right
+                        self.chunk.emit(Opcode::Dup);
                         let skip = self.chunk.instruction_count();
                         self.chunk.emit(Opcode::JumpIfFalse(0));
+                        self.chunk.emit(Opcode::Pop); // Discard left, we'll use right
                         self.visit_expression(right)?;
                         let end = self.chunk.instruction_count();
                         self.patch_jump(skip, end);
                     }
                     LogicalOperator::Or => {
+                        // For ||: return left if truthy, else return right
+                        // Stack: [left] -> Dup -> [left, left] -> JumpIfTrue -> [left]
+                        // If truthy: jump to end with left on stack
+                        // If falsy: Pop left, evaluate right
+                        self.chunk.emit(Opcode::Dup);
                         let skip = self.chunk.instruction_count();
                         self.chunk.emit(Opcode::JumpIfTrue(0));
+                        self.chunk.emit(Opcode::Pop); // Discard left, we'll use right
                         self.visit_expression(right)?;
                         let end = self.chunk.instruction_count();
                         self.patch_jump(skip, end);
                     }
                     LogicalOperator::NullishCoalesce => {
-                        // Simplified - treat as OR for now
+                        // For ??: return left if not null/undefined, else return right
+                        // Simplified - treat as OR for now (TODO: proper nullish check)
+                        self.chunk.emit(Opcode::Dup);
                         let skip = self.chunk.instruction_count();
                         self.chunk.emit(Opcode::JumpIfTrue(0));
+                        self.chunk.emit(Opcode::Pop); // Discard left, we'll use right
                         self.visit_expression(right)?;
                         let end = self.chunk.instruction_count();
                         self.patch_jump(skip, end);
