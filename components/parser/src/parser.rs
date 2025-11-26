@@ -210,6 +210,8 @@ impl<'a> Parser<'a> {
         match token {
             Token::Identifier(name) => {
                 self.lexer.next_token()?;
+                // Validate the identifier is not a reserved word
+                self.validate_identifier(&name)?;
                 Ok(Pattern::Identifier(name))
             }
             Token::Punctuator(Punctuator::LBrace) => self.parse_object_pattern(),
@@ -1256,6 +1258,24 @@ impl<'a> Parser<'a> {
             return Err(syntax_error("Unexpected )", None));
         }
 
+        // Check for rest parameter as first param: (...args)
+        if self.check_punctuator(Punctuator::Spread)? {
+            self.lexer.next_token()?;
+            let rest_name = self.expect_identifier()?;
+            self.expect_punctuator(Punctuator::RParen)?;
+            if self.check_punctuator(Punctuator::Arrow)? {
+                self.lexer.next_token()?;
+                let body = self.parse_arrow_body()?;
+                return Ok(Expression::ArrowFunctionExpression {
+                    params: vec![Pattern::RestElement(Box::new(Pattern::Identifier(rest_name)))],
+                    body,
+                    is_async: false,
+                    position: None,
+                });
+            }
+            return Err(syntax_error("Rest parameter must be in arrow function", None));
+        }
+
         // Parse first expression/pattern
         let first = self.parse_assignment_expression()?;
 
@@ -1279,25 +1299,43 @@ impl<'a> Parser<'a> {
         // Multiple params or expressions
         if self.check_punctuator(Punctuator::Comma)? {
             let mut exprs = vec![first];
+            let mut has_rest = false;
+            let mut rest_param: Option<Pattern> = None;
+
             while self.check_punctuator(Punctuator::Comma)? {
                 self.lexer.next_token()?;
+                // Check for rest parameter: (a, b, ...c)
+                if self.check_punctuator(Punctuator::Spread)? {
+                    self.lexer.next_token()?;
+                    let rest_name = self.expect_identifier()?;
+                    has_rest = true;
+                    rest_param = Some(Pattern::RestElement(Box::new(Pattern::Identifier(rest_name))));
+                    break; // Rest must be last
+                }
                 exprs.push(self.parse_assignment_expression()?);
             }
             self.expect_punctuator(Punctuator::RParen)?;
 
             if self.check_punctuator(Punctuator::Arrow)? {
                 self.lexer.next_token()?;
-                let params: Result<Vec<Pattern>, _> = exprs
+                let mut params: Vec<Pattern> = exprs
                     .into_iter()
                     .map(|e| self.expression_to_pattern(e))
-                    .collect();
+                    .collect::<Result<Vec<_>, _>>()?;
+                if let Some(rest) = rest_param {
+                    params.push(rest);
+                }
                 let body = self.parse_arrow_body()?;
                 return Ok(Expression::ArrowFunctionExpression {
-                    params: params?,
+                    params,
                     body,
                     is_async: false,
                     position: None,
                 });
+            }
+
+            if has_rest {
+                return Err(syntax_error("Rest parameter must be in arrow function", None));
             }
 
             // Sequence expression
@@ -1314,6 +1352,10 @@ impl<'a> Parser<'a> {
     fn expression_to_pattern(&self, expr: Expression) -> Result<Pattern, JsError> {
         match expr {
             Expression::Identifier { name, .. } => Ok(Pattern::Identifier(name)),
+            Expression::SpreadElement { argument, .. } => {
+                let inner = self.expression_to_pattern(*argument)?;
+                Ok(Pattern::RestElement(Box::new(inner)))
+            }
             _ => Err(syntax_error("Invalid parameter", None)),
         }
     }
@@ -1450,6 +1492,8 @@ impl<'a> Parser<'a> {
         self.update_position()?;
         let token = self.lexer.next_token()?;
         if let Token::Identifier(name) = token {
+            // Validate the identifier is not a reserved word
+            self.validate_identifier(&name)?;
             Ok(name)
         } else {
             Err(unexpected_token(

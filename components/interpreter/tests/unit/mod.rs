@@ -13,8 +13,15 @@ use interpreter::{
 #[test]
 fn test_vm_creation() {
     let vm = VM::new();
-    // VM should be initialized with empty global object
-    assert!(vm.get_global("undefined").is_none());
+    // VM should be initialized with standard JavaScript globals
+    // undefined, NaN, and Infinity are standard JavaScript globals
+    assert_eq!(vm.get_global("undefined"), Some(Value::Undefined));
+    // NaN is stored as Double(f64::NAN), but NaN != NaN so we check differently
+    match vm.get_global("NaN") {
+        Some(Value::Double(n)) => assert!(n.is_nan(), "NaN global should be NaN"),
+        other => panic!("NaN global should be Double(NaN), got {:?}", other),
+    }
+    assert_eq!(vm.get_global("Infinity"), Some(Value::Double(f64::INFINITY)));
 }
 
 #[test]

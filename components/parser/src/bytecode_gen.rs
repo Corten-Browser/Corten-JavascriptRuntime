@@ -918,18 +918,16 @@ impl BytecodeGenerator {
                         {
                             if *computed {
                                 // Computed assignment: obj[key] = value
-                                // SetIndex expects stack: [obj, key, value]
+                                // SetIndex expects stack: [obj, key, value], pushes value as result
                                 self.visit_expression(object)?;
                                 self.visit_expression(property)?;
                                 self.visit_expression(right)?;
-                                self.chunk.emit(Opcode::Dup); // Keep value on stack for expression result
                                 self.chunk.emit(Opcode::SetIndex);
                             } else {
                                 // Static assignment: obj.prop = value
-                                // StoreProperty expects stack: [obj, value]
+                                // StoreProperty expects stack: [obj, value], pushes value as result
                                 self.visit_expression(object)?;
                                 self.visit_expression(right)?;
-                                self.chunk.emit(Opcode::Dup); // Keep value on stack for expression result
                                 if let Expression::Identifier { name, .. } = property.as_ref() {
                                     self.chunk.emit(Opcode::StoreProperty(name.clone()));
                                 }
@@ -1084,6 +1082,8 @@ impl BytecodeGenerator {
                             self.chunk.emit(Opcode::Dup);
                             self.visit_expression(value)?;
                             self.chunk.emit(Opcode::StoreProperty(name.clone()));
+                            // Pop the value pushed by StoreProperty - we don't need it here
+                            self.chunk.emit(Opcode::Pop);
                         }
                     }
                 }

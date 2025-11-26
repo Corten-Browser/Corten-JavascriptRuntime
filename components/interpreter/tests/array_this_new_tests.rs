@@ -185,6 +185,7 @@ fn test_method_call_this_binding() {
     let x_val = chunk.add_constant(bytecode_system::Value::Number(5.0));
     chunk.emit(Opcode::LoadConstant(x_val));
     chunk.emit(Opcode::StoreProperty("x".to_string()));
+    chunk.emit(Opcode::Pop); // Pop the returned value (StoreProperty now returns the assigned value)
 
     // Dup object for storing method
     chunk.emit(Opcode::Dup);
@@ -192,6 +193,7 @@ fn test_method_call_this_binding() {
     // Create closure for method (no captured variables)
     chunk.emit(Opcode::CreateClosure(method_idx, vec![]));
     chunk.emit(Opcode::StoreProperty("get".to_string()));
+    chunk.emit(Opcode::Pop); // Pop the returned value
 
     // Store object in register 0
     chunk.emit(Opcode::StoreLocal(RegisterId(0)));
@@ -243,10 +245,12 @@ fn test_method_call_with_arguments() {
     let x_val = chunk.add_constant(bytecode_system::Value::Number(10.0));
     chunk.emit(Opcode::LoadConstant(x_val));
     chunk.emit(Opcode::StoreProperty("x".to_string()));
+    chunk.emit(Opcode::Pop); // Pop the returned value (StoreProperty now returns the assigned value)
 
     chunk.emit(Opcode::Dup);
     chunk.emit(Opcode::CreateClosure(method_idx, vec![]));
     chunk.emit(Opcode::StoreProperty("add".to_string()));
+    chunk.emit(Opcode::Pop); // Pop the returned value
 
     chunk.emit(Opcode::StoreLocal(RegisterId(0)));
 
@@ -354,6 +358,8 @@ fn test_constructor_returning_object() {
     let val = constructor_chunk.add_constant(bytecode_system::Value::Number(999.0));
     constructor_chunk.emit(Opcode::LoadConstant(val));
     constructor_chunk.emit(Opcode::StoreProperty("special".to_string()));
+    constructor_chunk.emit(Opcode::Pop); // Pop the returned value (StoreProperty now returns the assigned value)
+    // Now the object is on top of the stack for return
     constructor_chunk.emit(Opcode::Return);
 
     let constructor_idx = vm.register_function(constructor_chunk);

@@ -521,6 +521,7 @@ impl<'a> Lexer<'a> {
         let start_pos = self.current_position();
         let mut num_str = first.to_string();
         let mut is_float = false;
+        let mut radix: Option<u32> = None; // None = decimal, Some(16) = hex, etc.
 
         // Check for hex (0x), binary (0b), or octal (0o) literals
         if first == '0' && !self.is_at_end() {
@@ -528,7 +529,8 @@ impl<'a> Lexer<'a> {
             match next {
                 'x' | 'X' => {
                     // Hexadecimal
-                    num_str.push(self.advance());
+                    self.advance(); // skip the 'x' (don't add to num_str for parsing)
+                    num_str.clear(); // We'll build the digits-only string
                     if self.is_at_end() || !self.peek().is_ascii_hexdigit() {
                         return Err(JsError {
                             kind: ErrorKind::SyntaxError,
@@ -540,10 +542,12 @@ impl<'a> Lexer<'a> {
                     while !self.is_at_end() && self.peek().is_ascii_hexdigit() {
                         num_str.push(self.advance());
                     }
+                    radix = Some(16);
                 }
                 'b' | 'B' => {
                     // Binary
-                    num_str.push(self.advance());
+                    self.advance(); // skip the 'b'
+                    num_str.clear();
                     if self.is_at_end() || (self.peek() != '0' && self.peek() != '1') {
                         return Err(JsError {
                             kind: ErrorKind::SyntaxError,
@@ -555,10 +559,12 @@ impl<'a> Lexer<'a> {
                     while !self.is_at_end() && (self.peek() == '0' || self.peek() == '1') {
                         num_str.push(self.advance());
                     }
+                    radix = Some(2);
                 }
                 'o' | 'O' => {
                     // Octal
-                    num_str.push(self.advance());
+                    self.advance(); // skip the 'o'
+                    num_str.clear();
                     if self.is_at_end() || !('0'..='7').contains(&self.peek()) {
                         return Err(JsError {
                             kind: ErrorKind::SyntaxError,
@@ -570,6 +576,7 @@ impl<'a> Lexer<'a> {
                     while !self.is_at_end() && ('0'..='7').contains(&self.peek()) {
                         num_str.push(self.advance());
                     }
+                    radix = Some(8);
                 }
                 _ => {
                     // Regular decimal number starting with 0
@@ -592,16 +599,37 @@ impl<'a> Lexer<'a> {
                 });
             }
             self.advance(); // consume 'n'
-            return Ok(Token::BigIntLiteral(num_str));
+            // For BigInt, reconstruct the full literal
+            let bigint_str = match radix {
+                Some(16) => format!("0x{}", num_str),
+                Some(8) => format!("0o{}", num_str),
+                Some(2) => format!("0b{}", num_str),
+                _ => num_str,
+            };
+            return Ok(Token::BigIntLiteral(bigint_str));
         }
 
         // Parse as regular number
-        let value = num_str.parse::<f64>().map_err(|_| JsError {
-            kind: ErrorKind::SyntaxError,
-            message: format!("Invalid number: {}", num_str),
-            stack: vec![],
-            source_position: Some(start_pos),
-        })?;
+        let value = match radix {
+            Some(base) => {
+                // Parse hex, binary, or octal
+                u64::from_str_radix(&num_str, base).map(|n| n as f64).map_err(|_| JsError {
+                    kind: ErrorKind::SyntaxError,
+                    message: format!("Invalid number literal"),
+                    stack: vec![],
+                    source_position: Some(start_pos),
+                })?
+            }
+            None => {
+                // Parse decimal
+                num_str.parse::<f64>().map_err(|_| JsError {
+                    kind: ErrorKind::SyntaxError,
+                    message: format!("Invalid number: {}", num_str),
+                    stack: vec![],
+                    source_position: Some(start_pos),
+                })?
+            }
+        };
 
         Ok(Token::Number(value))
     }
