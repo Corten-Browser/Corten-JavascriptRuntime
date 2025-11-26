@@ -579,8 +579,16 @@ impl Dispatcher {
                                             _ => gc_object.get(&name), // Regular property access
                                         }
                                     } else {
-                                        // Not an array, regular property access
-                                        gc_object.get(&name)
+                                        // Not an array - check for Object.prototype methods first
+                                        match name.as_str() {
+                                            "toString" => Value::NativeFunction("Object.prototype.toString".to_string()),
+                                            "valueOf" => Value::NativeFunction("Object.prototype.valueOf".to_string()),
+                                            "hasOwnProperty" => Value::NativeFunction("Object.prototype.hasOwnProperty".to_string()),
+                                            "propertyIsEnumerable" => Value::NativeFunction("Object.prototype.propertyIsEnumerable".to_string()),
+                                            "isPrototypeOf" => Value::NativeFunction("Object.prototype.isPrototypeOf".to_string()),
+                                            "toLocaleString" => Value::NativeFunction("Object.prototype.toLocaleString".to_string()),
+                                            _ => gc_object.get(&name)  // Regular property access
+                                        }
                                     };
                                     drop(borrowed);
                                     self.stack.push(value);
@@ -731,6 +739,53 @@ impl Dispatcher {
                             } else {
                                 self.stack.push(Value::Undefined);
                             }
+                        }
+                        Value::String(s) => {
+                            // String primitive - handle length and prototype methods
+                            let value = match name.as_str() {
+                                "length" => Value::Smi(s.len() as i32),
+                                "toString" | "valueOf" => Value::NativeFunction("String.prototype.toString".to_string()),
+                                "charAt" => Value::NativeFunction("String.prototype.charAt".to_string()),
+                                "charCodeAt" => Value::NativeFunction("String.prototype.charCodeAt".to_string()),
+                                "indexOf" => Value::NativeFunction("String.prototype.indexOf".to_string()),
+                                "lastIndexOf" => Value::NativeFunction("String.prototype.lastIndexOf".to_string()),
+                                "slice" => Value::NativeFunction("String.prototype.slice".to_string()),
+                                "substring" => Value::NativeFunction("String.prototype.substring".to_string()),
+                                "toLowerCase" => Value::NativeFunction("String.prototype.toLowerCase".to_string()),
+                                "toUpperCase" => Value::NativeFunction("String.prototype.toUpperCase".to_string()),
+                                "trim" => Value::NativeFunction("String.prototype.trim".to_string()),
+                                "trimStart" | "trimLeft" => Value::NativeFunction("String.prototype.trimStart".to_string()),
+                                "trimEnd" | "trimRight" => Value::NativeFunction("String.prototype.trimEnd".to_string()),
+                                "split" => Value::NativeFunction("String.prototype.split".to_string()),
+                                "concat" => Value::NativeFunction("String.prototype.concat".to_string()),
+                                "includes" => Value::NativeFunction("String.prototype.includes".to_string()),
+                                "startsWith" => Value::NativeFunction("String.prototype.startsWith".to_string()),
+                                "endsWith" => Value::NativeFunction("String.prototype.endsWith".to_string()),
+                                "repeat" => Value::NativeFunction("String.prototype.repeat".to_string()),
+                                "padStart" => Value::NativeFunction("String.prototype.padStart".to_string()),
+                                "padEnd" => Value::NativeFunction("String.prototype.padEnd".to_string()),
+                                _ => Value::Undefined,
+                            };
+                            self.stack.push(value);
+                        }
+                        Value::Smi(_) | Value::Double(_) => {
+                            // Number primitive - handle prototype methods
+                            let value = match name.as_str() {
+                                "toString" => Value::NativeFunction("Number.prototype.toString".to_string()),
+                                "valueOf" => Value::NativeFunction("Number.prototype.valueOf".to_string()),
+                                "toFixed" => Value::NativeFunction("Number.prototype.toFixed".to_string()),
+                                _ => Value::Undefined,
+                            };
+                            self.stack.push(value);
+                        }
+                        Value::Boolean(_) => {
+                            // Boolean primitive - handle prototype methods
+                            let value = match name.as_str() {
+                                "toString" => Value::NativeFunction("Boolean.prototype.toString".to_string()),
+                                "valueOf" => Value::NativeFunction("Boolean.prototype.valueOf".to_string()),
+                                _ => Value::Undefined,
+                            };
+                            self.stack.push(value);
                         }
                         _ => self.stack.push(Value::Undefined),
                     }
@@ -949,9 +1004,18 @@ impl Dispatcher {
 
                     match method {
                         Value::NativeFunction(name) => {
-                            // Check if this is an array prototype method that needs the receiver
+                            // Check if this is a prototype method that needs the receiver
                             if name.starts_with("Array.prototype.") {
                                 let result = self.call_array_prototype_method(&name, receiver, args, functions)?;
+                                self.stack.push(result);
+                            } else if name.starts_with("Object.prototype.") {
+                                let result = self.call_object_prototype_method(&name, receiver, args)?;
+                                self.stack.push(result);
+                            } else if name.starts_with("String.prototype.") {
+                                let result = self.call_string_prototype_method(&name, receiver, args)?;
+                                self.stack.push(result);
+                            } else if name.starts_with("Number.prototype.") {
+                                let result = self.call_number_prototype_method(&name, receiver)?;
                                 self.stack.push(result);
                             } else {
                                 let result = self.call_native_function(&name, args)?;
@@ -3500,6 +3564,292 @@ impl Dispatcher {
                 // Non-objects don't have properties
                 Value::Boolean(false)
             }
+        }
+    }
+
+    /// Call an Object prototype method with receiver
+    fn call_object_prototype_method(
+        &self,
+        name: &str,
+        receiver: Value,
+        args: Vec<Value>,
+    ) -> Result<Value, JsError> {
+        match name {
+            "Object.prototype.toString" => {
+                // Returns "[object Type]" format
+                let type_tag = match &receiver {
+                    Value::Undefined => "Undefined",
+                    Value::Null => "Null",
+                    Value::Boolean(_) => "Boolean",
+                    Value::Smi(_) | Value::Double(_) => "Number",
+                    Value::String(_) => "String",
+                    Value::HeapObject(_) => "Object",
+                    Value::NativeObject(obj) => {
+                        let borrowed = obj.borrow();
+                        if let Some(gc_obj) = borrowed.downcast_ref::<Box<dyn Any>>() {
+                            if let Some(gc_object) = gc_obj.downcast_ref::<GCObject>() {
+                                // Check if it's an array
+                                if matches!(gc_object.get("length"), Value::Smi(_)) {
+                                    "Array"
+                                } else {
+                                    "Object"
+                                }
+                            } else {
+                                "Object"
+                            }
+                        } else {
+                            "Object"
+                        }
+                    }
+                    Value::NativeFunction(_) => "Function",
+                };
+                Ok(Value::String(format!("[object {}]", type_tag)))
+            }
+            "Object.prototype.valueOf" => {
+                // Returns the receiver itself for objects
+                Ok(receiver)
+            }
+            "Object.prototype.hasOwnProperty" => {
+                // Check if property exists directly on object (not prototype)
+                let prop_name = args.first().map(|v| self.to_string_value(v)).unwrap_or_default();
+
+                match &receiver {
+                    Value::NativeObject(obj) => {
+                        let borrowed = obj.borrow();
+                        if let Some(gc_obj) = borrowed.downcast_ref::<Box<dyn Any>>() {
+                            if let Some(gc_object) = gc_obj.downcast_ref::<GCObject>() {
+                                let value = gc_object.get(&prop_name);
+                                Ok(Value::Boolean(!matches!(value, Value::Undefined)))
+                            } else {
+                                Ok(Value::Boolean(false))
+                            }
+                        } else {
+                            Ok(Value::Boolean(false))
+                        }
+                    }
+                    _ => Ok(Value::Boolean(false)),
+                }
+            }
+            "Object.prototype.propertyIsEnumerable" => {
+                // Simplified: just check if property exists
+                let prop_name = args.first().map(|v| self.to_string_value(v)).unwrap_or_default();
+
+                match &receiver {
+                    Value::NativeObject(obj) => {
+                        let borrowed = obj.borrow();
+                        if let Some(gc_obj) = borrowed.downcast_ref::<Box<dyn Any>>() {
+                            if let Some(gc_object) = gc_obj.downcast_ref::<GCObject>() {
+                                let value = gc_object.get(&prop_name);
+                                Ok(Value::Boolean(!matches!(value, Value::Undefined)))
+                            } else {
+                                Ok(Value::Boolean(false))
+                            }
+                        } else {
+                            Ok(Value::Boolean(false))
+                        }
+                    }
+                    _ => Ok(Value::Boolean(false)),
+                }
+            }
+            "Object.prototype.isPrototypeOf" | "Object.prototype.toLocaleString" => {
+                // Simplified implementations
+                if name == "Object.prototype.toLocaleString" {
+                    self.call_object_prototype_method("Object.prototype.toString", receiver, args)
+                } else {
+                    Ok(Value::Boolean(false))
+                }
+            }
+            _ => Err(JsError {
+                kind: ErrorKind::TypeError,
+                message: format!("Unknown Object.prototype method: {}", name),
+                stack: vec![],
+                source_position: None,
+            }),
+        }
+    }
+
+    /// Call a String prototype method with receiver
+    fn call_string_prototype_method(
+        &self,
+        name: &str,
+        receiver: Value,
+        args: Vec<Value>,
+    ) -> Result<Value, JsError> {
+        // Get the string value from receiver
+        let s = self.to_string_value(&receiver);
+
+        match name {
+            "String.prototype.toString" | "String.prototype.valueOf" => {
+                Ok(Value::String(s))
+            }
+            "String.prototype.charAt" => {
+                let index = args.first().map(|v| self.to_number(v) as usize).unwrap_or(0);
+                let result = s.chars().nth(index).map(|c| c.to_string()).unwrap_or_default();
+                Ok(Value::String(result))
+            }
+            "String.prototype.charCodeAt" => {
+                let index = args.first().map(|v| self.to_number(v) as usize).unwrap_or(0);
+                let result = s.chars().nth(index).map(|c| c as u32 as f64).unwrap_or(f64::NAN);
+                Ok(Value::Double(result))
+            }
+            "String.prototype.indexOf" => {
+                let search = args.first().map(|v| self.to_string_value(v)).unwrap_or_default();
+                let start = args.get(1).map(|v| self.to_number(v) as usize).unwrap_or(0);
+                let result = s[start..].find(&search).map(|i| (i + start) as i32).unwrap_or(-1);
+                Ok(Value::Smi(result))
+            }
+            "String.prototype.lastIndexOf" => {
+                let search = args.first().map(|v| self.to_string_value(v)).unwrap_or_default();
+                let result = s.rfind(&search).map(|i| i as i32).unwrap_or(-1);
+                Ok(Value::Smi(result))
+            }
+            "String.prototype.slice" => {
+                let len = s.len() as i32;
+                let start = args.first().map(|v| {
+                    let n = self.to_number(v) as i32;
+                    if n < 0 { (len + n).max(0) as usize } else { n.min(len) as usize }
+                }).unwrap_or(0);
+                let end = args.get(1).map(|v| {
+                    let n = self.to_number(v) as i32;
+                    if n < 0 { (len + n).max(0) as usize } else { n.min(len) as usize }
+                }).unwrap_or(s.len());
+                let result = if start <= end { s.get(start..end).unwrap_or("").to_string() } else { String::new() };
+                Ok(Value::String(result))
+            }
+            "String.prototype.substring" => {
+                let len = s.len();
+                let start = args.first().map(|v| (self.to_number(v) as usize).min(len)).unwrap_or(0);
+                let end = args.get(1).map(|v| (self.to_number(v) as usize).min(len)).unwrap_or(len);
+                let (start, end) = if start <= end { (start, end) } else { (end, start) };
+                Ok(Value::String(s.get(start..end).unwrap_or("").to_string()))
+            }
+            "String.prototype.toLowerCase" => {
+                Ok(Value::String(s.to_lowercase()))
+            }
+            "String.prototype.toUpperCase" => {
+                Ok(Value::String(s.to_uppercase()))
+            }
+            "String.prototype.trim" => {
+                Ok(Value::String(s.trim().to_string()))
+            }
+            "String.prototype.trimStart" | "String.prototype.trimLeft" => {
+                Ok(Value::String(s.trim_start().to_string()))
+            }
+            "String.prototype.trimEnd" | "String.prototype.trimRight" => {
+                Ok(Value::String(s.trim_end().to_string()))
+            }
+            "String.prototype.split" => {
+                let separator = args.first().map(|v| self.to_string_value(v));
+                let limit = args.get(1).map(|v| self.to_number(v) as usize);
+
+                let parts: Vec<&str> = if let Some(sep) = separator {
+                    if let Some(lim) = limit {
+                        s.split(&sep).take(lim).collect()
+                    } else {
+                        s.split(&sep).collect()
+                    }
+                } else {
+                    vec![&s]
+                };
+
+                // Create array with parts
+                if let Some(ref heap) = self.heap {
+                    let mut gc_object = heap.create_object();
+                    for (i, part) in parts.iter().enumerate() {
+                        gc_object.set(i.to_string(), Value::String(part.to_string()));
+                    }
+                    gc_object.set("length".to_string(), Value::Smi(parts.len() as i32));
+                    let boxed: Box<dyn Any> = Box::new(gc_object);
+                    Ok(Value::NativeObject(Rc::new(RefCell::new(boxed)) as Rc<RefCell<dyn Any>>))
+                } else {
+                    Ok(Value::Undefined)
+                }
+            }
+            "String.prototype.concat" => {
+                let mut result = s;
+                for arg in args {
+                    result.push_str(&self.to_string_value(&arg));
+                }
+                Ok(Value::String(result))
+            }
+            "String.prototype.includes" => {
+                let search = args.first().map(|v| self.to_string_value(v)).unwrap_or_default();
+                let start = args.get(1).map(|v| self.to_number(v) as usize).unwrap_or(0);
+                Ok(Value::Boolean(s.get(start..).map(|sub| sub.contains(&search)).unwrap_or(false)))
+            }
+            "String.prototype.startsWith" => {
+                let search = args.first().map(|v| self.to_string_value(v)).unwrap_or_default();
+                let start = args.get(1).map(|v| self.to_number(v) as usize).unwrap_or(0);
+                Ok(Value::Boolean(s.get(start..).map(|sub| sub.starts_with(&search)).unwrap_or(false)))
+            }
+            "String.prototype.endsWith" => {
+                let search = args.first().map(|v| self.to_string_value(v)).unwrap_or_default();
+                Ok(Value::Boolean(s.ends_with(&search)))
+            }
+            "String.prototype.repeat" => {
+                let count = args.first().map(|v| self.to_number(v) as usize).unwrap_or(0);
+                Ok(Value::String(s.repeat(count)))
+            }
+            "String.prototype.padStart" => {
+                let target_len = args.first().map(|v| self.to_number(v) as usize).unwrap_or(0);
+                let pad_str = args.get(1).map(|v| self.to_string_value(v)).unwrap_or_else(|| " ".to_string());
+                if s.len() >= target_len || pad_str.is_empty() {
+                    Ok(Value::String(s))
+                } else {
+                    let pad_len = target_len - s.len();
+                    let pad = pad_str.repeat((pad_len / pad_str.len()) + 1);
+                    Ok(Value::String(format!("{}{}", &pad[..pad_len], s)))
+                }
+            }
+            "String.prototype.padEnd" => {
+                let target_len = args.first().map(|v| self.to_number(v) as usize).unwrap_or(0);
+                let pad_str = args.get(1).map(|v| self.to_string_value(v)).unwrap_or_else(|| " ".to_string());
+                if s.len() >= target_len || pad_str.is_empty() {
+                    Ok(Value::String(s))
+                } else {
+                    let pad_len = target_len - s.len();
+                    let pad = pad_str.repeat((pad_len / pad_str.len()) + 1);
+                    Ok(Value::String(format!("{}{}", s, &pad[..pad_len])))
+                }
+            }
+            _ => Err(JsError {
+                kind: ErrorKind::TypeError,
+                message: format!("Unknown String.prototype method: {}", name),
+                stack: vec![],
+                source_position: None,
+            }),
+        }
+    }
+
+    /// Call a Number prototype method with receiver
+    fn call_number_prototype_method(
+        &self,
+        name: &str,
+        receiver: Value,
+    ) -> Result<Value, JsError> {
+        let n = self.to_number(&receiver);
+
+        match name {
+            "Number.prototype.toString" => {
+                Ok(Value::String(if n.fract() == 0.0 && n.abs() < (i64::MAX as f64) {
+                    format!("{}", n as i64)
+                } else {
+                    format!("{}", n)
+                }))
+            }
+            "Number.prototype.valueOf" => {
+                Ok(Value::Double(n))
+            }
+            "Number.prototype.toFixed" => {
+                // Simplified: just format with default precision
+                Ok(Value::String(format!("{:.0}", n)))
+            }
+            _ => Err(JsError {
+                kind: ErrorKind::TypeError,
+                message: format!("Unknown Number.prototype method: {}", name),
+                stack: vec![],
+                source_position: None,
+            }),
         }
     }
 }
