@@ -728,6 +728,8 @@ impl BytecodeGenerator {
                     BinaryOperator::LtEq => Opcode::LessThanEqual,
                     BinaryOperator::Gt => Opcode::GreaterThan,
                     BinaryOperator::GtEq => Opcode::GreaterThanEqual,
+                    BinaryOperator::Instanceof => Opcode::Instanceof,
+                    BinaryOperator::In => Opcode::In,
                     _ => {
                         return Err(JsError {
                             kind: ErrorKind::InternalError,

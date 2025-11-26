@@ -123,6 +123,10 @@ pub enum IROpcode {
     Typeof,
     /// void operator - evaluate expression, push undefined
     Void,
+    /// instanceof operator - check if object is instance of constructor
+    Instanceof,
+    /// in operator - check if property exists in object
+    In,
     /// Deoptimize - fall back to interpreter
     Deoptimize,
 }
@@ -230,6 +234,8 @@ impl IRFunction {
                 Opcode::CallNew(argc) => IROpcode::CallNew(*argc),
                 Opcode::Typeof => IROpcode::Typeof,
                 Opcode::Void => IROpcode::Void,
+                Opcode::Instanceof => IROpcode::Instanceof,
+                Opcode::In => IROpcode::In,
             };
 
             ir_func.instructions.push(IRInstruction::new(ir_op, offset));

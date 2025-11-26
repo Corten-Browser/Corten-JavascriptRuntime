@@ -292,6 +292,8 @@ impl BytecodeChunk {
             Opcode::CallNew(argc) => (49, vec![*argc]),
             Opcode::Typeof => (50, vec![]),
             Opcode::Void => (51, vec![]),
+            Opcode::Instanceof => (52, vec![]),
+            Opcode::In => (53, vec![]),
         }
     }
 
@@ -530,6 +532,8 @@ impl BytecodeChunk {
             }
             50 => Opcode::Typeof,
             51 => Opcode::Void,
+            52 => Opcode::Instanceof,
+            53 => Opcode::In,
             _ => return Err(format!("Unknown opcode tag: {}", tag)),
         };
 
