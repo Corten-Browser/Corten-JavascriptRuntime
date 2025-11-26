@@ -764,8 +764,37 @@ impl<'a> Parser<'a> {
             return self.parse_regular_for(None);
         }
 
+        // Special case: for (let in ...) - "let" is an identifier, not a keyword
+        // Per spec: for ( [lookahead ∉ { let [ }] LeftHandSideExpression in Expression )
+        // "let" is only a keyword if followed by [ or identifier, not by "in"
+        let is_let_as_keyword = if self.check_keyword(Keyword::Let)? {
+            // Peek ahead to see what follows "let"
+            let saved_pos = self.lexer.position;
+            let saved_line = self.lexer.line;
+            let saved_column = self.lexer.column;
+            let saved_previous_line = self.lexer.previous_line;
+            let saved_line_term = self.lexer.line_terminator_before_token;
+            let saved_token = self.lexer.current_token.clone();
+
+            self.lexer.next_token()?; // consume "let"
+            let next = self.lexer.peek_token()?;
+            let is_keyword = !matches!(next, Token::Keyword(Keyword::In));
+
+            // Restore lexer state
+            self.lexer.position = saved_pos;
+            self.lexer.line = saved_line;
+            self.lexer.column = saved_column;
+            self.lexer.previous_line = saved_previous_line;
+            self.lexer.line_terminator_before_token = saved_line_term;
+            self.lexer.current_token = saved_token;
+
+            is_keyword
+        } else {
+            false
+        };
+
         // Parse left side
-        if self.check_keyword(Keyword::Let)?
+        if (self.check_keyword(Keyword::Let)? && is_let_as_keyword)
             || self.check_keyword(Keyword::Const)?
             || self.check_keyword(Keyword::Var)?
         {
@@ -1114,7 +1143,22 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_expression(&mut self) -> Result<Expression, JsError> {
-        self.parse_assignment_expression()
+        // Expression can be comma-separated (SequenceExpression)
+        let mut expr = self.parse_assignment_expression()?;
+
+        if self.check_punctuator(Punctuator::Comma)? {
+            let mut expressions = vec![expr];
+            while self.check_punctuator(Punctuator::Comma)? {
+                self.lexer.next_token()?;
+                expressions.push(self.parse_assignment_expression()?);
+            }
+            expr = Expression::SequenceExpression {
+                expressions,
+                position: None,
+            };
+        }
+
+        Ok(expr)
     }
 
     fn parse_assignment_expression(&mut self) -> Result<Expression, JsError> {
