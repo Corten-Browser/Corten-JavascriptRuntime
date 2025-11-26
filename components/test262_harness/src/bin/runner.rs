@@ -92,10 +92,7 @@ const UNSUPPORTED_FEATURES: &[&str] = &[
     "regexp-named-groups",
     "regexp-lookbehind",
     "regexp-dotall",
-    "class-fields-private",
-    "class-static-fields-private",
-    "class-methods-private",
-    "class-static-methods-private",
+    // Private class fields/methods now supported
     "decorators",
     "import-assertions",
     "import-attributes",

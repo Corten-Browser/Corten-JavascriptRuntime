@@ -290,3 +290,54 @@ fn test_rest_destructuring_bytecode() {
     println!("Bytecode result: {:?}", result);
     assert!(result.is_ok(), "Bytecode gen failed: {:?}", result);
 }
+
+#[test]
+fn test_all_rest_patterns() {
+    let patterns = [
+        ("empty", "function empty(...[]) {}"),
+        ("emptyWithArray", "function emptyWithArray(...[[]]) {}"),
+        ("emptyWithObject", "function emptyWithObject(...[{}]) {}"),
+        ("emptyWithRest", "function emptyWithRest(...[...[]]) {}"),
+        ("emptyWithLeading", "function emptyWithLeading(x, ...[]) {}"),
+        ("singleElement", "function singleElement(...[a]) {}"),
+        ("singleElementWithInitializer", "function singleElementWithInitializer(...[a = 0]) {}"),
+        ("singleElementWithArray", "function singleElementWithArray(...[[a]]) {}"),
+        ("singleElementWithObject", r#"function singleElementWithObject(...[{p: q}]) {}"#),
+        ("singleElementWithRest", "function singleElementWithRest(...[...a]) {}"),
+        ("singleElementWithLeading", "function singleElementWithLeading(x, ...[a]) {}"),
+        ("multiElement", "function multiElement(...[a, b, c]) {}"),
+        ("multiElementWithInitializer", "function multiElementWithInitializer(...[a = 0, b, c = 1]) {}"),
+        ("multiElementWithArray", "function multiElementWithArray(...[[a], b, [c]]) {}"),
+        ("multiElementWithObject", r#"function multiElementWithObject(...[{p: q}, {r}, {s = 0}]) {}"#),
+        ("multiElementWithRest", "function multiElementWithRest(...[a, b, ...c]) {}"),
+        ("multiElementWithLeading", "function multiElementWithLeading(x, y, ...[a, b, c]) {}"),
+    ];
+    
+    for (name, source) in patterns {
+        let result = parser::Parser::new(source).parse();
+        if result.is_err() {
+            println!("✗ {} - {:?}", name, result);
+        }
+        assert!(result.is_ok(), "Pattern {} failed: {:?}", name, result);
+    }
+}
+
+#[test]
+fn test_private_generator_method() {
+    let code = r#"class C {
+  * #method() {
+    return 1;
+  }
+}"#;
+    let result = parser::Parser::new(code).parse();
+    println!("Private generator method: {:?}", result);
+    assert!(result.is_ok(), "Failed: {:?}", result);
+}
+
+#[test]
+fn test_private_method_access() {
+    let code = "class C { #x; getX() { return this.#x; } }";
+    let result = parser::Parser::new(code).parse();
+    println!("Private member access: {:?}", result);
+    assert!(result.is_ok(), "Failed: {:?}", result);
+}

@@ -232,15 +232,46 @@ pub struct Lexer<'a> {
 impl<'a> Lexer<'a> {
     /// Create a new lexer for the given source code
     pub fn new(source: &'a str) -> Self {
-        Self {
+        let chars: Vec<char> = source.chars().collect();
+        let mut lexer = Self {
             source,
-            chars: source.chars().collect(),
+            chars,
             position: 0,
             line: 1,
             column: 1,
             current_token: None,
             line_terminator_before_token: false,
             previous_line: 1,
+        };
+
+        // Handle hashbang comment at the start of the file
+        lexer.skip_hashbang();
+        lexer
+    }
+
+    /// Skip hashbang comment (#!) at the beginning of the source
+    fn skip_hashbang(&mut self) {
+        // Hashbang is only valid at position 0
+        if self.position == 0 && !self.is_at_end() {
+            if self.peek() == '#' && self.peek_next() == Some('!') {
+                // Skip until end of line
+                while !self.is_at_end() && self.peek() != '\n' && self.peek() != '\r' {
+                    self.advance();
+                }
+                // Advance past the line terminator if present
+                if !self.is_at_end() {
+                    if self.peek() == '\r' {
+                        self.advance();
+                        if !self.is_at_end() && self.peek() == '\n' {
+                            self.advance();
+                        }
+                    } else if self.peek() == '\n' {
+                        self.advance();
+                    }
+                    self.line = 2;
+                    self.column = 1;
+                }
+            }
         }
     }
 
@@ -830,8 +861,12 @@ impl<'a> Lexer<'a> {
         let start_pos = self.current_position();
 
         // The '#' has already been consumed by advance()
-        // Next character must be a valid identifier start
-        if self.is_at_end() || !is_id_start(self.peek()) {
+        // Next character must be a valid identifier start OR a Unicode escape
+
+        let mut name = String::new();
+
+        // Check for first character: either Unicode escape or regular id start
+        if self.is_at_end() {
             return Err(JsError {
                 kind: ErrorKind::SyntaxError,
                 message: "Private identifier must have a name".to_string(),
@@ -840,9 +875,32 @@ impl<'a> Lexer<'a> {
             });
         }
 
-        let mut name = String::new();
+        // Handle first character
+        if self.peek() == '\\' && self.peek_next() == Some('u') {
+            // Unicode escape at start
+            self.advance(); // consume '\'
+            let ch = self.parse_unicode_escape()?;
+            if !is_id_start(ch) {
+                return Err(JsError {
+                    kind: ErrorKind::SyntaxError,
+                    message: "Invalid Unicode escape sequence in private identifier start".to_string(),
+                    stack: vec![],
+                    source_position: Some(start_pos),
+                });
+            }
+            name.push(ch);
+        } else if is_id_start(self.peek()) {
+            name.push(self.advance());
+        } else {
+            return Err(JsError {
+                kind: ErrorKind::SyntaxError,
+                message: "Private identifier must have a name".to_string(),
+                stack: vec![],
+                source_position: Some(start_pos),
+            });
+        }
 
-        // Scan the identifier part
+        // Scan the rest of the identifier
         while !self.is_at_end() {
             if self.peek() == '\\' && self.peek_next() == Some('u') {
                 // Unicode escape in identifier

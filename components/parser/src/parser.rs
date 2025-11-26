@@ -247,9 +247,21 @@ impl<'a> Parser<'a> {
                     (Pattern::Identifier(key.clone()), true)
                 };
 
+                // Check for default value
+                let final_value = if self.check_punctuator(Punctuator::Assign)? {
+                    self.lexer.next_token()?;
+                    let default_value = self.parse_assignment_expression()?;
+                    Pattern::AssignmentPattern {
+                        left: Box::new(value),
+                        right: Box::new(default_value),
+                    }
+                } else {
+                    value
+                };
+
                 properties.push(ObjectPatternProperty {
                     key,
-                    value,
+                    value: final_value,
                     shorthand,
                 });
             }
@@ -276,7 +288,19 @@ impl<'a> Parser<'a> {
                 let pattern = self.parse_pattern()?;
                 elements.push(Some(Pattern::RestElement(Box::new(pattern))));
             } else {
-                elements.push(Some(self.parse_pattern()?));
+                let pattern = self.parse_pattern()?;
+                // Check for default value
+                let final_pattern = if self.check_punctuator(Punctuator::Assign)? {
+                    self.lexer.next_token()?;
+                    let default_value = self.parse_assignment_expression()?;
+                    Pattern::AssignmentPattern {
+                        left: Box::new(pattern),
+                        right: Box::new(default_value),
+                    }
+                } else {
+                    pattern
+                };
+                elements.push(Some(final_pattern));
             }
 
             if !self.check_punctuator(Punctuator::Comma)? {
@@ -1332,26 +1356,46 @@ impl<'a> Parser<'a> {
         loop {
             if self.check_punctuator(Punctuator::Dot)? {
                 self.lexer.next_token()?;
-                let property = self.expect_identifier()?;
+                // Check for private identifier after dot
+                let property = if self.check_private_identifier()? {
+                    let name = self.expect_private_identifier()?;
+                    Expression::Identifier {
+                        name: format!("#{}", name),
+                        position: None,
+                    }
+                } else {
+                    let name = self.expect_identifier()?;
+                    Expression::Identifier {
+                        name,
+                        position: None,
+                    }
+                };
                 expr = Expression::MemberExpression {
                     object: Box::new(expr),
-                    property: Box::new(Expression::Identifier {
-                        name: property,
-                        position: None,
-                    }),
+                    property: Box::new(property),
                     computed: false,
                     optional: false,
                     position: None,
                 };
             } else if self.check_punctuator(Punctuator::OptionalChain)? {
                 self.lexer.next_token()?;
-                let property = self.expect_identifier()?;
+                // Check for private identifier after optional chain
+                let property = if self.check_private_identifier()? {
+                    let name = self.expect_private_identifier()?;
+                    Expression::Identifier {
+                        name: format!("#{}", name),
+                        position: None,
+                    }
+                } else {
+                    let name = self.expect_identifier()?;
+                    Expression::Identifier {
+                        name,
+                        position: None,
+                    }
+                };
                 expr = Expression::MemberExpression {
                     object: Box::new(expr),
-                    property: Box::new(Expression::Identifier {
-                        name: property,
-                        position: None,
-                    }),
+                    property: Box::new(property),
                     computed: false,
                     optional: true,
                     position: None,
@@ -1427,13 +1471,23 @@ impl<'a> Parser<'a> {
         loop {
             if self.check_punctuator(Punctuator::Dot)? {
                 self.lexer.next_token()?;
-                let property = self.expect_identifier()?;
+                // Check for private identifier after dot
+                let property = if self.check_private_identifier()? {
+                    let name = self.expect_private_identifier()?;
+                    Expression::Identifier {
+                        name: format!("#{}", name),
+                        position: None,
+                    }
+                } else {
+                    let name = self.expect_identifier()?;
+                    Expression::Identifier {
+                        name,
+                        position: None,
+                    }
+                };
                 expr = Expression::MemberExpression {
                     object: Box::new(expr),
-                    property: Box::new(Expression::Identifier {
-                        name: property,
-                        position: None,
-                    }),
+                    property: Box::new(property),
                     computed: false,
                     optional: false,
                     position: None,

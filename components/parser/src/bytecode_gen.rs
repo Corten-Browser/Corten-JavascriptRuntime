@@ -2589,6 +2589,7 @@ mod tests {
                     position: None,
                 },
                 is_static: false,
+                is_private: false,
             }],
             position: None,
         }]);
@@ -2717,6 +2718,7 @@ mod tests {
                         position: None,
                     },
                     is_static: false,
+                    is_private: false,
                 }],
                 position: None,
             },
@@ -2807,6 +2809,7 @@ mod tests {
                     position: None,
                 },
                 is_static: false,
+                is_private: false,
             }],
             position: None,
         }]);
@@ -2881,6 +2884,7 @@ mod tests {
                     position: None,
                 },
                 is_static: false,
+                is_private: false,
             }],
             position: None,
         }]);
