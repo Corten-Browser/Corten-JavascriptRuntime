@@ -890,9 +890,12 @@ impl BytecodeGenerator {
                 right,
                 ..
             } => {
+                // Assignment expressions return the assigned value
+                // So we need to duplicate the value before storing
                 match left {
                     AssignmentTarget::Identifier(name) => {
                         self.visit_expression(right)?;
+                        self.chunk.emit(Opcode::Dup); // Keep value on stack for expression result
                         match self.resolve_variable(name) {
                             VarResolution::Local(reg) => {
                                 self.chunk.emit(Opcode::StoreLocal(reg));
@@ -919,12 +922,14 @@ impl BytecodeGenerator {
                                 self.visit_expression(object)?;
                                 self.visit_expression(property)?;
                                 self.visit_expression(right)?;
+                                self.chunk.emit(Opcode::Dup); // Keep value on stack for expression result
                                 self.chunk.emit(Opcode::SetIndex);
                             } else {
                                 // Static assignment: obj.prop = value
                                 // StoreProperty expects stack: [obj, value]
                                 self.visit_expression(object)?;
                                 self.visit_expression(right)?;
+                                self.chunk.emit(Opcode::Dup); // Keep value on stack for expression result
                                 if let Expression::Identifier { name, .. } = property.as_ref() {
                                     self.chunk.emit(Opcode::StoreProperty(name.clone()));
                                 }
