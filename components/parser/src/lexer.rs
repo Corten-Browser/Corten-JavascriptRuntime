@@ -196,6 +196,8 @@ pub enum Token {
     /// Identifier (variable name, etc.). Second field is true if the identifier
     /// contained Unicode escape sequences (important for escaped keywords)
     Identifier(String, bool),
+    /// Private identifier (#name) for class private fields/methods
+    PrivateIdentifier(String),
     /// Number literal
     Number(f64),
     /// BigInt literal (integer with 'n' suffix)
@@ -462,6 +464,9 @@ impl<'a> Lexer<'a> {
             '\\' if !self.is_at_end() && self.peek() == 'u' => {
                 self.scan_identifier_with_unicode_start()
             }
+
+            // Private identifier (#name) for class private fields/methods
+            '#' => self.scan_private_identifier(),
 
             _ => Err(JsError {
                 kind: ErrorKind::SyntaxError,
@@ -818,6 +823,48 @@ impl<'a> Lexer<'a> {
         };
 
         Ok(token)
+    }
+
+    /// Scan a private identifier (#name)
+    fn scan_private_identifier(&mut self) -> Result<Token, JsError> {
+        let start_pos = self.current_position();
+
+        // The '#' has already been consumed by advance()
+        // Next character must be a valid identifier start
+        if self.is_at_end() || !is_id_start(self.peek()) {
+            return Err(JsError {
+                kind: ErrorKind::SyntaxError,
+                message: "Private identifier must have a name".to_string(),
+                stack: vec![],
+                source_position: Some(start_pos),
+            });
+        }
+
+        let mut name = String::new();
+
+        // Scan the identifier part
+        while !self.is_at_end() {
+            if self.peek() == '\\' && self.peek_next() == Some('u') {
+                // Unicode escape in identifier
+                self.advance(); // consume '\'
+                let ch = self.parse_unicode_escape()?;
+                if !is_id_continue(ch) {
+                    return Err(JsError {
+                        kind: ErrorKind::SyntaxError,
+                        message: "Invalid Unicode escape sequence in private identifier".to_string(),
+                        stack: vec![],
+                        source_position: Some(self.current_position()),
+                    });
+                }
+                name.push(ch);
+            } else if is_id_continue(self.peek()) {
+                name.push(self.advance());
+            } else {
+                break;
+            }
+        }
+
+        Ok(Token::PrivateIdentifier(name))
     }
 
     /// Scan an identifier that starts with a Unicode escape sequence

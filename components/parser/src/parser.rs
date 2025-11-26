@@ -414,11 +414,17 @@ impl<'a> Parser<'a> {
                 false
             };
 
+            // Check for private identifier
+            let is_private = self.check_private_identifier()?;
+
             // Check for get/set
             let mut kind = MethodKind::Method;
             let mut key_name = String::new();
 
-            if !is_generator && self.check_identifier("get")? {
+            if is_private {
+                // Private field/method
+                key_name = self.expect_private_identifier()?;
+            } else if !is_generator && self.check_identifier("get")? {
                 let saved_pos = self.lexer.position;
                 let saved_line = self.lexer.line;
                 let saved_column = self.lexer.column;
@@ -485,6 +491,7 @@ impl<'a> Parser<'a> {
                         position: None,
                     },
                     is_static,
+                    is_private,
                 });
             } else {
                 // Property
@@ -498,6 +505,7 @@ impl<'a> Parser<'a> {
                     key: key_name,
                     value,
                     is_static,
+                    is_private,
                 });
                 self.consume_semicolon()?;
             }
@@ -2101,6 +2109,22 @@ impl<'a> Parser<'a> {
 
     fn check_identifier(&mut self, name: &str) -> Result<bool, JsError> {
         Ok(matches!(self.lexer.peek_token()?, Token::Identifier(ref x, _) if x == name))
+    }
+
+    fn check_private_identifier(&mut self) -> Result<bool, JsError> {
+        Ok(matches!(self.lexer.peek_token()?, Token::PrivateIdentifier(_)))
+    }
+
+    fn expect_private_identifier(&mut self) -> Result<String, JsError> {
+        let token = self.lexer.next_token()?;
+        if let Token::PrivateIdentifier(name) = token {
+            return Ok(name);
+        }
+        Err(unexpected_token(
+            "private identifier",
+            &format!("{:?}", token),
+            None,
+        ))
     }
 
     fn expect_punctuator(&mut self, p: Punctuator) -> Result<(), JsError> {

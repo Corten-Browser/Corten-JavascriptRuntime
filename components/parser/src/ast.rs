@@ -710,6 +710,8 @@ pub enum ClassElement {
         value: Expression,
         /// Is static
         is_static: bool,
+        /// Is private (#name)
+        is_private: bool,
     },
     /// Property definition
     PropertyDefinition {
@@ -719,6 +721,8 @@ pub enum ClassElement {
         value: Option<Expression>,
         /// Is static
         is_static: bool,
+        /// Is private (#name)
+        is_private: bool,
     },
 }
 
