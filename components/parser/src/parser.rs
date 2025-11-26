@@ -219,6 +219,17 @@ impl<'a> Parser<'a> {
                 self.validate_identifier(&name)?;
                 Ok(Pattern::Identifier(name))
             }
+            // yield and let are valid identifiers in non-strict mode (outside generators)
+            Token::Keyword(Keyword::Yield) => {
+                self.lexer.next_token()?;
+                // TODO: Check strict mode / generator context
+                Ok(Pattern::Identifier("yield".to_string()))
+            }
+            Token::Keyword(Keyword::Let) => {
+                self.lexer.next_token()?;
+                // TODO: Check strict mode
+                Ok(Pattern::Identifier("let".to_string()))
+            }
             Token::Punctuator(Punctuator::LBrace) => self.parse_object_pattern(),
             Token::Punctuator(Punctuator::LBracket) => self.parse_array_pattern(),
             _ => Err(syntax_error("Expected pattern", self.last_position.clone())),
@@ -1748,6 +1759,23 @@ impl<'a> Parser<'a> {
             }
             Token::Keyword(Keyword::Function) => self.parse_function_expression(),
             Token::Keyword(Keyword::Async) => self.parse_async_function_expression(),
+            // yield and let are valid identifiers in non-strict mode (outside generators)
+            Token::Keyword(Keyword::Yield) => {
+                self.lexer.next_token()?;
+                // TODO: Check strict mode / generator context
+                Ok(Expression::Identifier {
+                    name: "yield".to_string(),
+                    position: None,
+                })
+            }
+            Token::Keyword(Keyword::Let) => {
+                self.lexer.next_token()?;
+                // TODO: Check strict mode
+                Ok(Expression::Identifier {
+                    name: "let".to_string(),
+                    position: None,
+                })
+            }
             Token::Punctuator(Punctuator::LParen) => self.parse_parenthesized_or_arrow(),
             Token::Punctuator(Punctuator::LBracket) => self.parse_array_literal(),
             Token::Punctuator(Punctuator::LBrace) => self.parse_object_literal(),
@@ -2098,15 +2126,28 @@ impl<'a> Parser<'a> {
                         computed: false,
                     });
                 } else {
-                    // Getter accessor: get prop() {}
-                    // Allow keywords as accessor property names
-                    let key = self.expect_property_name()?;
+                    // Getter accessor: get prop() {} or get [expr]() {}
+                    let (key, computed) = if self.check_punctuator(Punctuator::LBracket)? {
+                        // Computed property name: get [expr]() {}
+                        self.lexer.next_token()?;
+                        let key_expr = self.parse_assignment_expression()?;
+                        self.expect_punctuator(Punctuator::RBracket)?;
+                        (PropertyKey::Computed(key_expr), true)
+                    } else {
+                        // Regular property name (identifier, keyword, string, number)
+                        let key = self.expect_property_name()?;
+                        (PropertyKey::Identifier(key), false)
+                    };
                     self.expect_punctuator(Punctuator::LParen)?;
                     self.expect_punctuator(Punctuator::RParen)?;
                     let body = self.parse_function_body()?;
 
+                    let func_name = match &key {
+                        PropertyKey::Identifier(s) => Some(s.clone()),
+                        _ => None,
+                    };
                     let func = Expression::FunctionExpression {
-                        name: Some(key.clone()),
+                        name: func_name,
                         params: vec![],
                         body,
                         is_async: false,
@@ -2115,10 +2156,10 @@ impl<'a> Parser<'a> {
                     };
 
                     properties.push(ObjectProperty::Property {
-                        key: PropertyKey::Identifier(key),
+                        key,
                         value: func,
                         shorthand: false,
-                        computed: false,
+                        computed,
                     });
                 }
             } else if self.check_identifier("set")? {
@@ -2171,14 +2212,27 @@ impl<'a> Parser<'a> {
                         computed: false,
                     });
                 } else {
-                    // Setter accessor: set prop(v) {}
-                    // Allow keywords as accessor property names
-                    let key = self.expect_property_name()?;
+                    // Setter accessor: set prop(v) {} or set [expr](v) {}
+                    let (key, computed) = if self.check_punctuator(Punctuator::LBracket)? {
+                        // Computed property name: set [expr](v) {}
+                        self.lexer.next_token()?;
+                        let key_expr = self.parse_assignment_expression()?;
+                        self.expect_punctuator(Punctuator::RBracket)?;
+                        (PropertyKey::Computed(key_expr), true)
+                    } else {
+                        // Regular property name (identifier, keyword, string, number)
+                        let key = self.expect_property_name()?;
+                        (PropertyKey::Identifier(key), false)
+                    };
                     let params = self.parse_parameters()?;
                     let body = self.parse_function_body()?;
 
+                    let func_name = match &key {
+                        PropertyKey::Identifier(s) => Some(s.clone()),
+                        _ => None,
+                    };
                     let func = Expression::FunctionExpression {
-                        name: Some(key.clone()),
+                        name: func_name,
                         params,
                         body,
                         is_async: false,
@@ -2187,10 +2241,10 @@ impl<'a> Parser<'a> {
                     };
 
                     properties.push(ObjectProperty::Property {
-                        key: PropertyKey::Identifier(key),
+                        key,
                         value: func,
                         shorthand: false,
-                        computed: false,
+                        computed,
                     });
                 }
             } else if self.check_keyword(Keyword::Async)? {
