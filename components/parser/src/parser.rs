@@ -907,8 +907,25 @@ impl<'a> Parser<'a> {
     fn parse_break_statement(&mut self) -> Result<Statement, JsError> {
         self.expect_keyword(Keyword::Break)?;
 
-        // Break must be inside a loop or switch
-        if self.loop_depth == 0 {
+        // Peek to update line_terminator_before_token
+        let next_token = self.lexer.peek_token()?.clone();
+
+        // ASI restricted production: break can have an optional label on same line
+        // If there's a line terminator, treat as break with no label
+        let label = if !self.lexer.line_terminator_before_token {
+            // Check for optional label
+            if let Token::Identifier(name, _) = next_token {
+                self.lexer.next_token()?;
+                Some(name)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        // Break without label must be inside a loop or switch
+        if label.is_none() && self.loop_depth == 0 {
             return Err(syntax_error(
                 "Illegal break statement",
                 self.last_position.clone(),
@@ -917,13 +934,30 @@ impl<'a> Parser<'a> {
 
         self.consume_semicolon()?;
         Ok(Statement::BreakStatement {
-            label: None,
+            label,
             position: None,
         })
     }
 
     fn parse_continue_statement(&mut self) -> Result<Statement, JsError> {
         self.expect_keyword(Keyword::Continue)?;
+
+        // Peek to update line_terminator_before_token
+        let next_token = self.lexer.peek_token()?.clone();
+
+        // ASI restricted production: continue can have an optional label on same line
+        // If there's a line terminator, treat as continue with no label
+        let label = if !self.lexer.line_terminator_before_token {
+            // Check for optional label
+            if let Token::Identifier(name, _) = next_token {
+                self.lexer.next_token()?;
+                Some(name)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
 
         // Continue must be inside a loop
         if self.loop_depth == 0 {
@@ -935,7 +969,7 @@ impl<'a> Parser<'a> {
 
         self.consume_semicolon()?;
         Ok(Statement::ContinueStatement {
-            label: None,
+            label,
             position: None,
         })
     }

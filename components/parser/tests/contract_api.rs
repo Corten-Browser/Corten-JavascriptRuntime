@@ -514,3 +514,18 @@ fn test_bitwise_and() {
     println!("Bitwise AND: {:?}", result);
     assert!(result.is_ok(), "Bitwise AND failed: {:?}", result);
 }
+
+#[test]
+fn test_continue_with_label() {
+    // continue with label
+    let code = r#"label1: for (var i = 0; i <= 0; i++) {
+  for (var j = 0; j <= 1; j++) {
+    if (j === 0) {
+      continue label1;
+    }
+  }
+}"#;
+    let result = parser::Parser::new(code).parse();
+    println!("Continue with label: {:?}", result);
+    assert!(result.is_ok(), "Continue with label failed: {:?}", result);
+}
