@@ -488,3 +488,29 @@ fn test_object_property_getter() {
     println!("Step 4: {:?}", result4);
     assert!(result4.is_ok(), "Step 4 failed: {:?}", result4);
 }
+
+#[test]
+fn test_asi_prefix_increment() {
+    // x\n++y should be parsed as x; ++y; not x++; y;
+    let code = "var x = 0;\nvar y = 0;\nx\n++y";
+    let result = parser::Parser::new(code).parse();
+    println!("ASI prefix increment: {:?}", result);
+    assert!(result.is_ok(), "Failed: {:?}", result);
+}
+
+#[test]
+fn test_asi_multiline_increment() {
+    // Simpler test
+    let code = "var x=0, y=0;\nx\n++\ny";
+    let result = parser::Parser::new(code).parse();
+    println!("ASI multiline increment: {:?}", result);
+    assert!(result.is_ok(), "ASI multiline increment failed: {:?}", result);
+}
+
+#[test]
+fn test_bitwise_and() {
+    let code = "var x = 1 & 2;";
+    let result = parser::Parser::new(code).parse();
+    println!("Bitwise AND: {:?}", result);
+    assert!(result.is_ok(), "Bitwise AND failed: {:?}", result);
+}

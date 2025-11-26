@@ -1195,7 +1195,54 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_bitwise_or_expression(&mut self) -> Result<Expression, JsError> {
-        self.parse_equality_expression()
+        let mut left = self.parse_bitwise_xor_expression()?;
+
+        while self.check_punctuator(Punctuator::Or)? {
+            self.lexer.next_token()?;
+            let right = self.parse_bitwise_xor_expression()?;
+            left = Expression::BinaryExpression {
+                left: Box::new(left),
+                operator: BinaryOperator::BitwiseOr,
+                right: Box::new(right),
+                position: None,
+            };
+        }
+
+        Ok(left)
+    }
+
+    fn parse_bitwise_xor_expression(&mut self) -> Result<Expression, JsError> {
+        let mut left = self.parse_bitwise_and_expression()?;
+
+        while self.check_punctuator(Punctuator::Xor)? {
+            self.lexer.next_token()?;
+            let right = self.parse_bitwise_and_expression()?;
+            left = Expression::BinaryExpression {
+                left: Box::new(left),
+                operator: BinaryOperator::BitwiseXor,
+                right: Box::new(right),
+                position: None,
+            };
+        }
+
+        Ok(left)
+    }
+
+    fn parse_bitwise_and_expression(&mut self) -> Result<Expression, JsError> {
+        let mut left = self.parse_equality_expression()?;
+
+        while self.check_punctuator(Punctuator::And)? {
+            self.lexer.next_token()?;
+            let right = self.parse_equality_expression()?;
+            left = Expression::BinaryExpression {
+                left: Box::new(left),
+                operator: BinaryOperator::BitwiseAnd,
+                right: Box::new(right),
+                position: None,
+            };
+        }
+
+        Ok(left)
     }
 
     fn parse_equality_expression(&mut self) -> Result<Expression, JsError> {
@@ -1354,8 +1401,9 @@ impl<'a> Parser<'a> {
 
         let expr = self.parse_left_hand_side_expression()?;
 
-        // Postfix ++/--
-        if self.check_punctuator(Punctuator::PlusPlus)? {
+        // Postfix ++/-- (restricted production: no line terminator allowed before)
+        // If there's a line terminator, don't parse as postfix - let ASI handle it
+        if !self.lexer.line_terminator_before_token && self.check_punctuator(Punctuator::PlusPlus)? {
             self.lexer.next_token()?;
             return Ok(Expression::UpdateExpression {
                 operator: UpdateOperator::Increment,
@@ -1365,7 +1413,7 @@ impl<'a> Parser<'a> {
             });
         }
 
-        if self.check_punctuator(Punctuator::MinusMinus)? {
+        if !self.lexer.line_terminator_before_token && self.check_punctuator(Punctuator::MinusMinus)? {
             self.lexer.next_token()?;
             return Ok(Expression::UpdateExpression {
                 operator: UpdateOperator::Decrement,
