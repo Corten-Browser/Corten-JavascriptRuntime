@@ -441,6 +441,8 @@ pub struct ObjectPatternProperty {
 pub enum Literal {
     /// Number
     Number(f64),
+    /// BigInt (stored as string to preserve exact value)
+    BigInt(String),
     /// String
     String(String),
     /// Boolean
