@@ -452,61 +452,96 @@ impl<'a> Parser<'a> {
             // Check for private identifier
             let is_private = self.check_private_identifier()?;
 
-            // Check for get/set
+            // Check for get/set and parse key
             let mut kind = MethodKind::Method;
-            let mut key_name = String::new();
-
-            if is_private {
+            let (key, computed) = if is_private {
                 // Private field/method
-                key_name = self.expect_private_identifier()?;
+                let name = self.expect_private_identifier()?;
+                (PropertyKey::Identifier(name), false)
+            } else if self.check_punctuator(Punctuator::LBracket)? {
+                // Computed property name: [expr]
+                self.lexer.next_token()?;
+                let key_expr = self.parse_assignment_expression()?;
+                self.expect_punctuator(Punctuator::RBracket)?;
+                (PropertyKey::Computed(key_expr), true)
             } else if !is_generator && self.check_identifier("get")? {
                 let saved_pos = self.lexer.position;
                 let saved_line = self.lexer.line;
                 let saved_column = self.lexer.column;
+                let saved_previous_line = self.lexer.previous_line;
                 let saved_line_term = self.lexer.line_terminator_before_token;
+                let saved_token = self.lexer.current_token.clone();
 
                 self.lexer.next_token()?;
                 let next = self.lexer.peek_token()?;
                 if matches!(next, Token::Identifier(_, _)) || matches!(next, Token::Keyword(_))
                     || matches!(next, Token::Punctuator(Punctuator::LBracket)) {
                     kind = MethodKind::Get;
-                    key_name = self.expect_identifier_or_keyword()?;
+                    // Now parse the actual key
+                    if self.check_punctuator(Punctuator::LBracket)? {
+                        self.lexer.next_token()?;
+                        let key_expr = self.parse_assignment_expression()?;
+                        self.expect_punctuator(Punctuator::RBracket)?;
+                        (PropertyKey::Computed(key_expr), true)
+                    } else {
+                        let name = self.expect_identifier_or_keyword()?;
+                        (PropertyKey::Identifier(name), false)
+                    }
                 } else {
                     // It's a method named "get"
                     self.lexer.position = saved_pos;
                     self.lexer.line = saved_line;
                     self.lexer.column = saved_column;
+                    self.lexer.previous_line = saved_previous_line;
                     self.lexer.line_terminator_before_token = saved_line_term;
-                    self.lexer.current_token = None;
-                    key_name = self.expect_identifier_or_keyword()?;
+                    self.lexer.current_token = saved_token;
+                    let name = self.expect_identifier_or_keyword()?;
+                    (PropertyKey::Identifier(name), false)
                 }
             } else if !is_generator && self.check_identifier("set")? {
                 let saved_pos = self.lexer.position;
                 let saved_line = self.lexer.line;
                 let saved_column = self.lexer.column;
+                let saved_previous_line = self.lexer.previous_line;
                 let saved_line_term = self.lexer.line_terminator_before_token;
+                let saved_token = self.lexer.current_token.clone();
 
                 self.lexer.next_token()?;
                 let next = self.lexer.peek_token()?;
                 if matches!(next, Token::Identifier(_, _)) || matches!(next, Token::Keyword(_))
                     || matches!(next, Token::Punctuator(Punctuator::LBracket)) {
                     kind = MethodKind::Set;
-                    key_name = self.expect_identifier_or_keyword()?;
+                    // Now parse the actual key
+                    if self.check_punctuator(Punctuator::LBracket)? {
+                        self.lexer.next_token()?;
+                        let key_expr = self.parse_assignment_expression()?;
+                        self.expect_punctuator(Punctuator::RBracket)?;
+                        (PropertyKey::Computed(key_expr), true)
+                    } else {
+                        let name = self.expect_identifier_or_keyword()?;
+                        (PropertyKey::Identifier(name), false)
+                    }
                 } else {
                     // It's a method named "set"
                     self.lexer.position = saved_pos;
                     self.lexer.line = saved_line;
                     self.lexer.column = saved_column;
+                    self.lexer.previous_line = saved_previous_line;
                     self.lexer.line_terminator_before_token = saved_line_term;
-                    self.lexer.current_token = None;
-                    key_name = self.expect_identifier_or_keyword()?;
+                    self.lexer.current_token = saved_token;
+                    let name = self.expect_identifier_or_keyword()?;
+                    (PropertyKey::Identifier(name), false)
                 }
             } else {
-                key_name = self.expect_identifier_or_keyword()?;
-            }
+                let name = self.expect_identifier_or_keyword()?;
+                (PropertyKey::Identifier(name), false)
+            };
 
-            if key_name == "constructor" && !is_static {
-                kind = MethodKind::Constructor;
+            // Check for constructor
+            if let PropertyKey::Identifier(ref name) = key {
+                if name == "constructor" && !is_static {
+                    kind = MethodKind::Constructor;
+                }
             }
 
             if self.check_punctuator(Punctuator::LParen)? {
@@ -515,7 +550,7 @@ impl<'a> Parser<'a> {
                 let body = self.parse_function_body()?;
 
                 elements.push(ClassElement::MethodDefinition {
-                    key: key_name,
+                    key,
                     kind,
                     value: Expression::FunctionExpression {
                         name: None,
@@ -527,6 +562,7 @@ impl<'a> Parser<'a> {
                     },
                     is_static,
                     is_private,
+                    computed,
                 });
             } else {
                 // Property
@@ -537,10 +573,11 @@ impl<'a> Parser<'a> {
                     None
                 };
                 elements.push(ClassElement::PropertyDefinition {
-                    key: key_name,
+                    key,
                     value,
                     is_static,
                     is_private,
+                    computed,
                 });
                 self.consume_semicolon()?;
             }

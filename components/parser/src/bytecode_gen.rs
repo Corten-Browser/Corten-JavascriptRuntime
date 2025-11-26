@@ -2558,7 +2558,7 @@ mod tests {
             name: "Counter".to_string(),
             super_class: None,
             body: vec![ClassElement::MethodDefinition {
-                key: "constructor".to_string(),
+                key: PropertyKey::Identifier("constructor".to_string()),
                 kind: MethodKind::Constructor,
                 value: Expression::FunctionExpression {
                     name: None,
@@ -2590,6 +2590,7 @@ mod tests {
                 },
                 is_static: false,
                 is_private: false,
+                computed: false,
             }],
             position: None,
         }]);
@@ -2683,7 +2684,7 @@ mod tests {
                 name: "Foo".to_string(),
                 super_class: None,
                 body: vec![ClassElement::MethodDefinition {
-                    key: "constructor".to_string(),
+                    key: PropertyKey::Identifier("constructor".to_string()),
                     kind: MethodKind::Constructor,
                     value: Expression::FunctionExpression {
                         name: None,
@@ -2719,6 +2720,7 @@ mod tests {
                     },
                     is_static: false,
                     is_private: false,
+                    computed: false,
                 }],
                 position: None,
             },
@@ -2778,7 +2780,7 @@ mod tests {
             name: "Foo".to_string(),
             super_class: None,
             body: vec![ClassElement::MethodDefinition {
-                key: "constructor".to_string(),
+                key: PropertyKey::Identifier("constructor".to_string()),
                 kind: MethodKind::Constructor,
                 value: Expression::FunctionExpression {
                     name: None,
@@ -2810,6 +2812,7 @@ mod tests {
                 },
                 is_static: false,
                 is_private: false,
+                computed: false,
             }],
             position: None,
         }]);
@@ -2853,7 +2856,7 @@ mod tests {
             name: "Foo".to_string(),
             super_class: None,
             body: vec![ClassElement::MethodDefinition {
-                key: "constructor".to_string(),
+                key: PropertyKey::Identifier("constructor".to_string()),
                 kind: MethodKind::Constructor,
                 value: Expression::FunctionExpression {
                     name: None,
@@ -2885,6 +2888,7 @@ mod tests {
                 },
                 is_static: false,
                 is_private: false,
+                computed: false,
             }],
             position: None,
         }]);

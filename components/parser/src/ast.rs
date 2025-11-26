@@ -705,7 +705,7 @@ pub enum ClassElement {
     /// Method definition
     MethodDefinition {
         /// Method name
-        key: String,
+        key: PropertyKey,
         /// Method kind
         kind: MethodKind,
         /// Value (function expression)
@@ -714,17 +714,21 @@ pub enum ClassElement {
         is_static: bool,
         /// Is private (#name)
         is_private: bool,
+        /// Is computed (e.g., [expr])
+        computed: bool,
     },
     /// Property definition
     PropertyDefinition {
         /// Property key
-        key: String,
+        key: PropertyKey,
         /// Initial value
         value: Option<Expression>,
         /// Is static
         is_static: bool,
         /// Is private (#name)
         is_private: bool,
+        /// Is computed (e.g., [expr])
+        computed: bool,
     },
 }
 
