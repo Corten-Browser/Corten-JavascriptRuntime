@@ -104,6 +104,36 @@ impl Dispatcher {
             Value::NativeFunction("Array".to_string()),
         );
 
+        // Inject Error constructors
+        globals.insert(
+            "Error".to_string(),
+            Value::NativeFunction("Error".to_string()),
+        );
+        globals.insert(
+            "TypeError".to_string(),
+            Value::NativeFunction("TypeError".to_string()),
+        );
+        globals.insert(
+            "ReferenceError".to_string(),
+            Value::NativeFunction("ReferenceError".to_string()),
+        );
+        globals.insert(
+            "SyntaxError".to_string(),
+            Value::NativeFunction("SyntaxError".to_string()),
+        );
+        globals.insert(
+            "RangeError".to_string(),
+            Value::NativeFunction("RangeError".to_string()),
+        );
+        globals.insert(
+            "URIError".to_string(),
+            Value::NativeFunction("URIError".to_string()),
+        );
+        globals.insert(
+            "EvalError".to_string(),
+            Value::NativeFunction("EvalError".to_string()),
+        );
+
         Self {
             globals,
             stack: Vec::with_capacity(256),
@@ -122,7 +152,21 @@ impl Dispatcher {
     ///
     /// This should be called before executing bytecode to enable GC-managed object creation.
     pub fn set_heap(&mut self, heap: Rc<VMHeap>) {
-        self.heap = Some(heap);
+        self.heap = Some(heap.clone());
+
+        // Initialize Error.prototype objects now that we have a heap
+        let error_types = ["Error", "TypeError", "ReferenceError", "SyntaxError",
+                          "RangeError", "URIError", "EvalError"];
+
+        for error_type in &error_types {
+            let proto_obj = heap.create_object();
+            let proto_key = format!("{}.prototype", error_type);
+            let boxed: Box<dyn Any> = Box::new(proto_obj);
+            let proto_value = Value::NativeObject(
+                Rc::new(RefCell::new(boxed)) as Rc<RefCell<dyn Any>>
+            );
+            self.globals.insert(proto_key, proto_value);
+        }
     }
 
     /// Capture an upvalue for a closure based on the descriptor
@@ -566,6 +610,22 @@ impl Dispatcher {
                                         .push(Value::NativeFunction("Promise.reject".to_string())),
                                     _ => self.stack.push(Value::Undefined),
                                 }
+                            } else if matches!(fn_name.as_str(), "Error" | "TypeError" | "ReferenceError" |
+                                             "SyntaxError" | "RangeError" | "URIError" | "EvalError") {
+                                // Handle Error constructor properties
+                                match name.as_str() {
+                                    "prototype" => {
+                                        // Return the pre-initialized prototype object
+                                        let proto_key = format!("{}.prototype", fn_name);
+                                        if let Some(proto) = self.globals.get(&proto_key) {
+                                            self.stack.push(proto.clone());
+                                        } else {
+                                            // Prototype should have been initialized in set_heap()
+                                            self.stack.push(Value::Undefined);
+                                        }
+                                    }
+                                    _ => self.stack.push(Value::Undefined),
+                                }
                             } else {
                                 self.stack.push(Value::Undefined);
                             }
@@ -587,6 +647,16 @@ impl Dispatcher {
                                 }
                             }
                             // For other NativeObjects, we just ignore the store (non-extensible)
+                        }
+                        Value::NativeFunction(ref fn_name) if matches!(fn_name.as_str(),
+                            "Error" | "TypeError" | "ReferenceError" | "SyntaxError" |
+                            "RangeError" | "URIError" | "EvalError") => {
+                            // Handle Error constructor property assignment (e.g., Error.prototype = ...)
+                            if name == "prototype" {
+                                let proto_key = format!("{}.prototype", fn_name);
+                                self.globals.insert(proto_key, value);
+                            }
+                            // Ignore other property stores on Error constructors
                         }
                         _ => {
                             // Ignore stores to non-objects
@@ -1119,12 +1189,67 @@ impl Dispatcher {
                     source_position: None,
                 })
             }
+            // Error constructors
+            "Error" => self.create_error_object("Error", args),
+            "TypeError" => self.create_error_object("TypeError", args),
+            "ReferenceError" => self.create_error_object("ReferenceError", args),
+            "SyntaxError" => self.create_error_object("SyntaxError", args),
+            "RangeError" => self.create_error_object("RangeError", args),
+            "URIError" => self.create_error_object("URIError", args),
+            "EvalError" => self.create_error_object("EvalError", args),
             _ => Err(JsError {
                 kind: ErrorKind::TypeError,
                 message: format!("{} is not a function", name),
                 stack: vec![],
                 source_position: None,
             }),
+        }
+    }
+
+    /// Create an Error object with the given name and message
+    ///
+    /// # Arguments
+    ///
+    /// * `error_name` - The name of the error type (e.g., "Error", "TypeError")
+    /// * `args` - Constructor arguments (first arg is the message)
+    ///
+    /// # Returns
+    ///
+    /// A NativeObject wrapping an error with `name` and `message` properties
+    fn create_error_object(&self, error_name: &str, args: Vec<Value>) -> Result<Value, JsError> {
+        // Extract message from arguments
+        let message = args.first()
+            .map(|v| self.to_string_value(v))
+            .unwrap_or_else(|| String::new());
+
+        // Create error object using heap if available
+        if let Some(ref heap) = self.heap {
+            let mut error_obj = heap.create_object();
+            error_obj.set("name".to_string(), Value::String(error_name.to_string()));
+            error_obj.set("message".to_string(), Value::String(message));
+
+            // Wrap the GCObject in Box<dyn Any> then in NativeObject
+            let boxed: Box<dyn Any> = Box::new(error_obj);
+            Ok(Value::NativeObject(
+                Rc::new(RefCell::new(boxed)) as Rc<RefCell<dyn Any>>
+            ))
+        } else {
+            // Fallback: create a simple NativeObject without heap
+            // This is a simplified error object for when heap is not available
+            #[derive(Debug)]
+            struct SimpleError {
+                name: String,
+                message: String,
+            }
+
+            let error = SimpleError {
+                name: error_name.to_string(),
+                message,
+            };
+
+            Ok(Value::NativeObject(
+                Rc::new(RefCell::new(error)) as Rc<RefCell<dyn Any>>
+            ))
         }
     }
 
