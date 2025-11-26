@@ -365,6 +365,16 @@ pub enum Expression {
         position: Option<SourcePosition>,
     },
 
+    /// Meta property (new.target, import.meta)
+    MetaProperty {
+        /// Meta (e.g., "new" or "import")
+        meta: String,
+        /// Property (e.g., "target" or "meta")
+        property: String,
+        /// Source location
+        position: Option<SourcePosition>,
+    },
+
     /// Array literal
     ArrayExpression {
         /// Elements

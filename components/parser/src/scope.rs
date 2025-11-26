@@ -431,6 +431,10 @@ impl ScopeAnalyzer {
                 }
             }
 
+            Expression::MetaProperty { .. } => {
+                // MetaProperty (new.target, import.meta) has no sub-expressions to analyze
+            }
+
             Expression::ArrayExpression { elements, .. } => {
                 for elem in elements {
                     if let Some(el) = elem {

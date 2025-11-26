@@ -1227,6 +1227,24 @@ impl BytecodeGenerator {
                 self.chunk.emit(Opcode::CallNew(arguments.len() as u8));
             }
 
+            Expression::MetaProperty { meta, property, .. } => {
+                // Handle new.target and import.meta
+                if meta == "new" && property == "target" {
+                    // new.target - push undefined for now (proper implementation needs function context)
+                    self.chunk.emit(Opcode::LoadUndefined);
+                } else if meta == "import" && property == "meta" {
+                    // import.meta - push an empty object for now
+                    self.chunk.emit(Opcode::CreateObject);
+                } else {
+                    return Err(JsError {
+                        kind: ErrorKind::SyntaxError,
+                        message: format!("Unknown meta property: {}.{}", meta, property),
+                        stack: vec![],
+                        source_position: None,
+                    });
+                }
+            }
+
             Expression::ArrayExpression { elements, .. } => {
                 // Push all elements onto the stack first
                 let mut element_count = 0;

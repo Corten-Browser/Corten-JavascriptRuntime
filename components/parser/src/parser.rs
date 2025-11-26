@@ -366,34 +366,122 @@ impl<'a> Parser<'a> {
         let mut elements = Vec::new();
 
         while !self.check_punctuator(Punctuator::RBrace)? {
-            let is_static = if self.check_identifier("static")? {
+            // Check for static
+            let is_static = if self.check_keyword(Keyword::Static)? {
                 self.lexer.next_token()?;
                 true
             } else {
                 false
             };
 
-            let key = self.expect_identifier_or_keyword()?;
+            // Check for async
+            let is_async = if self.check_keyword(Keyword::Async)? {
+                // Peek ahead to see if this is actually an async method
+                // vs a method named "async"
+                let saved_pos = self.lexer.position;
+                let saved_line = self.lexer.line;
+                let saved_column = self.lexer.column;
+                let saved_line_term = self.lexer.line_terminator_before_token;
+
+                self.lexer.next_token()?;
+                let next = self.lexer.peek_token()?;
+                let is_method = matches!(next, Token::Punctuator(Punctuator::Star))
+                    || matches!(next, Token::Identifier(_, _))
+                    || matches!(next, Token::Keyword(_))
+                    || matches!(next, Token::Punctuator(Punctuator::LBracket));
+
+                if is_method && !self.lexer.line_terminator_before_token {
+                    // It's an async method
+                    true
+                } else {
+                    // Restore - it's a method named "async"
+                    self.lexer.position = saved_pos;
+                    self.lexer.line = saved_line;
+                    self.lexer.column = saved_column;
+                    self.lexer.line_terminator_before_token = saved_line_term;
+                    self.lexer.current_token = None;
+                    false
+                }
+            } else {
+                false
+            };
+
+            // Check for generator
+            let is_generator = if self.check_punctuator(Punctuator::Star)? {
+                self.lexer.next_token()?;
+                true
+            } else {
+                false
+            };
+
+            // Check for get/set
+            let mut kind = MethodKind::Method;
+            let mut key_name = String::new();
+
+            if !is_generator && self.check_identifier("get")? {
+                let saved_pos = self.lexer.position;
+                let saved_line = self.lexer.line;
+                let saved_column = self.lexer.column;
+                let saved_line_term = self.lexer.line_terminator_before_token;
+
+                self.lexer.next_token()?;
+                let next = self.lexer.peek_token()?;
+                if matches!(next, Token::Identifier(_, _)) || matches!(next, Token::Keyword(_))
+                    || matches!(next, Token::Punctuator(Punctuator::LBracket)) {
+                    kind = MethodKind::Get;
+                    key_name = self.expect_identifier_or_keyword()?;
+                } else {
+                    // It's a method named "get"
+                    self.lexer.position = saved_pos;
+                    self.lexer.line = saved_line;
+                    self.lexer.column = saved_column;
+                    self.lexer.line_terminator_before_token = saved_line_term;
+                    self.lexer.current_token = None;
+                    key_name = self.expect_identifier_or_keyword()?;
+                }
+            } else if !is_generator && self.check_identifier("set")? {
+                let saved_pos = self.lexer.position;
+                let saved_line = self.lexer.line;
+                let saved_column = self.lexer.column;
+                let saved_line_term = self.lexer.line_terminator_before_token;
+
+                self.lexer.next_token()?;
+                let next = self.lexer.peek_token()?;
+                if matches!(next, Token::Identifier(_, _)) || matches!(next, Token::Keyword(_))
+                    || matches!(next, Token::Punctuator(Punctuator::LBracket)) {
+                    kind = MethodKind::Set;
+                    key_name = self.expect_identifier_or_keyword()?;
+                } else {
+                    // It's a method named "set"
+                    self.lexer.position = saved_pos;
+                    self.lexer.line = saved_line;
+                    self.lexer.column = saved_column;
+                    self.lexer.line_terminator_before_token = saved_line_term;
+                    self.lexer.current_token = None;
+                    key_name = self.expect_identifier_or_keyword()?;
+                }
+            } else {
+                key_name = self.expect_identifier_or_keyword()?;
+            }
+
+            if key_name == "constructor" && !is_static {
+                kind = MethodKind::Constructor;
+            }
 
             if self.check_punctuator(Punctuator::LParen)? {
                 // Method
                 let params = self.parse_parameters()?;
                 let body = self.parse_function_body()?;
-                let kind = if key == "constructor" {
-                    MethodKind::Constructor
-                } else {
-                    MethodKind::Method
-                };
 
                 elements.push(ClassElement::MethodDefinition {
-                    key,
+                    key: key_name,
                     kind,
                     value: Expression::FunctionExpression {
                         name: None,
                         params,
                         body,
-                        is_async: false,
-                        is_generator: false,
+                        is_async,
+                        is_generator,
                         position: None,
                     },
                     is_static,
@@ -407,7 +495,7 @@ impl<'a> Parser<'a> {
                     None
                 };
                 elements.push(ClassElement::PropertyDefinition {
-                    key,
+                    key: key_name,
                     value,
                     is_static,
                 });
@@ -1289,6 +1377,22 @@ impl<'a> Parser<'a> {
 
     fn parse_new_expression(&mut self) -> Result<Expression, JsError> {
         self.expect_keyword(Keyword::New)?;
+
+        // Check for new.target meta property
+        if self.check_punctuator(Punctuator::Dot)? {
+            self.lexer.next_token()?;
+            let property = self.expect_identifier()?;
+            if property == "target" {
+                return Ok(Expression::MetaProperty {
+                    meta: "new".to_string(),
+                    property: "target".to_string(),
+                    position: None,
+                });
+            } else {
+                return Err(syntax_error("Expected 'target' after 'new.'", None));
+            }
+        }
+
         // Parse callee without consuming call expressions - those belong to the NewExpression
         let callee = Box::new(self.parse_member_expression_without_call()?);
         let arguments = if self.check_punctuator(Punctuator::LParen)? {
@@ -2409,6 +2513,69 @@ mod tests {
     #[test]
     fn test_async_generator_method() {
         let mut parser = Parser::new("let o = { async *f(p = 1, x) {} };");
+        let result = parser.parse();
+        assert!(result.is_ok(), "Parse error: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_two_string_expressions_asi() {
+        // Two adjacent string expressions should work with ASI
+        let mut parser = Parser::new("'a'\n'b'");
+        let result = parser.parse();
+        assert!(result.is_ok(), "Parse error: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_switch_statement() {
+        let mut parser = Parser::new("switch(x) { case 1: break; default: break; }");
+        let result = parser.parse();
+        assert!(result.is_ok(), "Parse error: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_do_while_statement() {
+        let mut parser = Parser::new("do { x++; } while(x < 10);");
+        let result = parser.parse();
+        assert!(result.is_ok(), "Parse error: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_prototype_assignment() {
+        let mut parser = Parser::new("Test262Error.prototype = new Error();");
+        let result = parser.parse();
+        assert!(result.is_ok(), "Parse error: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_harness_prelude() {
+        let code = r#"
+function Test262Error(message) {
+    this.message = message || '';
+    this.name = 'Test262Error';
+}
+Test262Error.prototype = new Error();
+Test262Error.prototype.constructor = Test262Error;
+
+var $262 = {
+    createRealm: function() { return {}; },
+    detachArrayBuffer: function(ab) { },
+    gc: function() { },
+    global: this
+};
+
+function assert(condition, message) {
+    if (!condition) {
+        throw new Error("Assertion failed: " + (message || ""));
+    }
+}
+
+assert.sameValue = function(actual, expected, message) {
+    if (actual !== expected) {
+        throw new Error("Expected " + expected + " but got " + actual);
+    }
+};
+"#;
+        let mut parser = Parser::new(code);
         let result = parser.parse();
         assert!(result.is_ok(), "Parse error: {:?}", result.err());
     }

@@ -216,10 +216,10 @@ pub enum Token {
 pub struct Lexer<'a> {
     source: &'a str,
     chars: Vec<char>,
-    position: usize,
-    line: u32,
-    column: u32,
-    current_token: Option<Token>,
+    pub position: usize,
+    pub line: u32,
+    pub column: u32,
+    pub current_token: Option<Token>,
     /// Tracks if a line terminator was encountered before the current token
     /// Used for Automatic Semicolon Insertion (ASI)
     pub line_terminator_before_token: bool,
@@ -954,18 +954,32 @@ impl<'a> Lexer<'a> {
     fn skip_whitespace_and_comments(&mut self) {
         while !self.is_at_end() {
             match self.peek() {
-                ' ' | '\t' | '\r' => {
+                ' ' | '\t' => {
                     self.advance();
                 }
-                '\n' => {
+                '\n' | '\u{2028}' | '\u{2029}' => {
+                    // Line Feed (LF), Line Separator (LS), Paragraph Separator (PS)
                     self.advance();
+                    self.line += 1;
+                    self.column = 1;
+                }
+                '\r' => {
+                    // Carriage Return (CR) - handle CRLF as single line terminator
+                    self.advance();
+                    if !self.is_at_end() && self.peek() == '\n' {
+                        self.advance();
+                    }
                     self.line += 1;
                     self.column = 1;
                 }
                 '/' => {
                     if self.peek_next() == Some('/') {
-                        // Line comment
-                        while !self.is_at_end() && self.peek() != '\n' {
+                        // Line comment - also terminate on LS and PS
+                        while !self.is_at_end() {
+                            let ch = self.peek();
+                            if ch == '\n' || ch == '\r' || ch == '\u{2028}' || ch == '\u{2029}' {
+                                break;
+                            }
                             self.advance();
                         }
                     } else if self.peek_next() == Some('*') {
@@ -978,9 +992,20 @@ impl<'a> Lexer<'a> {
                                 self.advance(); // /
                                 break;
                             }
-                            if self.peek() == '\n' {
+                            // Track all line terminators: LF, CR, LS (U+2028), PS (U+2029)
+                            let ch = self.peek();
+                            if ch == '\n' || ch == '\u{2028}' || ch == '\u{2029}' {
                                 self.line += 1;
                                 self.column = 1;
+                            } else if ch == '\r' {
+                                self.line += 1;
+                                self.column = 1;
+                                // Handle CRLF as single line terminator
+                                self.advance();
+                                if !self.is_at_end() && self.peek() == '\n' {
+                                    self.advance();
+                                }
+                                continue;
                             }
                             self.advance();
                         }

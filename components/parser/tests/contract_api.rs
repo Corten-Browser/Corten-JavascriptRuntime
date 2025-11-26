@@ -270,3 +270,23 @@ fn test_parse_nullish_coalescing() {
     let result = parser.parse();
     assert!(result.is_ok());
 }
+
+#[test]
+fn test_rest_destructuring_pattern() {
+    let code = "function empty(...[]) {}";
+    let result = parser::Parser::new(code).parse();
+    println!("Result: {:?}", result);
+    assert!(result.is_ok(), "Failed with: {:?}", result);
+}
+
+#[test]
+fn test_rest_destructuring_bytecode() {
+    let code = "function empty(...[]) {}";
+    let ast = parser::Parser::new(code).parse().expect("parse failed");
+    println!("AST: {:?}", ast);
+    
+    let mut gen = parser::BytecodeGenerator::new();
+    let result = gen.generate(&ast);
+    println!("Bytecode result: {:?}", result);
+    assert!(result.is_ok(), "Bytecode gen failed: {:?}", result);
+}
