@@ -1,6 +1,134 @@
-//! Number.prototype methods
+//! Number object and Number.prototype methods
 
 use crate::value::{JsError, JsResult, JsValue};
+
+/// Number object with static properties and methods
+pub struct NumberObject;
+
+impl NumberObject {
+    /// Number.NaN
+    pub const NAN: f64 = f64::NAN;
+
+    /// Number.POSITIVE_INFINITY
+    pub const POSITIVE_INFINITY: f64 = f64::INFINITY;
+
+    /// Number.NEGATIVE_INFINITY
+    pub const NEGATIVE_INFINITY: f64 = f64::NEG_INFINITY;
+
+    /// Number.MAX_VALUE
+    pub const MAX_VALUE: f64 = f64::MAX;
+
+    /// Number.MIN_VALUE
+    pub const MIN_VALUE: f64 = f64::MIN_POSITIVE;
+
+    /// Number.MAX_SAFE_INTEGER
+    pub const MAX_SAFE_INTEGER: f64 = 9007199254740991.0;
+
+    /// Number.MIN_SAFE_INTEGER
+    pub const MIN_SAFE_INTEGER: f64 = -9007199254740991.0;
+
+    /// Number.EPSILON
+    pub const EPSILON: f64 = f64::EPSILON;
+
+    /// Number.isNaN(value) - ES6+ strict NaN check
+    pub fn is_nan(value: f64) -> bool {
+        value.is_nan()
+    }
+
+    /// Number.isFinite(value) - ES6+ strict finite check
+    pub fn is_finite(value: f64) -> bool {
+        value.is_finite()
+    }
+
+    /// Number.isInteger(value)
+    pub fn is_integer(value: f64) -> bool {
+        value.is_finite() && value.trunc() == value
+    }
+
+    /// Number.isSafeInteger(value)
+    pub fn is_safe_integer(value: f64) -> bool {
+        Self::is_integer(value) && value.abs() <= Self::MAX_SAFE_INTEGER
+    }
+
+    /// Number.parseInt(string, radix) - same as global parseInt
+    pub fn parse_int(s: &str, radix: Option<u32>) -> f64 {
+        let radix = radix.unwrap_or(10);
+        if radix < 2 || radix > 36 {
+            return f64::NAN;
+        }
+
+        let s = s.trim();
+        if s.is_empty() {
+            return f64::NAN;
+        }
+
+        let (negative, s) = if s.starts_with('-') {
+            (true, &s[1..])
+        } else if s.starts_with('+') {
+            (false, &s[1..])
+        } else {
+            (false, s)
+        };
+
+        let result = i64::from_str_radix(s, radix);
+        match result {
+            Ok(n) => {
+                let value = n as f64;
+                if negative { -value } else { value }
+            }
+            Err(_) => {
+                // Try to parse as much as possible
+                let mut n: i64 = 0;
+                let mut found_digit = false;
+                for c in s.chars() {
+                    let digit = c.to_digit(radix);
+                    match digit {
+                        Some(d) => {
+                            n = n * radix as i64 + d as i64;
+                            found_digit = true;
+                        }
+                        None => break,
+                    }
+                }
+                if found_digit {
+                    let value = n as f64;
+                    if negative { -value } else { value }
+                } else {
+                    f64::NAN
+                }
+            }
+        }
+    }
+
+    /// Number.parseFloat(string) - same as global parseFloat
+    pub fn parse_float(s: &str) -> f64 {
+        let s = s.trim();
+        if s.is_empty() {
+            return f64::NAN;
+        }
+
+        // Handle special values
+        if s == "Infinity" || s == "+Infinity" {
+            return f64::INFINITY;
+        }
+        if s == "-Infinity" {
+            return f64::NEG_INFINITY;
+        }
+
+        // Parse as much as possible as a valid number
+        s.parse::<f64>().unwrap_or(f64::NAN)
+    }
+}
+
+/// Global isNaN function (coerces to number first, unlike Number.isNaN)
+pub fn global_is_nan(value: f64) -> bool {
+    value.is_nan()
+}
+
+/// Global isFinite function (coerces to number first, unlike Number.isFinite)
+pub fn global_is_finite(value: f64) -> bool {
+    value.is_finite()
+}
 
 /// Number.prototype methods
 pub struct NumberPrototype;

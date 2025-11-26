@@ -693,6 +693,10 @@ impl BytecodeGenerator {
                 Literal::Boolean(false) => {
                     self.chunk.emit(Opcode::LoadFalse);
                 }
+                Literal::BigInt(_s) => {
+                    // TODO: Implement BigInt support in bytecode
+                    unimplemented!("BigInt literals not yet supported in bytecode")
+                }
                 Literal::Null => {
                     self.chunk.emit(Opcode::LoadNull);
                 }
@@ -724,6 +728,8 @@ impl BytecodeGenerator {
                     BinaryOperator::LtEq => Opcode::LessThanEqual,
                     BinaryOperator::Gt => Opcode::GreaterThan,
                     BinaryOperator::GtEq => Opcode::GreaterThanEqual,
+                    BinaryOperator::Instanceof => Opcode::Instanceof,
+                    BinaryOperator::In => Opcode::In,
                     _ => {
                         return Err(JsError {
                             kind: ErrorKind::InternalError,
@@ -839,23 +845,38 @@ impl BytecodeGenerator {
 
                 match operator {
                     LogicalOperator::And => {
+                        // For &&: return left if falsy, else return right
+                        // Stack: [left] -> Dup -> [left, left] -> JumpIfFalse -> [left]
+                        // If falsy: jump to end with left on stack
+                        // If truthy: Pop left, evaluate right
+                        self.chunk.emit(Opcode::Dup);
                         let skip = self.chunk.instruction_count();
                         self.chunk.emit(Opcode::JumpIfFalse(0));
+                        self.chunk.emit(Opcode::Pop); // Discard left, we'll use right
                         self.visit_expression(right)?;
                         let end = self.chunk.instruction_count();
                         self.patch_jump(skip, end);
                     }
                     LogicalOperator::Or => {
+                        // For ||: return left if truthy, else return right
+                        // Stack: [left] -> Dup -> [left, left] -> JumpIfTrue -> [left]
+                        // If truthy: jump to end with left on stack
+                        // If falsy: Pop left, evaluate right
+                        self.chunk.emit(Opcode::Dup);
                         let skip = self.chunk.instruction_count();
                         self.chunk.emit(Opcode::JumpIfTrue(0));
+                        self.chunk.emit(Opcode::Pop); // Discard left, we'll use right
                         self.visit_expression(right)?;
                         let end = self.chunk.instruction_count();
                         self.patch_jump(skip, end);
                     }
                     LogicalOperator::NullishCoalesce => {
-                        // Simplified - treat as OR for now
+                        // For ??: return left if not null/undefined, else return right
+                        // Simplified - treat as OR for now (TODO: proper nullish check)
+                        self.chunk.emit(Opcode::Dup);
                         let skip = self.chunk.instruction_count();
                         self.chunk.emit(Opcode::JumpIfTrue(0));
+                        self.chunk.emit(Opcode::Pop); // Discard left, we'll use right
                         self.visit_expression(right)?;
                         let end = self.chunk.instruction_count();
                         self.patch_jump(skip, end);
@@ -869,9 +890,12 @@ impl BytecodeGenerator {
                 right,
                 ..
             } => {
+                // Assignment expressions return the assigned value
+                // So we need to duplicate the value before storing
                 match left {
                     AssignmentTarget::Identifier(name) => {
                         self.visit_expression(right)?;
+                        self.chunk.emit(Opcode::Dup); // Keep value on stack for expression result
                         match self.resolve_variable(name) {
                             VarResolution::Local(reg) => {
                                 self.chunk.emit(Opcode::StoreLocal(reg));
@@ -898,12 +922,14 @@ impl BytecodeGenerator {
                                 self.visit_expression(object)?;
                                 self.visit_expression(property)?;
                                 self.visit_expression(right)?;
+                                self.chunk.emit(Opcode::Dup); // Keep value on stack for expression result
                                 self.chunk.emit(Opcode::SetIndex);
                             } else {
                                 // Static assignment: obj.prop = value
                                 // StoreProperty expects stack: [obj, value]
                                 self.visit_expression(object)?;
                                 self.visit_expression(right)?;
+                                self.chunk.emit(Opcode::Dup); // Keep value on stack for expression result
                                 if let Expression::Identifier { name, .. } = property.as_ref() {
                                     self.chunk.emit(Opcode::StoreProperty(name.clone()));
                                 }

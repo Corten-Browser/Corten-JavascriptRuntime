@@ -20,3 +20,7 @@ tempfile = "3.8"
 [[bin]]
 name = "test262_runner"
 path = "src/bin/runner.rs"
+
+[[bin]]
+name = "run_test262"
+path = "src/bin/run_test262.rs"

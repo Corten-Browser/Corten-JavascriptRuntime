@@ -92,6 +92,10 @@ pub enum Opcode {
     GreaterThan,
     /// Greater than or equal (>=)
     GreaterThanEqual,
+    /// Instanceof operator
+    Instanceof,
+    /// In operator
+    In,
 
     // Control flow
     /// Unconditional jump to offset

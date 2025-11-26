@@ -57,7 +57,7 @@ pub mod value;
 pub mod weakref;
 
 // Re-export main types for convenience
-pub use array::ArrayPrototype;
+pub use array::{Array, ArrayPrototype};
 pub use async_generator::{
     AsyncGeneratorFunction, AsyncGeneratorObject, AsyncGeneratorPromise, AsyncGeneratorState,
     AsyncIteratorHelper,
@@ -82,7 +82,7 @@ pub use iterator::{
 };
 pub use json::JSONObject;
 pub use math::MathObject;
-pub use number::NumberPrototype;
+pub use number::{NumberObject, NumberPrototype, global_is_nan, global_is_finite};
 pub use object::ObjectPrototype;
 pub use proxy::{ProxyHandler, ProxyObject};
 pub use reflect::ReflectObject;
