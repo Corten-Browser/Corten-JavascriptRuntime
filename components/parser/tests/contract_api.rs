@@ -37,8 +37,8 @@ fn test_token_identifier_variant() {
     let source = "myVar";
     let mut lexer = Lexer::new(source);
     let token = lexer.next_token().unwrap();
-    assert!(matches!(token, Token::Identifier(_)));
-    if let Token::Identifier(name) = token {
+    assert!(matches!(token, Token::Identifier(_, _)));
+    if let Token::Identifier(name, _has_escapes) = token {
         assert_eq!(name, "myVar");
     }
 }

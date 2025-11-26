@@ -509,6 +509,18 @@ impl Dispatcher {
                     let result = self.in_check(prop, obj);
                     self.stack.push(result);
                 }
+                Opcode::DeleteProperty(ref _prop_name) => {
+                    let _obj = self.stack.pop().unwrap_or(Value::Undefined);
+                    // Delete property from object - for now always return true
+                    // TODO: implement actual property deletion on HeapObject
+                    self.stack.push(Value::Boolean(true));
+                }
+                Opcode::DeleteGlobal(ref var_name) => {
+                    // Delete global variable - always return true for now
+                    // In strict mode this would throw, but we're lenient
+                    self.globals.remove(var_name);
+                    self.stack.push(Value::Boolean(true));
+                }
                 Opcode::Jump(target) => {
                     ctx.instruction_pointer = target;
                 }

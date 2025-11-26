@@ -106,6 +106,32 @@ pub enum Statement {
         position: Option<SourcePosition>,
     },
 
+    /// For...in loop
+    ForInStatement {
+        /// Left side (variable or pattern)
+        left: ForInOfLeft,
+        /// Object to iterate over
+        right: Expression,
+        /// Loop body
+        body: Box<Statement>,
+        /// Source location
+        position: Option<SourcePosition>,
+    },
+
+    /// For...of loop
+    ForOfStatement {
+        /// Left side (variable or pattern)
+        left: ForInOfLeft,
+        /// Iterable to iterate over
+        right: Expression,
+        /// Loop body
+        body: Box<Statement>,
+        /// Is await for-of
+        r#await: bool,
+        /// Source location
+        position: Option<SourcePosition>,
+    },
+
     /// Block statement
     BlockStatement {
         /// Block body
@@ -155,6 +181,61 @@ pub enum Statement {
         /// Source location
         position: Option<SourcePosition>,
     },
+
+    /// Do-while loop
+    DoWhileStatement {
+        /// Loop body
+        body: Box<Statement>,
+        /// Loop condition
+        test: Expression,
+        /// Source location
+        position: Option<SourcePosition>,
+    },
+
+    /// Switch statement
+    SwitchStatement {
+        /// Discriminant expression
+        discriminant: Expression,
+        /// Case clauses
+        cases: Vec<SwitchCase>,
+        /// Source location
+        position: Option<SourcePosition>,
+    },
+
+    /// With statement
+    WithStatement {
+        /// Object expression
+        object: Expression,
+        /// Body statement
+        body: Box<Statement>,
+        /// Source location
+        position: Option<SourcePosition>,
+    },
+
+    /// Debugger statement
+    DebuggerStatement {
+        /// Source location
+        position: Option<SourcePosition>,
+    },
+
+    /// Labeled statement
+    LabeledStatement {
+        /// Label name
+        label: String,
+        /// Body statement
+        body: Box<Statement>,
+        /// Source location
+        position: Option<SourcePosition>,
+    },
+}
+
+/// Switch case clause
+#[derive(Debug, Clone, PartialEq)]
+pub struct SwitchCase {
+    /// Test expression (None for default case)
+    pub test: Option<Expression>,
+    /// Consequent statements
+    pub consequent: Vec<Statement>,
 }
 
 /// JavaScript expressions
@@ -581,6 +662,20 @@ pub enum ForInit {
     },
     /// Expression
     Expression(Expression),
+}
+
+/// Left side of for-in/for-of loop
+#[derive(Debug, Clone, PartialEq)]
+pub enum ForInOfLeft {
+    /// Variable declaration (let x, const x, var x)
+    VariableDeclaration {
+        /// Kind
+        kind: VariableKind,
+        /// Binding pattern
+        id: Pattern,
+    },
+    /// Existing variable or pattern
+    Pattern(Pattern),
 }
 
 /// Catch clause

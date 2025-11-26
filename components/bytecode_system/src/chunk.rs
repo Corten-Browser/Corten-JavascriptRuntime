@@ -294,6 +294,18 @@ impl BytecodeChunk {
             Opcode::Void => (51, vec![]),
             Opcode::Instanceof => (52, vec![]),
             Opcode::In => (53, vec![]),
+            Opcode::DeleteProperty(ref s) => {
+                let bytes = s.as_bytes();
+                let mut operands = (bytes.len() as u32).to_le_bytes().to_vec();
+                operands.extend_from_slice(bytes);
+                (54, operands)
+            }
+            Opcode::DeleteGlobal(ref s) => {
+                let bytes = s.as_bytes();
+                let mut operands = (bytes.len() as u32).to_le_bytes().to_vec();
+                operands.extend_from_slice(bytes);
+                (55, operands)
+            }
         }
     }
 
@@ -534,6 +546,24 @@ impl BytecodeChunk {
             51 => Opcode::Void,
             52 => Opcode::Instanceof,
             53 => Opcode::In,
+            54 => {
+                let len =
+                    u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap()) as usize;
+                offset += 4;
+                let s = String::from_utf8(bytes[offset..offset + len].to_vec())
+                    .map_err(|e| format!("Invalid UTF-8: {}", e))?;
+                offset += len;
+                Opcode::DeleteProperty(s)
+            }
+            55 => {
+                let len =
+                    u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap()) as usize;
+                offset += 4;
+                let s = String::from_utf8(bytes[offset..offset + len].to_vec())
+                    .map_err(|e| format!("Invalid UTF-8: {}", e))?;
+                offset += len;
+                Opcode::DeleteGlobal(s)
+            }
             _ => return Err(format!("Unknown opcode tag: {}", tag)),
         };
 

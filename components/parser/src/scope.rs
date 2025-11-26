@@ -222,6 +222,52 @@ impl ScopeAnalyzer {
                 self.exit_scope(loop_scope);
             }
 
+            Statement::ForInStatement {
+                left,
+                right,
+                body,
+                ..
+            } => {
+                let loop_scope = self.enter_scope(false);
+
+                match left {
+                    ForInOfLeft::VariableDeclaration { kind, id } => {
+                        self.declare_pattern(id, *kind)?;
+                    }
+                    ForInOfLeft::Pattern(pattern) => {
+                        self.visit_pattern_refs(pattern)?;
+                    }
+                }
+
+                self.visit_expression(right)?;
+                self.visit_statement(body)?;
+
+                self.exit_scope(loop_scope);
+            }
+
+            Statement::ForOfStatement {
+                left,
+                right,
+                body,
+                ..
+            } => {
+                let loop_scope = self.enter_scope(false);
+
+                match left {
+                    ForInOfLeft::VariableDeclaration { kind, id } => {
+                        self.declare_pattern(id, *kind)?;
+                    }
+                    ForInOfLeft::Pattern(pattern) => {
+                        self.visit_pattern_refs(pattern)?;
+                    }
+                }
+
+                self.visit_expression(right)?;
+                self.visit_statement(body)?;
+
+                self.exit_scope(loop_scope);
+            }
+
             Statement::BlockStatement { body, .. } => {
                 let block_scope = self.enter_scope(false);
                 for stmt in body {
@@ -268,7 +314,44 @@ impl ScopeAnalyzer {
 
             Statement::EmptyStatement { .. }
             | Statement::BreakStatement { .. }
-            | Statement::ContinueStatement { .. } => {}
+            | Statement::ContinueStatement { .. }
+            | Statement::DebuggerStatement { .. } => {}
+
+            Statement::DoWhileStatement { body, test, .. } => {
+                let loop_scope = self.enter_scope(false);
+                self.visit_statement(body)?;
+                self.visit_expression(test)?;
+                self.exit_scope(loop_scope);
+            }
+
+            Statement::SwitchStatement {
+                discriminant,
+                cases,
+                ..
+            } => {
+                self.visit_expression(discriminant)?;
+                let switch_scope = self.enter_scope(false);
+                for case in cases {
+                    if let Some(test) = &mut case.test {
+                        self.visit_expression(test)?;
+                    }
+                    for stmt in &mut case.consequent {
+                        self.visit_statement(stmt)?;
+                    }
+                }
+                self.exit_scope(switch_scope);
+            }
+
+            Statement::WithStatement { object, body, .. } => {
+                self.visit_expression(object)?;
+                let with_scope = self.enter_scope(false);
+                self.visit_statement(body)?;
+                self.exit_scope(with_scope);
+            }
+
+            Statement::LabeledStatement { body, .. } => {
+                self.visit_statement(body)?;
+            }
         }
         Ok(())
     }

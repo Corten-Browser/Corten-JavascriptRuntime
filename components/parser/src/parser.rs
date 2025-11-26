@@ -102,7 +102,7 @@ impl<'a> Parser<'a> {
         self.expect_keyword(Keyword::Function)?;
 
         // Skip optional name
-        if let Token::Identifier(_) = self.lexer.peek_token()? {
+        if let Token::Identifier(_, _) = self.lexer.peek_token()? {
             self.lexer.next_token()?;
         }
 
@@ -153,11 +153,15 @@ impl<'a> Parser<'a> {
             Token::Keyword(Keyword::Return) => self.parse_return_statement(),
             Token::Keyword(Keyword::If) => self.parse_if_statement(),
             Token::Keyword(Keyword::While) => self.parse_while_statement(),
+            Token::Keyword(Keyword::Do) => self.parse_do_while_statement(),
             Token::Keyword(Keyword::For) => self.parse_for_statement(),
+            Token::Keyword(Keyword::Switch) => self.parse_switch_statement(),
             Token::Keyword(Keyword::Break) => self.parse_break_statement(),
             Token::Keyword(Keyword::Continue) => self.parse_continue_statement(),
             Token::Keyword(Keyword::Throw) => self.parse_throw_statement(),
             Token::Keyword(Keyword::Try) => self.parse_try_statement(),
+            Token::Keyword(Keyword::With) => self.parse_with_statement(),
+            Token::Keyword(Keyword::Debugger) => self.parse_debugger_statement(),
             Token::Punctuator(Punctuator::LBrace) => self.parse_block_statement(),
             Token::Punctuator(Punctuator::Semicolon) => {
                 self.lexer.next_token()?;
@@ -208,9 +212,10 @@ impl<'a> Parser<'a> {
         let token = self.lexer.peek_token()?.clone();
 
         match token {
-            Token::Identifier(name) => {
+            Token::Identifier(name, _has_escapes) => {
                 self.lexer.next_token()?;
                 // Validate the identifier is not a reserved word
+                // Per ES spec, even escaped reserved words are invalid as identifiers
                 self.validate_identifier(&name)?;
                 Ok(Pattern::Identifier(name))
             }
@@ -311,6 +316,13 @@ impl<'a> Parser<'a> {
 
         if self.check_keyword(Keyword::Function)? {
             self.lexer.next_token()?;
+
+            // Check for async generator: async function *name()
+            let is_generator = self.check_punctuator(Punctuator::Star)?;
+            if is_generator {
+                self.lexer.next_token()?;
+            }
+
             let name = self.expect_identifier()?;
             let params = self.parse_parameters()?;
             let body = self.parse_function_body()?;
@@ -320,7 +332,7 @@ impl<'a> Parser<'a> {
                 params,
                 body,
                 is_async: true,
-                is_generator: false,
+                is_generator,
                 position: None,
             })
         } else {
@@ -415,11 +427,34 @@ impl<'a> Parser<'a> {
             if self.check_punctuator(Punctuator::Spread)? {
                 self.lexer.next_token()?;
                 let pattern = self.parse_pattern()?;
-                params.push(Pattern::RestElement(Box::new(pattern)));
+                // Check for default value on rest element
+                let final_pattern = if self.check_punctuator(Punctuator::Assign)? {
+                    self.lexer.next_token()?;
+                    let default_value = self.parse_assignment_expression()?;
+                    Pattern::AssignmentPattern {
+                        left: Box::new(Pattern::RestElement(Box::new(pattern))),
+                        right: Box::new(default_value),
+                    }
+                } else {
+                    Pattern::RestElement(Box::new(pattern))
+                };
+                params.push(final_pattern);
                 break;
             }
 
-            params.push(self.parse_pattern()?);
+            let pattern = self.parse_pattern()?;
+            // Check for default value
+            let final_pattern = if self.check_punctuator(Punctuator::Assign)? {
+                self.lexer.next_token()?;
+                let default_value = self.parse_assignment_expression()?;
+                Pattern::AssignmentPattern {
+                    left: Box::new(pattern),
+                    right: Box::new(default_value),
+                }
+            } else {
+                pattern
+            };
+            params.push(final_pattern);
 
             if !self.check_punctuator(Punctuator::Comma)? {
                 break;
@@ -506,13 +541,100 @@ impl<'a> Parser<'a> {
         })
     }
 
+    fn parse_do_while_statement(&mut self) -> Result<Statement, JsError> {
+        self.expect_keyword(Keyword::Do)?;
+        self.loop_depth += 1;
+        let body = Box::new(self.parse_substatement()?);
+        self.loop_depth -= 1;
+        self.expect_keyword(Keyword::While)?;
+        self.expect_punctuator(Punctuator::LParen)?;
+        let test = self.parse_expression()?;
+        self.expect_punctuator(Punctuator::RParen)?;
+        self.consume_semicolon()?;
+        Ok(Statement::DoWhileStatement {
+            body,
+            test,
+            position: None,
+        })
+    }
+
+    fn parse_switch_statement(&mut self) -> Result<Statement, JsError> {
+        use crate::ast::SwitchCase;
+        self.expect_keyword(Keyword::Switch)?;
+        self.expect_punctuator(Punctuator::LParen)?;
+        let discriminant = self.parse_expression()?;
+        self.expect_punctuator(Punctuator::RParen)?;
+        self.expect_punctuator(Punctuator::LBrace)?;
+
+        let mut cases = Vec::new();
+        self.loop_depth += 1; // Allow break inside switch
+
+        while !self.check_punctuator(Punctuator::RBrace)? {
+            let test = if self.check_keyword(Keyword::Case)? {
+                self.lexer.next_token()?;
+                Some(self.parse_expression()?)
+            } else if self.check_keyword(Keyword::Default)? {
+                self.lexer.next_token()?;
+                None
+            } else {
+                return Err(syntax_error(
+                    "Expected 'case' or 'default'",
+                    self.last_position.clone(),
+                ));
+            };
+            self.expect_punctuator(Punctuator::Colon)?;
+
+            let mut consequent = Vec::new();
+            while !self.check_punctuator(Punctuator::RBrace)?
+                && !self.check_keyword(Keyword::Case)?
+                && !self.check_keyword(Keyword::Default)?
+            {
+                consequent.push(self.parse_statement()?);
+            }
+
+            cases.push(SwitchCase { test, consequent });
+        }
+
+        self.loop_depth -= 1;
+        self.expect_punctuator(Punctuator::RBrace)?;
+        Ok(Statement::SwitchStatement {
+            discriminant,
+            cases,
+            position: None,
+        })
+    }
+
+    fn parse_with_statement(&mut self) -> Result<Statement, JsError> {
+        self.expect_keyword(Keyword::With)?;
+        self.expect_punctuator(Punctuator::LParen)?;
+        let object = self.parse_expression()?;
+        self.expect_punctuator(Punctuator::RParen)?;
+        let body = Box::new(self.parse_substatement()?);
+        Ok(Statement::WithStatement {
+            object,
+            body,
+            position: None,
+        })
+    }
+
+    fn parse_debugger_statement(&mut self) -> Result<Statement, JsError> {
+        self.expect_keyword(Keyword::Debugger)?;
+        self.consume_semicolon()?;
+        Ok(Statement::DebuggerStatement { position: None })
+    }
+
     fn parse_for_statement(&mut self) -> Result<Statement, JsError> {
         self.expect_keyword(Keyword::For)?;
         self.expect_punctuator(Punctuator::LParen)?;
 
-        let init = if self.check_punctuator(Punctuator::Semicolon)? {
-            None
-        } else if self.check_keyword(Keyword::Let)?
+        // Check for for-in/for-of first
+        if self.check_punctuator(Punctuator::Semicolon)? {
+            // Empty init - regular for loop
+            return self.parse_regular_for(None);
+        }
+
+        // Parse left side
+        if self.check_keyword(Keyword::Let)?
             || self.check_keyword(Keyword::Const)?
             || self.check_keyword(Keyword::Var)?
         {
@@ -523,23 +645,114 @@ impl<'a> Parser<'a> {
                 _ => unreachable!(),
             };
             let id = self.parse_pattern()?;
+
+            // Check for in/of (for-in/for-of) vs semicolon (regular for)
+            if self.check_keyword(Keyword::In)? {
+                self.lexer.next_token()?; // consume 'in'
+                let right = self.parse_expression()?;
+                self.expect_punctuator(Punctuator::RParen)?;
+                self.loop_depth += 1;
+                let body = Box::new(self.parse_substatement()?);
+                self.loop_depth -= 1;
+                return Ok(Statement::ForInStatement {
+                    left: ForInOfLeft::VariableDeclaration { kind, id },
+                    right,
+                    body,
+                    position: None,
+                });
+            }
+
+            if self.check_identifier("of")? {
+                self.lexer.next_token()?; // consume 'of'
+                let right = self.parse_assignment_expression()?;
+                self.expect_punctuator(Punctuator::RParen)?;
+                self.loop_depth += 1;
+                let body = Box::new(self.parse_substatement()?);
+                self.loop_depth -= 1;
+                return Ok(Statement::ForOfStatement {
+                    left: ForInOfLeft::VariableDeclaration { kind, id },
+                    right,
+                    body,
+                    r#await: false,
+                    position: None,
+                });
+            }
+
+            // Regular for loop with variable declaration
             let init_expr = if self.check_punctuator(Punctuator::Assign)? {
                 self.lexer.next_token()?;
                 Some(self.parse_assignment_expression()?)
             } else {
                 None
             };
-            Some(ForInit::VariableDeclaration {
+            let init = Some(ForInit::VariableDeclaration {
                 kind,
                 declarations: vec![VariableDeclarator {
                     id,
                     init: init_expr,
                 }],
-            })
-        } else {
-            Some(ForInit::Expression(self.parse_expression()?))
-        };
+            });
+            return self.parse_regular_for(init);
+        }
 
+        // Expression as left side - could be for-in/for-of or regular for
+        let left_expr = self.parse_left_hand_side_expression()?;
+
+        // Check for in/of
+        if self.check_keyword(Keyword::In)? {
+            self.lexer.next_token()?; // consume 'in'
+            let right = self.parse_expression()?;
+            self.expect_punctuator(Punctuator::RParen)?;
+            self.loop_depth += 1;
+            let body = Box::new(self.parse_substatement()?);
+            self.loop_depth -= 1;
+
+            // Convert expression to pattern
+            let left = self.expression_to_pattern(left_expr)?;
+            return Ok(Statement::ForInStatement {
+                left: ForInOfLeft::Pattern(left),
+                right,
+                body,
+                position: None,
+            });
+        }
+
+        if self.check_identifier("of")? {
+            self.lexer.next_token()?; // consume 'of'
+            let right = self.parse_assignment_expression()?;
+            self.expect_punctuator(Punctuator::RParen)?;
+            self.loop_depth += 1;
+            let body = Box::new(self.parse_substatement()?);
+            self.loop_depth -= 1;
+
+            // Convert expression to pattern
+            let left = self.expression_to_pattern(left_expr)?;
+            return Ok(Statement::ForOfStatement {
+                left: ForInOfLeft::Pattern(left),
+                right,
+                body,
+                r#await: false,
+                position: None,
+            });
+        }
+
+        // Regular for loop with expression init
+        // Need to finish parsing the full init expression (may have comma operator)
+        let init_expr = if self.check_punctuator(Punctuator::Comma)? {
+            self.lexer.next_token()?;
+            let rest = self.parse_expression()?;
+            Expression::SequenceExpression {
+                expressions: vec![left_expr, rest],
+                position: None,
+            }
+        } else {
+            left_expr
+        };
+        self.parse_regular_for(Some(ForInit::Expression(init_expr)))
+    }
+
+    /// Parse the rest of a regular for loop after init is determined
+    fn parse_regular_for(&mut self, init: Option<ForInit>) -> Result<Statement, JsError> {
         self.expect_punctuator(Punctuator::Semicolon)?;
 
         let test = if self.check_punctuator(Punctuator::Semicolon)? {
@@ -703,6 +916,21 @@ impl<'a> Parser<'a> {
 
     fn parse_assignment_expression(&mut self) -> Result<Expression, JsError> {
         let expr = self.parse_conditional_expression()?;
+
+        // Check for single-parameter arrow function: identifier => expr
+        // After parsing an identifier, if next token is =>, this is an arrow function
+        if let Expression::Identifier { ref name, .. } = expr {
+            if self.check_punctuator(Punctuator::Arrow)? {
+                self.lexer.next_token()?; // consume =>
+                let body = self.parse_arrow_body()?;
+                return Ok(Expression::ArrowFunctionExpression {
+                    params: vec![Pattern::Identifier(name.clone())],
+                    body,
+                    is_async: false,
+                    position: None,
+                });
+            }
+        }
 
         if let Some(op) = self.check_assignment_operator()? {
             self.lexer.next_token()?;
@@ -921,6 +1149,7 @@ impl<'a> Parser<'a> {
             Token::Punctuator(Punctuator::Tilde) => Some(UnaryOperator::BitwiseNot),
             Token::Keyword(Keyword::Typeof) => Some(UnaryOperator::Typeof),
             Token::Keyword(Keyword::Void) => Some(UnaryOperator::Void),
+            Token::Keyword(Keyword::Delete) => Some(UnaryOperator::Delete),
             _ => None,
         };
 
@@ -1147,7 +1376,7 @@ impl<'a> Parser<'a> {
         let token = self.lexer.peek_token()?.clone();
 
         match token {
-            Token::Identifier(name) => {
+            Token::Identifier(name, _has_escapes) => {
                 self.lexer.next_token()?;
                 Ok(Expression::Identifier {
                     name,
@@ -1212,6 +1441,7 @@ impl<'a> Parser<'a> {
                 Ok(Expression::SuperExpression { position: None })
             }
             Token::Keyword(Keyword::Function) => self.parse_function_expression(),
+            Token::Keyword(Keyword::Async) => self.parse_async_function_expression(),
             Token::Punctuator(Punctuator::LParen) => self.parse_parenthesized_or_arrow(),
             Token::Punctuator(Punctuator::LBracket) => self.parse_array_literal(),
             Token::Punctuator(Punctuator::LBrace) => self.parse_object_literal(),
@@ -1221,7 +1451,14 @@ impl<'a> Parser<'a> {
 
     fn parse_function_expression(&mut self) -> Result<Expression, JsError> {
         self.expect_keyword(Keyword::Function)?;
-        let name = if let Token::Identifier(_) = self.lexer.peek_token()? {
+
+        // Check for generator: function *name() or function *()
+        let is_generator = self.check_punctuator(Punctuator::Star)?;
+        if is_generator {
+            self.lexer.next_token()?;
+        }
+
+        let name = if let Token::Identifier(_, _) = self.lexer.peek_token()? {
             Some(self.expect_identifier()?)
         } else {
             None
@@ -1234,9 +1471,66 @@ impl<'a> Parser<'a> {
             params,
             body,
             is_async: false,
-            is_generator: false,
+            is_generator,
             position: None,
         })
+    }
+
+    fn parse_async_function_expression(&mut self) -> Result<Expression, JsError> {
+        self.expect_keyword(Keyword::Async)?;
+
+        if self.check_keyword(Keyword::Function)? {
+            self.lexer.next_token()?;
+
+            // Check for async generator: async function *name() or async function *()
+            let is_generator = self.check_punctuator(Punctuator::Star)?;
+            if is_generator {
+                self.lexer.next_token()?;
+            }
+
+            let name = if let Token::Identifier(_, _) = self.lexer.peek_token()? {
+                Some(self.expect_identifier()?)
+            } else {
+                None
+            };
+            let params = self.parse_parameters()?;
+            let body = self.parse_function_body()?;
+
+            Ok(Expression::FunctionExpression {
+                name,
+                params,
+                body,
+                is_async: true,
+                is_generator,
+                position: None,
+            })
+        } else if self.check_punctuator(Punctuator::LParen)? {
+            // Async arrow function with parens: async (params) => body
+            let params = self.parse_parameters()?;
+            self.expect_punctuator(Punctuator::Arrow)?;
+            let body = self.parse_arrow_body()?;
+
+            Ok(Expression::ArrowFunctionExpression {
+                params,
+                body,
+                is_async: true,
+                position: None,
+            })
+        } else if let Token::Identifier(name, _) = self.lexer.peek_token()?.clone() {
+            // Async arrow function without parens: async x => body
+            self.lexer.next_token()?;
+            self.expect_punctuator(Punctuator::Arrow)?;
+            let body = self.parse_arrow_body()?;
+
+            Ok(Expression::ArrowFunctionExpression {
+                params: vec![Pattern::Identifier(name)],
+                body,
+                is_async: true,
+                position: None,
+            })
+        } else {
+            Err(syntax_error("Expected function or arrow function after async", None))
+        }
     }
 
     fn parse_parenthesized_or_arrow(&mut self) -> Result<Expression, JsError> {
@@ -1406,30 +1700,275 @@ impl<'a> Parser<'a> {
 
         while !self.check_punctuator(Punctuator::RBrace)? {
             if self.check_punctuator(Punctuator::Spread)? {
+                // Spread property: ...expr
                 self.lexer.next_token()?;
                 let expr = self.parse_assignment_expression()?;
                 properties.push(ObjectProperty::SpreadElement(expr));
-            } else {
-                let key = self.expect_identifier()?;
-                let (value, shorthand) = if self.check_punctuator(Punctuator::Colon)? {
-                    self.lexer.next_token()?;
-                    (self.parse_assignment_expression()?, false)
+            } else if self.check_punctuator(Punctuator::LBracket)? {
+                // Computed property: [expr]: value or [expr]() {}
+                self.lexer.next_token()?;
+                let key_expr = self.parse_assignment_expression()?;
+                self.expect_punctuator(Punctuator::RBracket)?;
+
+                if self.check_punctuator(Punctuator::LParen)? {
+                    // Computed method: [expr]() {}
+                    let params = self.parse_parameters()?;
+                    let body = self.parse_function_body()?;
+
+                    let func = Expression::FunctionExpression {
+                        name: None,
+                        params,
+                        body,
+                        is_async: false,
+                        is_generator: false,
+                        position: None,
+                    };
+
+                    properties.push(ObjectProperty::Property {
+                        key: PropertyKey::Computed(key_expr),
+                        value: func,
+                        shorthand: false,
+                        computed: true,
+                    });
                 } else {
-                    (
-                        Expression::Identifier {
-                            name: key.clone(),
-                            position: None,
-                        },
-                        true,
-                    )
+                    // Computed property: [expr]: value
+                    self.expect_punctuator(Punctuator::Colon)?;
+                    let value = self.parse_assignment_expression()?;
+
+                    properties.push(ObjectProperty::Property {
+                        key: PropertyKey::Computed(key_expr),
+                        value,
+                        shorthand: false,
+                        computed: true,
+                    });
+                }
+            } else if self.check_identifier("get")? {
+                // Getter: get prop() {}
+                self.lexer.next_token()?;
+                // Check if this is shorthand property named "get"
+                if self.check_punctuator(Punctuator::Colon)?
+                    || self.check_punctuator(Punctuator::Comma)?
+                    || self.check_punctuator(Punctuator::RBrace)?
+                {
+                    // Shorthand property: { get }
+                    if self.check_punctuator(Punctuator::Colon)? {
+                        self.lexer.next_token()?;
+                        let value = self.parse_assignment_expression()?;
+                        properties.push(ObjectProperty::Property {
+                            key: PropertyKey::Identifier("get".to_string()),
+                            value,
+                            shorthand: false,
+                            computed: false,
+                        });
+                    } else {
+                        properties.push(ObjectProperty::Property {
+                            key: PropertyKey::Identifier("get".to_string()),
+                            value: Expression::Identifier {
+                                name: "get".to_string(),
+                                position: None,
+                            },
+                            shorthand: true,
+                            computed: false,
+                        });
+                    }
+                } else {
+                    // Getter method
+                    let key = self.expect_identifier()?;
+                    self.expect_punctuator(Punctuator::LParen)?;
+                    self.expect_punctuator(Punctuator::RParen)?;
+                    let body = self.parse_function_body()?;
+
+                    let func = Expression::FunctionExpression {
+                        name: Some(key.clone()),
+                        params: vec![],
+                        body,
+                        is_async: false,
+                        is_generator: false,
+                        position: None,
+                    };
+
+                    properties.push(ObjectProperty::Property {
+                        key: PropertyKey::Identifier(key),
+                        value: func,
+                        shorthand: false,
+                        computed: false,
+                    });
+                }
+            } else if self.check_identifier("set")? {
+                // Setter: set prop(value) {}
+                self.lexer.next_token()?;
+                // Check if this is shorthand property named "set"
+                if self.check_punctuator(Punctuator::Colon)?
+                    || self.check_punctuator(Punctuator::Comma)?
+                    || self.check_punctuator(Punctuator::RBrace)?
+                {
+                    // Shorthand property: { set }
+                    if self.check_punctuator(Punctuator::Colon)? {
+                        self.lexer.next_token()?;
+                        let value = self.parse_assignment_expression()?;
+                        properties.push(ObjectProperty::Property {
+                            key: PropertyKey::Identifier("set".to_string()),
+                            value,
+                            shorthand: false,
+                            computed: false,
+                        });
+                    } else {
+                        properties.push(ObjectProperty::Property {
+                            key: PropertyKey::Identifier("set".to_string()),
+                            value: Expression::Identifier {
+                                name: "set".to_string(),
+                                position: None,
+                            },
+                            shorthand: true,
+                            computed: false,
+                        });
+                    }
+                } else {
+                    // Setter method
+                    let key = self.expect_identifier()?;
+                    let params = self.parse_parameters()?;
+                    let body = self.parse_function_body()?;
+
+                    let func = Expression::FunctionExpression {
+                        name: Some(key.clone()),
+                        params,
+                        body,
+                        is_async: false,
+                        is_generator: false,
+                        position: None,
+                    };
+
+                    properties.push(ObjectProperty::Property {
+                        key: PropertyKey::Identifier(key),
+                        value: func,
+                        shorthand: false,
+                        computed: false,
+                    });
+                }
+            } else if self.check_keyword(Keyword::Async)? {
+                // Async method: async name() {} or async *name() {}
+                self.lexer.next_token()?;
+                // Check if this is shorthand property named "async"
+                if self.check_punctuator(Punctuator::Colon)?
+                    || self.check_punctuator(Punctuator::Comma)?
+                    || self.check_punctuator(Punctuator::RBrace)?
+                {
+                    if self.check_punctuator(Punctuator::Colon)? {
+                        self.lexer.next_token()?;
+                        let value = self.parse_assignment_expression()?;
+                        properties.push(ObjectProperty::Property {
+                            key: PropertyKey::Identifier("async".to_string()),
+                            value,
+                            shorthand: false,
+                            computed: false,
+                        });
+                    } else {
+                        properties.push(ObjectProperty::Property {
+                            key: PropertyKey::Identifier("async".to_string()),
+                            value: Expression::Identifier {
+                                name: "async".to_string(),
+                                position: None,
+                            },
+                            shorthand: true,
+                            computed: false,
+                        });
+                    }
+                } else {
+                    // Check for async generator: async *name() {}
+                    let is_generator = self.check_punctuator(Punctuator::Star)?;
+                    if is_generator {
+                        self.lexer.next_token()?;
+                    }
+
+                    let key = self.expect_identifier()?;
+                    let params = self.parse_parameters()?;
+                    let body = self.parse_function_body()?;
+
+                    let func = Expression::FunctionExpression {
+                        name: Some(key.clone()),
+                        params,
+                        body,
+                        is_async: true,
+                        is_generator,
+                        position: None,
+                    };
+
+                    properties.push(ObjectProperty::Property {
+                        key: PropertyKey::Identifier(key),
+                        value: func,
+                        shorthand: false,
+                        computed: false,
+                    });
+                }
+            } else if self.check_punctuator(Punctuator::Star)? {
+                // Generator method: *name() {}
+                self.lexer.next_token()?;
+                let key = self.expect_identifier()?;
+                let params = self.parse_parameters()?;
+                let body = self.parse_function_body()?;
+
+                let func = Expression::FunctionExpression {
+                    name: Some(key.clone()),
+                    params,
+                    body,
+                    is_async: false,
+                    is_generator: true,
+                    position: None,
                 };
 
                 properties.push(ObjectProperty::Property {
                     key: PropertyKey::Identifier(key),
-                    value,
-                    shorthand,
+                    value: func,
+                    shorthand: false,
                     computed: false,
                 });
+            } else {
+                // Regular property or method shorthand
+                let key = self.expect_identifier()?;
+
+                if self.check_punctuator(Punctuator::LParen)? {
+                    // Method shorthand: name() {}
+                    let params = self.parse_parameters()?;
+                    let body = self.parse_function_body()?;
+
+                    let func = Expression::FunctionExpression {
+                        name: Some(key.clone()),
+                        params,
+                        body,
+                        is_async: false,
+                        is_generator: false,
+                        position: None,
+                    };
+
+                    properties.push(ObjectProperty::Property {
+                        key: PropertyKey::Identifier(key),
+                        value: func,
+                        shorthand: false,
+                        computed: false,
+                    });
+                } else if self.check_punctuator(Punctuator::Colon)? {
+                    // Regular property: key: value
+                    self.lexer.next_token()?;
+                    let value = self.parse_assignment_expression()?;
+
+                    properties.push(ObjectProperty::Property {
+                        key: PropertyKey::Identifier(key),
+                        value,
+                        shorthand: false,
+                        computed: false,
+                    });
+                } else {
+                    // Shorthand property: { key }
+                    properties.push(ObjectProperty::Property {
+                        key: PropertyKey::Identifier(key.clone()),
+                        value: Expression::Identifier {
+                            name: key,
+                            position: None,
+                        },
+                        shorthand: true,
+                        computed: false,
+                    });
+                }
             }
 
             if !self.check_punctuator(Punctuator::Comma)? {
@@ -1457,7 +1996,7 @@ impl<'a> Parser<'a> {
     }
 
     fn check_identifier(&mut self, name: &str) -> Result<bool, JsError> {
-        Ok(matches!(self.lexer.peek_token()?, Token::Identifier(ref x) if x == name))
+        Ok(matches!(self.lexer.peek_token()?, Token::Identifier(ref x, _) if x == name))
     }
 
     fn expect_punctuator(&mut self, p: Punctuator) -> Result<(), JsError> {
@@ -1491,8 +2030,9 @@ impl<'a> Parser<'a> {
     fn expect_identifier(&mut self) -> Result<String, JsError> {
         self.update_position()?;
         let token = self.lexer.next_token()?;
-        if let Token::Identifier(name) = token {
+        if let Token::Identifier(name, _has_escapes) = token {
             // Validate the identifier is not a reserved word
+            // Per ES spec, even escaped reserved words are invalid as identifiers
             self.validate_identifier(&name)?;
             Ok(name)
         } else {
@@ -1518,7 +2058,7 @@ impl<'a> Parser<'a> {
     fn expect_identifier_or_keyword(&mut self) -> Result<String, JsError> {
         let token = self.lexer.next_token()?;
         match token {
-            Token::Identifier(name) => Ok(name),
+            Token::Identifier(name, _) => Ok(name),
             Token::Keyword(kw) => {
                 // Allow keywords to be used as property/method names
                 // Note: 'constructor' is now an identifier, not a keyword
@@ -1557,6 +2097,13 @@ impl<'a> Parser<'a> {
                     Keyword::Import => "import".to_string(),
                     Keyword::Export => "export".to_string(),
                     Keyword::Default => "default".to_string(),
+                    Keyword::Delete => "delete".to_string(),
+                    Keyword::With => "with".to_string(),
+                    Keyword::Switch => "switch".to_string(),
+                    Keyword::Case => "case".to_string(),
+                    Keyword::Do => "do".to_string(),
+                    Keyword::Debugger => "debugger".to_string(),
+                    Keyword::Static => "static".to_string(),
                 })
             }
             _ => Err(unexpected_token(
@@ -1618,6 +2165,8 @@ impl<'a> Parser<'a> {
             | "try" | "typeof" | "var" | "void" | "while"
             | "with" | "class" | "const" | "enum" | "export"
             | "extends" | "import" | "super"
+            // Literals that are also reserved words
+            | "null" | "true" | "false"
         )
     }
 
@@ -1841,5 +2390,26 @@ mod tests {
         let mut parser = Parser::new("if (true) { let x = 1; }");
         let result = parser.parse();
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_rest_parameter_with_array_pattern() {
+        let mut parser = Parser::new("function f(...[a, b]) {}");
+        let result = parser.parse();
+        assert!(result.is_ok(), "Parse error: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_rest_parameter_with_object_pattern() {
+        let mut parser = Parser::new("function f(...{x, y}) {}");
+        let result = parser.parse();
+        assert!(result.is_ok(), "Parse error: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_async_generator_method() {
+        let mut parser = Parser::new("let o = { async *f(p = 1, x) {} };");
+        let result = parser.parse();
+        assert!(result.is_ok(), "Parse error: {:?}", result.err());
     }
 }

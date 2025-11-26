@@ -74,6 +74,10 @@ pub enum Opcode {
     Typeof,
     /// void operator - evaluate expression, push undefined
     Void,
+    /// delete property from object (object on stack, property name as operand)
+    DeleteProperty(String),
+    /// delete global variable
+    DeleteGlobal(String),
 
     // Comparison operations
     /// Loose equality (==)
