@@ -39,6 +39,7 @@ fn integration_debug_output_workflow() {
 
     let cli = Cli {
         file: Some(file_path.to_str().unwrap().to_string()),
+        eval: None,
         repl: false,
         jit: true,
         print_bytecode: true,
@@ -102,6 +103,7 @@ fn integration_syntax_error_handling() {
 fn integration_cli_to_runtime_config() {
     let cli = Cli {
         file: Some("test.js".to_string()),
+        eval: None,
         repl: false,
         jit: false,
         print_bytecode: true,
@@ -147,6 +149,7 @@ fn integration_various_js_constructs() {
 fn integration_jit_setting_preserved() {
     let cli_jit_on = Cli {
         file: None,
+        eval: None,
         repl: false,
         jit: true,
         print_bytecode: false,
@@ -155,6 +158,7 @@ fn integration_jit_setting_preserved() {
 
     let cli_jit_off = Cli {
         file: None,
+        eval: None,
         repl: false,
         jit: false,
         print_bytecode: false,
