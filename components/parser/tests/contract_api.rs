@@ -341,3 +341,89 @@ fn test_private_method_access() {
     println!("Private member access: {:?}", result);
     assert!(result.is_ok(), "Failed: {:?}", result);
 }
+
+#[test]
+fn test_setter_with_underscore_param() {
+    let code = r#"({
+      set foo(_v) { }
+    })"#;
+    let result = parser::Parser::new(code).parse();
+    println!("Setter with underscore: {:?}", result);
+    assert!(result.is_ok(), "Failed: {:?}", result);
+}
+
+#[test]
+fn test_arguments_accessor() {
+    let code = r#"(function(a) {
+  let setCalls = 0;
+  Object.defineProperty(arguments, "0", {
+    set(_v) { setCalls += 1; },
+    enumerable: true,
+    configurable: true,
+  });
+})(0);"#;
+    let result = parser::Parser::new(code).parse();
+    println!("Arguments accessor: {:?}", result);
+    assert!(result.is_ok(), "Failed: {:?}", result);
+}
+
+#[test]
+fn test_iife() {
+    let code = "(function() { })()";;
+    let result = parser::Parser::new(code).parse();
+    println!("IIFE: {:?}", result);
+    assert!(result.is_ok(), "Failed: {:?}", result);
+}
+
+#[test]
+fn test_iife_with_args() {
+    let code = "(function(a) { return a; })(0);";
+    let result = parser::Parser::new(code).parse();
+    println!("IIFE with args: {:?}", result);
+    assert!(result.is_ok(), "Failed: {:?}", result);
+}
+
+#[test]
+fn test_let_in_function() {
+    let code = "(function(a) { let setCalls = 0; })(0);";
+    let result = parser::Parser::new(code).parse();
+    println!("Let in function: {:?}", result);
+    assert!(result.is_ok(), "Failed: {:?}", result);
+}
+
+#[test]
+fn test_object_define_property() {
+    let code = r#"Object.defineProperty(arguments, "0", {})"#;
+    let result = parser::Parser::new(code).parse();
+    println!("defineProperty: {:?}", result);
+    assert!(result.is_ok(), "Failed: {:?}", result);
+}
+
+#[test]
+fn test_setter_shorthand() {
+    let code = r#"({
+      set(_v) { }
+    })"#;
+    let result = parser::Parser::new(code).parse();
+    println!("Setter shorthand: {:?}", result);
+    assert!(result.is_ok(), "Failed: {:?}", result);
+}
+
+#[test]
+fn test_object_with_setter() {
+    let code = r#"({
+      set foo(_v) { },
+      enumerable: true,
+    })"#;
+    let result = parser::Parser::new(code).parse();
+    println!("Object with setter: {:?}", result);
+    assert!(result.is_ok(), "Failed: {:?}", result);
+}
+
+#[test]
+fn test_keyword_as_property_name() {
+    let code = "var obj = { break: 1, case: 2, if: 3 }";
+    let result = parser::Parser::new(code).parse();
+    println!("Keyword property name: {:?}", result);
+    assert!(result.is_ok(), "Failed: {:?}", result);
+}

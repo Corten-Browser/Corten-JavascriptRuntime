@@ -1909,14 +1909,14 @@ impl<'a> Parser<'a> {
                     });
                 }
             } else if self.check_identifier("get")? {
-                // Getter: get prop() {}
+                // Could be: get prop() {}, { get }, { get: value }, or { get() {} }
                 self.lexer.next_token()?;
-                // Check if this is shorthand property named "get"
+                // Check if this is shorthand property named "get" or method shorthand
                 if self.check_punctuator(Punctuator::Colon)?
                     || self.check_punctuator(Punctuator::Comma)?
                     || self.check_punctuator(Punctuator::RBrace)?
                 {
-                    // Shorthand property: { get }
+                    // Shorthand property: { get } or { get: value }
                     if self.check_punctuator(Punctuator::Colon)? {
                         self.lexer.next_token()?;
                         let value = self.parse_assignment_expression()?;
@@ -1937,8 +1937,28 @@ impl<'a> Parser<'a> {
                             computed: false,
                         });
                     }
+                } else if self.check_punctuator(Punctuator::LParen)? {
+                    // Method shorthand: { get() {} } - "get" is the method name
+                    let params = self.parse_parameters()?;
+                    let body = self.parse_function_body()?;
+
+                    let func = Expression::FunctionExpression {
+                        name: Some("get".to_string()),
+                        params,
+                        body,
+                        is_async: false,
+                        is_generator: false,
+                        position: None,
+                    };
+
+                    properties.push(ObjectProperty::Property {
+                        key: PropertyKey::Identifier("get".to_string()),
+                        value: func,
+                        shorthand: false,
+                        computed: false,
+                    });
                 } else {
-                    // Getter method
+                    // Getter accessor: get prop() {}
                     let key = self.expect_identifier()?;
                     self.expect_punctuator(Punctuator::LParen)?;
                     self.expect_punctuator(Punctuator::RParen)?;
@@ -1961,14 +1981,14 @@ impl<'a> Parser<'a> {
                     });
                 }
             } else if self.check_identifier("set")? {
-                // Setter: set prop(value) {}
+                // Could be: set prop(v) {}, { set }, { set: value }, or { set() {} }
                 self.lexer.next_token()?;
-                // Check if this is shorthand property named "set"
+                // Check if this is shorthand property named "set" or method shorthand
                 if self.check_punctuator(Punctuator::Colon)?
                     || self.check_punctuator(Punctuator::Comma)?
                     || self.check_punctuator(Punctuator::RBrace)?
                 {
-                    // Shorthand property: { set }
+                    // Shorthand property: { set } or { set: value }
                     if self.check_punctuator(Punctuator::Colon)? {
                         self.lexer.next_token()?;
                         let value = self.parse_assignment_expression()?;
@@ -1989,8 +2009,28 @@ impl<'a> Parser<'a> {
                             computed: false,
                         });
                     }
+                } else if self.check_punctuator(Punctuator::LParen)? {
+                    // Method shorthand: { set(v) {} } - "set" is the method name
+                    let params = self.parse_parameters()?;
+                    let body = self.parse_function_body()?;
+
+                    let func = Expression::FunctionExpression {
+                        name: Some("set".to_string()),
+                        params,
+                        body,
+                        is_async: false,
+                        is_generator: false,
+                        position: None,
+                    };
+
+                    properties.push(ObjectProperty::Property {
+                        key: PropertyKey::Identifier("set".to_string()),
+                        value: func,
+                        shorthand: false,
+                        computed: false,
+                    });
                 } else {
-                    // Setter method
+                    // Setter accessor: set prop(v) {}
                     let key = self.expect_identifier()?;
                     let params = self.parse_parameters()?;
                     let body = self.parse_function_body()?;
@@ -2090,7 +2130,8 @@ impl<'a> Parser<'a> {
                 });
             } else {
                 // Regular property or method shorthand
-                let key = self.expect_identifier()?;
+                // Use expect_property_name to allow keywords as property names
+                let key = self.expect_property_name()?;
 
                 if self.check_punctuator(Punctuator::LParen)? {
                     // Method shorthand: name() {}
@@ -2223,6 +2264,24 @@ impl<'a> Parser<'a> {
                 &format!("{:?}", token),
                 self.last_position.clone(),
             ))
+        }
+    }
+
+    /// Expect a property name (identifier or keyword) for object properties
+    /// In JS, reserved words can be used as property names without quotes
+    fn expect_property_name(&mut self) -> Result<String, JsError> {
+        self.update_position()?;
+        let token = self.lexer.next_token()?;
+        match token {
+            Token::Identifier(name, _) => Ok(name),
+            Token::Keyword(k) => Ok(keyword_to_string(k)),
+            Token::String(s) => Ok(s),
+            Token::Number(n) => Ok(n.to_string()),
+            _ => Err(unexpected_token(
+                "property name",
+                &format!("{:?}", token),
+                self.last_position.clone(),
+            )),
         }
     }
 
@@ -2420,6 +2479,52 @@ impl<'a> Parser<'a> {
 
         // Parse the statement normally
         self.parse_statement()
+    }
+}
+
+/// Convert a Keyword enum to its string representation
+fn keyword_to_string(k: Keyword) -> String {
+    match k {
+        Keyword::Let => "let".to_string(),
+        Keyword::Const => "const".to_string(),
+        Keyword::Var => "var".to_string(),
+        Keyword::Function => "function".to_string(),
+        Keyword::Return => "return".to_string(),
+        Keyword::If => "if".to_string(),
+        Keyword::Else => "else".to_string(),
+        Keyword::While => "while".to_string(),
+        Keyword::For => "for".to_string(),
+        Keyword::Break => "break".to_string(),
+        Keyword::Continue => "continue".to_string(),
+        Keyword::Class => "class".to_string(),
+        Keyword::Extends => "extends".to_string(),
+        Keyword::New => "new".to_string(),
+        Keyword::This => "this".to_string(),
+        Keyword::Super => "super".to_string(),
+        Keyword::Async => "async".to_string(),
+        Keyword::Await => "await".to_string(),
+        Keyword::True => "true".to_string(),
+        Keyword::False => "false".to_string(),
+        Keyword::Null => "null".to_string(),
+        Keyword::Typeof => "typeof".to_string(),
+        Keyword::Void => "void".to_string(),
+        Keyword::Instanceof => "instanceof".to_string(),
+        Keyword::In => "in".to_string(),
+        Keyword::Try => "try".to_string(),
+        Keyword::Catch => "catch".to_string(),
+        Keyword::Finally => "finally".to_string(),
+        Keyword::Throw => "throw".to_string(),
+        Keyword::Yield => "yield".to_string(),
+        Keyword::Import => "import".to_string(),
+        Keyword::Export => "export".to_string(),
+        Keyword::Default => "default".to_string(),
+        Keyword::Delete => "delete".to_string(),
+        Keyword::With => "with".to_string(),
+        Keyword::Switch => "switch".to_string(),
+        Keyword::Case => "case".to_string(),
+        Keyword::Do => "do".to_string(),
+        Keyword::Debugger => "debugger".to_string(),
+        Keyword::Static => "static".to_string(),
     }
 }
 
