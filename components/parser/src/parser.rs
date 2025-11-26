@@ -1021,6 +1021,38 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_expression_statement(&mut self) -> Result<Statement, JsError> {
+        // Check for labeled statement: identifier followed by colon
+        if let Token::Identifier(name, _) = self.lexer.peek_token()?.clone() {
+            // Save lexer state (same pattern as look_ahead_for_arrow in lexer)
+            let saved_position = self.lexer.position;
+            let saved_line = self.lexer.line;
+            let saved_column = self.lexer.column;
+            let saved_previous_line = self.lexer.previous_line;
+            let saved_line_term = self.lexer.line_terminator_before_token;
+            let saved_token = self.lexer.current_token.clone();
+
+            self.lexer.next_token()?; // consume identifier
+
+            if self.check_punctuator(Punctuator::Colon)? {
+                // This is a labeled statement
+                self.lexer.next_token()?; // consume ':'
+                let body = Box::new(self.parse_statement()?);
+                return Ok(Statement::LabeledStatement {
+                    label: name,
+                    body,
+                    position: None,
+                });
+            }
+
+            // Not a labeled statement, restore lexer state
+            self.lexer.position = saved_position;
+            self.lexer.line = saved_line;
+            self.lexer.column = saved_column;
+            self.lexer.previous_line = saved_previous_line;
+            self.lexer.line_terminator_before_token = saved_line_term;
+            self.lexer.current_token = saved_token;
+        }
+
         let expression = self.parse_expression()?;
         self.consume_semicolon()?;
 
@@ -1364,7 +1396,8 @@ impl<'a> Parser<'a> {
                         position: None,
                     }
                 } else {
-                    let name = self.expect_identifier()?;
+                    // Allow keywords as property names after dot
+                    let name = self.expect_property_name()?;
                     Expression::Identifier {
                         name,
                         position: None,
@@ -1387,7 +1420,8 @@ impl<'a> Parser<'a> {
                         position: None,
                     }
                 } else {
-                    let name = self.expect_identifier()?;
+                    // Allow keywords as property names after optional chain
+                    let name = self.expect_property_name()?;
                     Expression::Identifier {
                         name,
                         position: None,
@@ -1479,7 +1513,8 @@ impl<'a> Parser<'a> {
                         position: None,
                     }
                 } else {
-                    let name = self.expect_identifier()?;
+                    // Allow keywords as property names after dot
+                    let name = self.expect_property_name()?;
                     Expression::Identifier {
                         name,
                         position: None,
@@ -1959,7 +1994,8 @@ impl<'a> Parser<'a> {
                     });
                 } else {
                     // Getter accessor: get prop() {}
-                    let key = self.expect_identifier()?;
+                    // Allow keywords as accessor property names
+                    let key = self.expect_property_name()?;
                     self.expect_punctuator(Punctuator::LParen)?;
                     self.expect_punctuator(Punctuator::RParen)?;
                     let body = self.parse_function_body()?;
@@ -2031,7 +2067,8 @@ impl<'a> Parser<'a> {
                     });
                 } else {
                     // Setter accessor: set prop(v) {}
-                    let key = self.expect_identifier()?;
+                    // Allow keywords as accessor property names
+                    let key = self.expect_property_name()?;
                     let params = self.parse_parameters()?;
                     let body = self.parse_function_body()?;
 

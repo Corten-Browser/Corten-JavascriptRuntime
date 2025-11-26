@@ -226,7 +226,7 @@ pub struct Lexer<'a> {
     /// Used for Automatic Semicolon Insertion (ASI)
     pub line_terminator_before_token: bool,
     /// Previous line number (used to detect line changes)
-    previous_line: u32,
+    pub previous_line: u32,
 }
 
 impl<'a> Lexer<'a> {
