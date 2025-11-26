@@ -1367,7 +1367,7 @@ impl Dispatcher {
             "Array.of" => {
                 // Create array from arguments
                 if let Some(ref heap) = self.heap {
-                    let gc_object = heap.create_object();
+                    let mut gc_object = heap.create_object();
 
                     // Store all arguments as array elements
                     for (i, arg) in args.iter().enumerate() {
@@ -1377,9 +1377,11 @@ impl Dispatcher {
                     // Set length property
                     gc_object.set("length".to_string(), Value::Smi(args.len() as i32));
 
-                    // Get object ID and return as HeapObject
-                    let obj_id = heap.allocate(gc_object);
-                    Ok(Value::HeapObject(obj_id))
+                    // Wrap and return as NativeObject
+                    let boxed: Box<dyn Any> = Box::new(gc_object);
+                    Ok(Value::NativeObject(
+                        Rc::new(RefCell::new(boxed)) as Rc<RefCell<dyn Any>>
+                    ))
                 } else {
                     Ok(Value::Undefined)
                 }
@@ -1389,24 +1391,30 @@ impl Dispatcher {
                 // Basic implementation: handle arrays and strings
                 if let Some(array_like) = args.first() {
                     if let Some(ref heap) = self.heap {
-                        let gc_object = heap.create_object();
+                        let mut gc_object = heap.create_object();
                         let mut elements = Vec::new();
 
                         match array_like {
-                            Value::HeapObject(obj_id) => {
-                                // Try to get length property
-                                let source_obj = heap.get_object(*obj_id);
-                                if let Value::Smi(len) = source_obj.get("length") {
-                                    // It's an array-like object
-                                    for i in 0..len {
-                                        let elem = source_obj.get(i.to_string());
-                                        elements.push(elem);
+                            Value::NativeObject(obj_ref) => {
+                                // Try to get length property from NativeObject
+                                let borrowed = obj_ref.borrow();
+                                if let Some(gc_obj) = borrowed.downcast_ref::<Box<dyn Any>>() {
+                                    if let Some(source_obj) = gc_obj.downcast_ref::<GCObject>() {
+                                        if let Value::Smi(len) = source_obj.get("length") {
+                                            // It's an array-like object
+                                            for i in 0..len {
+                                                let elem = source_obj.get(&i.to_string());
+                                                elements.push(elem);
+                                            }
+                                        }
                                     }
                                 }
                             }
-                            Value::HeapObject(_) => {
-                                // Handle string as HeapObject if applicable
-                                // For now, just create empty array
+                            Value::String(s) => {
+                                // Convert string to array of characters
+                                for (i, ch) in s.chars().enumerate() {
+                                    elements.push(Value::String(ch.to_string()));
+                                }
                             }
                             _ => {
                                 // For other types, create empty array
@@ -1420,8 +1428,11 @@ impl Dispatcher {
 
                         gc_object.set("length".to_string(), Value::Smi(elements.len() as i32));
 
-                        let obj_id = heap.allocate(gc_object);
-                        Ok(Value::HeapObject(obj_id))
+                        // Wrap and return as NativeObject
+                        let boxed: Box<dyn Any> = Box::new(gc_object);
+                        Ok(Value::NativeObject(
+                            Rc::new(RefCell::new(boxed)) as Rc<RefCell<dyn Any>>
+                        ))
                     } else {
                         Ok(Value::Undefined)
                     }
@@ -1443,20 +1454,44 @@ impl Dispatcher {
                                     
                                     // Create an array with the keys
                                     if let Some(ref heap) = self.heap {
-                                        let result_obj = heap.create_object();
+                                        let mut result_obj = heap.create_object();
                                         for (i, key) in keys.iter().enumerate() {
                                             result_obj.set(i.to_string(), Value::String(key.clone()));
                                         }
                                         result_obj.set("length".to_string(), Value::Smi(keys.len() as i32));
                                         
-                                        let obj_id = heap.allocate(result_obj);
-                                        return Ok(Value::HeapObject(obj_id));
+                                        let boxed: Box<dyn Any> = Box::new(result_obj);
+                                        return Ok(Value::NativeObject(
+                                            Rc::new(RefCell::new(boxed)) as Rc<RefCell<dyn Any>>
+                                        ));
                                     }
                                 }
                             }
-                            Ok(Value::HeapObject(0)) // Empty array fallback
+                            // Empty array fallback
+                            if let Some(ref heap) = self.heap {
+                                let mut empty = heap.create_object();
+                                empty.set("length".to_string(), Value::Smi(0));
+                                let boxed: Box<dyn Any> = Box::new(empty);
+                                Ok(Value::NativeObject(
+                                    Rc::new(RefCell::new(boxed)) as Rc<RefCell<dyn Any>>
+                                ))
+                            } else {
+                                Ok(Value::Undefined)
+                            }
                         }
-                        _ => Ok(Value::HeapObject(0)) // Empty array for non-objects
+                        _ => {
+                            // Empty array for non-objects
+                            if let Some(ref heap) = self.heap {
+                                let mut empty = heap.create_object();
+                                empty.set("length".to_string(), Value::Smi(0));
+                                let boxed: Box<dyn Any> = Box::new(empty);
+                                Ok(Value::NativeObject(
+                                    Rc::new(RefCell::new(boxed)) as Rc<RefCell<dyn Any>>
+                                ))
+                            } else {
+                                Ok(Value::Undefined)
+                            }
+                        }
                     }
                 } else {
                     Err(JsError {
@@ -1483,20 +1518,44 @@ impl Dispatcher {
                                     
                                     // Create an array with the values
                                     if let Some(ref heap) = self.heap {
-                                        let result_obj = heap.create_object();
+                                        let mut result_obj = heap.create_object();
                                         for (i, val) in values.iter().enumerate() {
                                             result_obj.set(i.to_string(), val.clone());
                                         }
                                         result_obj.set("length".to_string(), Value::Smi(values.len() as i32));
                                         
-                                        let obj_id = heap.allocate(result_obj);
-                                        return Ok(Value::HeapObject(obj_id));
+                                        let boxed: Box<dyn Any> = Box::new(result_obj);
+                                        return Ok(Value::NativeObject(
+                                            Rc::new(RefCell::new(boxed)) as Rc<RefCell<dyn Any>>
+                                        ));
                                     }
                                 }
                             }
-                            Ok(Value::HeapObject(0)) // Empty array fallback
+                            // Empty array fallback
+                            if let Some(ref heap) = self.heap {
+                                let mut empty = heap.create_object();
+                                empty.set("length".to_string(), Value::Smi(0));
+                                let boxed: Box<dyn Any> = Box::new(empty);
+                                Ok(Value::NativeObject(
+                                    Rc::new(RefCell::new(boxed)) as Rc<RefCell<dyn Any>>
+                                ))
+                            } else {
+                                Ok(Value::Undefined)
+                            }
                         }
-                        _ => Ok(Value::HeapObject(0)) // Empty array for non-objects
+                        _ => {
+                            // Empty array for non-objects
+                            if let Some(ref heap) = self.heap {
+                                let mut empty = heap.create_object();
+                                empty.set("length".to_string(), Value::Smi(0));
+                                let boxed: Box<dyn Any> = Box::new(empty);
+                                Ok(Value::NativeObject(
+                                    Rc::new(RefCell::new(boxed)) as Rc<RefCell<dyn Any>>
+                                ))
+                            } else {
+                                Ok(Value::Undefined)
+                            }
+                        }
                     }
                 } else {
                     Err(JsError {
@@ -1523,27 +1582,54 @@ impl Dispatcher {
                                     
                                     // Create an array with [key, value] pairs
                                     if let Some(ref heap) = self.heap {
-                                        let result_obj = heap.create_object();
+                                        let mut result_obj = heap.create_object();
                                         for (i, (key, val)) in entries.iter().enumerate() {
                                             // Create inner array for [key, value]
-                                            let pair_obj = heap.create_object();
+                                            let mut pair_obj = heap.create_object();
                                             pair_obj.set("0".to_string(), Value::String(key.clone()));
                                             pair_obj.set("1".to_string(), val.clone());
                                             pair_obj.set("length".to_string(), Value::Smi(2));
                                             
-                                            let pair_id = heap.allocate(pair_obj);
-                                            result_obj.set(i.to_string(), Value::HeapObject(pair_id));
+                                            let pair_boxed: Box<dyn Any> = Box::new(pair_obj);
+                                            let pair_value = Value::NativeObject(
+                                                Rc::new(RefCell::new(pair_boxed)) as Rc<RefCell<dyn Any>>
+                                            );
+                                            result_obj.set(i.to_string(), pair_value);
                                         }
                                         result_obj.set("length".to_string(), Value::Smi(entries.len() as i32));
                                         
-                                        let obj_id = heap.allocate(result_obj);
-                                        return Ok(Value::HeapObject(obj_id));
+                                        let boxed: Box<dyn Any> = Box::new(result_obj);
+                                        return Ok(Value::NativeObject(
+                                            Rc::new(RefCell::new(boxed)) as Rc<RefCell<dyn Any>>
+                                        ));
                                     }
                                 }
                             }
-                            Ok(Value::HeapObject(0)) // Empty array fallback
+                            // Empty array fallback
+                            if let Some(ref heap) = self.heap {
+                                let mut empty = heap.create_object();
+                                empty.set("length".to_string(), Value::Smi(0));
+                                let boxed: Box<dyn Any> = Box::new(empty);
+                                Ok(Value::NativeObject(
+                                    Rc::new(RefCell::new(boxed)) as Rc<RefCell<dyn Any>>
+                                ))
+                            } else {
+                                Ok(Value::Undefined)
+                            }
                         }
-                        _ => Ok(Value::HeapObject(0)) // Empty array for non-objects
+                        _ => {
+                            // Empty array for non-objects
+                            if let Some(ref heap) = self.heap {
+                                let mut empty = heap.create_object();
+                                empty.set("length".to_string(), Value::Smi(0));
+                                let boxed: Box<dyn Any> = Box::new(empty);
+                                Ok(Value::NativeObject(
+                                    Rc::new(RefCell::new(boxed)) as Rc<RefCell<dyn Any>>
+                                ))
+                            } else {
+                                Ok(Value::Undefined)
+                            }
+                        }
                     }
                 } else {
                     Err(JsError {
