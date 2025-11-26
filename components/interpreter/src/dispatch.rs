@@ -4,7 +4,7 @@
 
 use async_runtime::PromiseState;
 use bytecode_system::{BytecodeChunk, Opcode, UpvalueDescriptor};
-use builtins::{ConsoleObject, JSONObject, JsValue as BuiltinValue, MathObject};
+use builtins::{ConsoleObject, JSONObject, JsValue as BuiltinValue, MathObject, NumberObject};
 use core_types::{ErrorKind, JsError, Value};
 use std::any::Any;
 use std::cell::RefCell;
@@ -132,6 +132,35 @@ impl Dispatcher {
         globals.insert(
             "EvalError".to_string(),
             Value::NativeFunction("EvalError".to_string()),
+        );
+
+        // Inject Number constructor
+        globals.insert(
+            "Number".to_string(),
+            Value::NativeFunction("Number".to_string()),
+        );
+
+        // Inject global constants
+        globals.insert("NaN".to_string(), Value::Double(f64::NAN));
+        globals.insert("Infinity".to_string(), Value::Double(f64::INFINITY));
+        globals.insert("undefined".to_string(), Value::Undefined);
+
+        // Inject global functions
+        globals.insert(
+            "isNaN".to_string(),
+            Value::NativeFunction("isNaN".to_string()),
+        );
+        globals.insert(
+            "isFinite".to_string(),
+            Value::NativeFunction("isFinite".to_string()),
+        );
+        globals.insert(
+            "parseInt".to_string(),
+            Value::NativeFunction("parseInt".to_string()),
+        );
+        globals.insert(
+            "parseFloat".to_string(),
+            Value::NativeFunction("parseFloat".to_string()),
         );
 
         Self {
@@ -624,6 +653,25 @@ impl Dispatcher {
                                             self.stack.push(Value::Undefined);
                                         }
                                     }
+                                    _ => self.stack.push(Value::Undefined),
+                                }
+                            } else if fn_name == "Number" {
+                                // Handle Number constructor properties
+                                match name.as_str() {
+                                    "NaN" => self.stack.push(Value::Double(NumberObject::NAN)),
+                                    "POSITIVE_INFINITY" => self.stack.push(Value::Double(NumberObject::POSITIVE_INFINITY)),
+                                    "NEGATIVE_INFINITY" => self.stack.push(Value::Double(NumberObject::NEGATIVE_INFINITY)),
+                                    "MAX_VALUE" => self.stack.push(Value::Double(NumberObject::MAX_VALUE)),
+                                    "MIN_VALUE" => self.stack.push(Value::Double(NumberObject::MIN_VALUE)),
+                                    "MAX_SAFE_INTEGER" => self.stack.push(Value::Double(NumberObject::MAX_SAFE_INTEGER)),
+                                    "MIN_SAFE_INTEGER" => self.stack.push(Value::Double(NumberObject::MIN_SAFE_INTEGER)),
+                                    "EPSILON" => self.stack.push(Value::Double(NumberObject::EPSILON)),
+                                    "isNaN" => self.stack.push(Value::NativeFunction("Number.isNaN".to_string())),
+                                    "isFinite" => self.stack.push(Value::NativeFunction("Number.isFinite".to_string())),
+                                    "isInteger" => self.stack.push(Value::NativeFunction("Number.isInteger".to_string())),
+                                    "isSafeInteger" => self.stack.push(Value::NativeFunction("Number.isSafeInteger".to_string())),
+                                    "parseInt" => self.stack.push(Value::NativeFunction("Number.parseInt".to_string())),
+                                    "parseFloat" => self.stack.push(Value::NativeFunction("Number.parseFloat".to_string())),
                                     _ => self.stack.push(Value::Undefined),
                                 }
                             } else {
@@ -1188,6 +1236,77 @@ impl Dispatcher {
                     stack: vec![],
                     source_position: None,
                 })
+            }
+            // Global functions
+            "isNaN" => {
+                let n = args.first().map(|v| self.to_number(v)).unwrap_or(f64::NAN);
+                Ok(Value::Boolean(n.is_nan()))
+            }
+            "isFinite" => {
+                let n = args.first().map(|v| self.to_number(v)).unwrap_or(f64::NAN);
+                Ok(Value::Boolean(n.is_finite()))
+            }
+            "parseInt" => {
+                let s = args.first().map(|v| self.to_string_value(v)).unwrap_or_default();
+                let radix = args.get(1).map(|v| self.to_number(v) as u32);
+                Ok(Value::Double(NumberObject::parse_int(&s, radix)))
+            }
+            "parseFloat" => {
+                let s = args.first().map(|v| self.to_string_value(v)).unwrap_or_default();
+                Ok(Value::Double(NumberObject::parse_float(&s)))
+            }
+            // Number constructor and methods
+            "Number" => {
+                // Number() type conversion
+                let n = args.first().map(|v| self.to_number(v)).unwrap_or(0.0);
+                Ok(Value::Double(n))
+            }
+            "Number.isNaN" => {
+                // Number.isNaN - strict check, doesn't coerce
+                if let Some(Value::Double(n)) = args.first() {
+                    Ok(Value::Boolean(n.is_nan()))
+                } else if let Some(Value::Smi(_)) = args.first() {
+                    Ok(Value::Boolean(false)) // SMIs are never NaN
+                } else {
+                    Ok(Value::Boolean(false)) // non-numbers return false
+                }
+            }
+            "Number.isFinite" => {
+                // Number.isFinite - strict check, doesn't coerce
+                if let Some(Value::Double(n)) = args.first() {
+                    Ok(Value::Boolean(n.is_finite()))
+                } else if let Some(Value::Smi(_)) = args.first() {
+                    Ok(Value::Boolean(true)) // SMIs are always finite
+                } else {
+                    Ok(Value::Boolean(false)) // non-numbers return false
+                }
+            }
+            "Number.isInteger" => {
+                if let Some(Value::Double(n)) = args.first() {
+                    Ok(Value::Boolean(NumberObject::is_integer(*n)))
+                } else if let Some(Value::Smi(_)) = args.first() {
+                    Ok(Value::Boolean(true)) // SMIs are always integers
+                } else {
+                    Ok(Value::Boolean(false))
+                }
+            }
+            "Number.isSafeInteger" => {
+                if let Some(Value::Double(n)) = args.first() {
+                    Ok(Value::Boolean(NumberObject::is_safe_integer(*n)))
+                } else if let Some(Value::Smi(_)) = args.first() {
+                    Ok(Value::Boolean(true)) // SMIs are always safe integers
+                } else {
+                    Ok(Value::Boolean(false))
+                }
+            }
+            "Number.parseInt" => {
+                let s = args.first().map(|v| self.to_string_value(v)).unwrap_or_default();
+                let radix = args.get(1).map(|v| self.to_number(v) as u32);
+                Ok(Value::Double(NumberObject::parse_int(&s, radix)))
+            }
+            "Number.parseFloat" => {
+                let s = args.first().map(|v| self.to_string_value(v)).unwrap_or_default();
+                Ok(Value::Double(NumberObject::parse_float(&s)))
             }
             // Error constructors
             "Error" => self.create_error_object("Error", args),

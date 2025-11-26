@@ -82,7 +82,7 @@ pub use iterator::{
 };
 pub use json::JSONObject;
 pub use math::MathObject;
-pub use number::NumberPrototype;
+pub use number::{NumberObject, NumberPrototype, global_is_nan, global_is_finite};
 pub use object::ObjectPrototype;
 pub use proxy::{ProxyHandler, ProxyObject};
 pub use reflect::ReflectObject;
