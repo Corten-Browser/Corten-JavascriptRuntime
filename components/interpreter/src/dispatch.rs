@@ -146,6 +146,24 @@ impl Dispatcher {
             Value::NativeFunction("Object".to_string()),
         );
 
+        // Inject String constructor
+        globals.insert(
+            "String".to_string(),
+            Value::NativeFunction("String".to_string()),
+        );
+
+        // Inject Boolean constructor
+        globals.insert(
+            "Boolean".to_string(),
+            Value::NativeFunction("Boolean".to_string()),
+        );
+
+        // Inject Array constructor
+        globals.insert(
+            "Array".to_string(),
+            Value::NativeFunction("Array".to_string()),
+        );
+
         // Inject global constants
         globals.insert("NaN".to_string(), Value::Double(f64::NAN));
         globals.insert("Infinity".to_string(), Value::Double(f64::INFINITY));
@@ -1296,6 +1314,58 @@ impl Dispatcher {
                 // Number() type conversion
                 let n = args.first().map(|v| self.to_number(v)).unwrap_or(0.0);
                 Ok(Value::Double(n))
+            }
+            // String constructor
+            "String" => {
+                // String() type conversion
+                let s = args.first().map(|v| self.to_string_value(v)).unwrap_or_default();
+                // Create a String object wrapper (for `new String()`)
+                // For now, we return a string primitive which works for most cases
+                Ok(Value::String(s.into()))
+            }
+            // Boolean constructor
+            "Boolean" => {
+                // Boolean() type conversion
+                let b = args.first().map(|v| self.to_boolean(v)).unwrap_or(false);
+                Ok(Value::Boolean(b))
+            }
+            // Array constructor
+            "Array" => {
+                // Array() constructor
+                // Create an array using the heap if available
+                if let Some(ref heap) = self.heap {
+                    let mut arr_obj = heap.create_object();
+                    if args.is_empty() {
+                        // Empty array - just set length
+                        arr_obj.set("length".to_string(), Value::Smi(0));
+                    } else if args.len() == 1 {
+                        // Single argument - if number, create array with that length
+                        match args.first() {
+                            Some(Value::Double(n)) => {
+                                arr_obj.set("length".to_string(), Value::Smi(*n as i32));
+                            }
+                            Some(Value::Smi(n)) => {
+                                arr_obj.set("length".to_string(), Value::Smi(*n));
+                            }
+                            _ => {
+                                // Single non-number argument - create array with that element
+                                arr_obj.set("0".to_string(), args[0].clone());
+                                arr_obj.set("length".to_string(), Value::Smi(1));
+                            }
+                        }
+                    } else {
+                        // Multiple arguments - create array with those elements
+                        for (i, arg) in args.iter().enumerate() {
+                            arr_obj.set(i.to_string(), arg.clone());
+                        }
+                        arr_obj.set("length".to_string(), Value::Smi(args.len() as i32));
+                    }
+                    let boxed: Box<dyn Any> = Box::new(arr_obj);
+                    Ok(Value::NativeObject(Rc::new(RefCell::new(boxed)) as Rc<RefCell<dyn Any>>))
+                } else {
+                    // Fallback when heap not available - return empty array-like object
+                    Ok(Value::NativeObject(Rc::new(RefCell::new(Vec::<Value>::new())) as Rc<RefCell<dyn Any>>))
+                }
             }
             "Number.isNaN" => {
                 // Number.isNaN - strict check, doesn't coerce
@@ -3213,19 +3283,70 @@ impl Dispatcher {
         }
     }
 
+    fn to_boolean(&self, value: &Value) -> bool {
+        match value {
+            Value::Boolean(b) => *b,
+            Value::Smi(n) => *n != 0,
+            Value::Double(n) => !n.is_nan() && *n != 0.0,
+            Value::String(s) => !s.is_empty(),
+            Value::Undefined => false,
+            Value::Null => false,
+            Value::HeapObject(_) => true,
+            Value::NativeObject(_) => true,
+            Value::NativeFunction(_) => true,
+        }
+    }
+
     // Comparison operations
 
     fn equal(&self, a: Value, b: Value) -> Value {
         // Loose equality - performs type coercion
         let result = match (&a, &b) {
+            // Same type comparisons
             (Value::Smi(x), Value::Smi(y)) => x == y,
-            (Value::Double(x), Value::Double(y)) => x == y,
-            (Value::Smi(x), Value::Double(y)) => (*x as f64) == *y,
-            (Value::Double(x), Value::Smi(y)) => *x == (*y as f64),
+            (Value::Double(x), Value::Double(y)) => {
+                // NaN != NaN
+                if x.is_nan() && y.is_nan() {
+                    false
+                } else {
+                    x == y
+                }
+            }
+            (Value::String(x), Value::String(y)) => x == y,
             (Value::Boolean(x), Value::Boolean(y)) => x == y,
             (Value::Undefined, Value::Undefined) => true,
             (Value::Null, Value::Null) => true,
+            // null == undefined
             (Value::Undefined, Value::Null) | (Value::Null, Value::Undefined) => true,
+            // Number type coercion
+            (Value::Smi(x), Value::Double(y)) => (*x as f64) == *y,
+            (Value::Double(x), Value::Smi(y)) => *x == (*y as f64),
+            // String to number coercion
+            (Value::String(s), Value::Smi(n)) | (Value::Smi(n), Value::String(s)) => {
+                if let Ok(parsed) = s.parse::<i32>() {
+                    parsed == *n
+                } else if let Ok(parsed) = s.parse::<f64>() {
+                    parsed == (*n as f64)
+                } else {
+                    false
+                }
+            }
+            (Value::String(s), Value::Double(n)) | (Value::Double(n), Value::String(s)) => {
+                if let Ok(parsed) = s.parse::<f64>() {
+                    parsed == *n || (parsed.is_nan() && n.is_nan())
+                } else {
+                    n.is_nan() // unparseable string becomes NaN
+                }
+            }
+            // Boolean to number coercion
+            (Value::Boolean(b), Value::Smi(n)) | (Value::Smi(n), Value::Boolean(b)) => {
+                let bool_val = if *b { 1 } else { 0 };
+                bool_val == *n
+            }
+            (Value::Boolean(b), Value::Double(n)) | (Value::Double(n), Value::Boolean(b)) => {
+                let bool_val = if *b { 1.0 } else { 0.0 };
+                bool_val == *n
+            }
             _ => false,
         };
         Value::Boolean(result)

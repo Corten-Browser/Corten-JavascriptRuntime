@@ -7,6 +7,6 @@ pub mod harness;
 pub mod report;
 pub mod test_file;
 
-pub use harness::{Test262Harness, TestResult};
+pub use harness::{Test262Harness, TestResult, HARNESS_PRELUDE};
 pub use report::TestReport;
 pub use test_file::{NegativeExpectation, TestFile, TestMetadata};

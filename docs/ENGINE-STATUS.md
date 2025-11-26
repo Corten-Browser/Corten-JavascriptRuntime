@@ -18,11 +18,13 @@
 
 | Category | Passed | Total | Pass Rate |
 |----------|--------|-------|-----------|
-| Expressions | 167 | 200 | **83.5%** |
-| Statements | 54 | 200 | **27.0%** |
-| Built-ins (Array) | 0 | 200 | 0% |
+| Expressions (addition) | 14 | 48 | **29.2%** |
+| Expressions (equals) | 9 | 47 | **19.1%** |
+| Statements | 42 | 200 | **21.0%** |
 
-**Note**: Test262 tests run in execute mode (parse + bytecode + VM execution)
+**Note**: Test262 tests run in execute mode (parse + bytecode + VM execution) with full harness prelude (Test262Error, assert, $262).
+
+**Known parser gaps**: Many test failures are due to parser not supporting newer syntax (prefix-decrement in some contexts, `using` declarations, `for-await-of`), rather than runtime issues.
 
 ## Working Features (Verified via Tests)
 
@@ -40,8 +42,11 @@
 - JSON (parse, stringify)
 - Console (log, error, warn)
 - Array prototype methods (map, filter, reduce, etc.)
-- String prototype methods
-- Number methods
+- String prototype methods and constructor
+- Number constructor and static methods (isNaN, isFinite, isInteger, parseInt, parseFloat)
+- Boolean constructor
+- Object constructor and static methods (keys, values, entries, assign)
+- Error constructors (Error, TypeError, ReferenceError, SyntaxError, RangeError, EvalError)
 
 ## Architecture
 
@@ -102,10 +107,13 @@ The Corten interpreter provides predictable performance without warmup time.
 
 1. ~~Run Test262 suite to establish ES2024 compliance baseline~~ ✅ **Done**
 2. ~~Create benchmarking infrastructure~~ ✅ **Done**
-3. Improve built-in object coverage (Array.of, Array.isArray, etc.)
-4. Improve statement compliance (strict mode enforcement)
-5. Integrate JIT compiler with execution pipeline
-6. Complete async/await runtime
+3. ~~Add built-in constructors (String, Boolean, Array, Number, Object)~~ ✅ **Done**
+4. ~~Fix string equality comparison~~ ✅ **Done**
+5. ~~Fix Test262 harness injection~~ ✅ **Done**
+6. Fix parser for prefix-decrement and newer syntax
+7. Improve statement compliance (strict mode enforcement)
+8. Integrate JIT compiler with execution pipeline
+9. Complete async/await runtime
 
 ---
 

@@ -8,6 +8,7 @@ use std::env;
 use std::fs;
 use std::path::Path;
 use std::time::Instant;
+use test262_harness::HARNESS_PRELUDE;
 use walkdir::WalkDir;
 
 /// Test result statistics
@@ -291,6 +292,12 @@ fn run_single_test(path: &Path, execute: bool) -> TestResult {
 
                 // Execute
                 let mut vm = VM::new();
+
+                // Set up harness prelude (Test262Error, assert, $262, etc.)
+                if let Err(e) = setup_harness_prelude(&mut vm) {
+                    return TestResult::Fail(format!("Harness setup error: {:?}", e));
+                }
+
                 let nested = generator.take_nested_functions();
                 for func in nested {
                     vm.register_function(func);
@@ -325,4 +332,31 @@ fn extract_error_type(msg: &str) -> String {
     } else {
         "Other".to_string()
     }
+}
+
+/// Set up the test262 harness prelude in the VM
+/// This creates the $262 object and assert functions in the global scope
+fn setup_harness_prelude(vm: &mut VM) -> Result<(), String> {
+    // Parse the harness prelude
+    let ast = parser::Parser::new(HARNESS_PRELUDE)
+        .parse()
+        .map_err(|e| format!("Failed to parse harness prelude: {:?}", e))?;
+
+    // Generate bytecode
+    let mut generator = parser::BytecodeGenerator::new();
+    let bytecode = generator
+        .generate(&ast)
+        .map_err(|e| format!("Failed to generate bytecode for harness prelude: {:?}", e))?;
+
+    // Register any nested functions from the prelude
+    let nested_functions = generator.take_nested_functions();
+    for func_bytecode in nested_functions {
+        vm.register_function(func_bytecode);
+    }
+
+    // Execute the prelude to set up global functions
+    vm.execute(&bytecode)
+        .map_err(|e| format!("Failed to execute harness prelude: {:?}", e))?;
+
+    Ok(())
 }
