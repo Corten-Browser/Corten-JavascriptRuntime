@@ -139,6 +139,33 @@ math-fibonacci                             604.75 ms  ✓ PASS
 
 This is **normal and expected** for interpreter-only execution. The goal is correctness first, then optimization.
 
+## Actual V8 Comparison (Measured)
+
+Benchmarks run on the same machine with Node.js 22.21.1 (V8 engine):
+
+### SunSpider Comparison
+
+| Benchmark | Corten (ms) | Node.js/V8 (ms) | Ratio |
+|-----------|------------|-----------------|-------|
+| math-fibonacci | 604.92 | 25.39 | **23.8x slower** |
+| 3d-cube | 248.27 | 7.65 | **32.4x slower** |
+| access-binary-trees | 18.92 | 0.83 | **22.8x slower** |
+
+**Average slowdown: ~26x compared to V8**
+
+### Analysis
+
+The measured 23-32x slowdown falls within the expected 10-100x range for interpreter-only execution vs. JIT-compiled code. Key factors:
+
+1. **V8's JIT Advantages**: TurboFan (V8's optimizing compiler) can inline functions, eliminate type checks, and generate optimized machine code
+2. **Hot Path Optimization**: V8 identifies and heavily optimizes frequently executed code paths
+3. **Type Specialization**: V8 specializes operations for observed types (e.g., integer arithmetic)
+
+The Corten interpreter executes every operation through bytecode dispatch, which adds overhead but provides:
+- **Predictable performance** (no warmup time)
+- **Lower memory usage** (no compiled code cache)
+- **Simpler debugging** (direct source mapping)
+
 ## Future Improvements
 
 Potential optimization opportunities:
