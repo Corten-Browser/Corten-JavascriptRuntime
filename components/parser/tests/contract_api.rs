@@ -529,3 +529,11 @@ fn test_continue_with_label() {
     println!("Continue with label: {:?}", result);
     assert!(result.is_ok(), "Continue with label failed: {:?}", result);
 }
+
+#[test]
+fn test_shift_operators() {
+    let code = "var x = 1 << 2; var y = 8 >> 1; var z = -1 >>> 0;";
+    let result = parser::Parser::new(code).parse();
+    println!("Shift operators: {:?}", result);
+    assert!(result.is_ok(), "Shift operators failed: {:?}", result);
+}

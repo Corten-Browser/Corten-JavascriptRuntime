@@ -1304,7 +1304,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_relational_expression(&mut self) -> Result<Expression, JsError> {
-        let mut left = self.parse_additive_expression()?;
+        let mut left = self.parse_shift_expression()?;
 
         loop {
             let op = match self.lexer.peek_token()? {
@@ -1314,6 +1314,29 @@ impl<'a> Parser<'a> {
                 Token::Punctuator(Punctuator::GtEq) => BinaryOperator::GtEq,
                 Token::Keyword(Keyword::Instanceof) => BinaryOperator::Instanceof,
                 Token::Keyword(Keyword::In) => BinaryOperator::In,
+                _ => break,
+            };
+            self.lexer.next_token()?;
+            let right = self.parse_shift_expression()?;
+            left = Expression::BinaryExpression {
+                left: Box::new(left),
+                operator: op,
+                right: Box::new(right),
+                position: None,
+            };
+        }
+
+        Ok(left)
+    }
+
+    fn parse_shift_expression(&mut self) -> Result<Expression, JsError> {
+        let mut left = self.parse_additive_expression()?;
+
+        loop {
+            let op = match self.lexer.peek_token()? {
+                Token::Punctuator(Punctuator::LtLt) => BinaryOperator::LeftShift,
+                Token::Punctuator(Punctuator::GtGt) => BinaryOperator::RightShift,
+                Token::Punctuator(Punctuator::GtGtGt) => BinaryOperator::UnsignedRightShift,
                 _ => break,
             };
             self.lexer.next_token()?;
