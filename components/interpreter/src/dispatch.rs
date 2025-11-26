@@ -1367,6 +1367,18 @@ impl Dispatcher {
                     Ok(Value::NativeObject(Rc::new(RefCell::new(Vec::<Value>::new())) as Rc<RefCell<dyn Any>>))
                 }
             }
+            // Object constructor
+            "Object" => {
+                // Object() constructor - creates a new object
+                if let Some(ref heap) = self.heap {
+                    let obj = heap.create_object();
+                    let boxed: Box<dyn Any> = Box::new(obj);
+                    Ok(Value::NativeObject(Rc::new(RefCell::new(boxed)) as Rc<RefCell<dyn Any>>))
+                } else {
+                    // Fallback when heap not available
+                    Ok(Value::NativeObject(Rc::new(RefCell::new(std::collections::HashMap::<String, Value>::new())) as Rc<RefCell<dyn Any>>))
+                }
+            }
             "Number.isNaN" => {
                 // Number.isNaN - strict check, doesn't coerce
                 if let Some(Value::Double(n)) = args.first() {
@@ -3353,8 +3365,35 @@ impl Dispatcher {
     }
 
     fn strict_equal(&self, a: Value, b: Value) -> Value {
-        // Strict equality - no type coercion
-        Value::Boolean(a == b)
+        // Strict equality - no type coercion, but Smi and Double are both "number"
+        let result = match (&a, &b) {
+            // Number comparisons - Smi and Double are both "number" type in JS
+            (Value::Smi(x), Value::Smi(y)) => x == y,
+            (Value::Double(x), Value::Double(y)) => {
+                // NaN !== NaN
+                if x.is_nan() && y.is_nan() {
+                    false
+                } else {
+                    x == y
+                }
+            }
+            (Value::Smi(x), Value::Double(y)) => (*x as f64) == *y,
+            (Value::Double(x), Value::Smi(y)) => *x == (*y as f64),
+            // String comparison
+            (Value::String(x), Value::String(y)) => x == y,
+            // Boolean comparison
+            (Value::Boolean(x), Value::Boolean(y)) => x == y,
+            // Undefined/null comparison
+            (Value::Undefined, Value::Undefined) => true,
+            (Value::Null, Value::Null) => true,
+            // Object identity (reference equality)
+            (Value::HeapObject(x), Value::HeapObject(y)) => x == y,
+            (Value::NativeObject(x), Value::NativeObject(y)) => Rc::ptr_eq(x, y),
+            (Value::NativeFunction(x), Value::NativeFunction(y)) => x == y,
+            // Different types - false
+            _ => false,
+        };
+        Value::Boolean(result)
     }
 
     fn not_equal(&self, a: Value, b: Value) -> Value {

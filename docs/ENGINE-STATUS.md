@@ -18,13 +18,18 @@
 
 | Category | Passed | Total | Pass Rate |
 |----------|--------|-------|-----------|
-| Expressions (addition) | 14 | 48 | **29.2%** |
-| Expressions (equals) | 9 | 47 | **19.1%** |
-| Statements | 42 | 200 | **21.0%** |
+| Expressions (addition) | 22 | 48 | **45.8%** |
+| Expressions (subtraction) | 22 | 38 | **57.9%** |
+| Expressions (multiplication) | 22 | 40 | **55.0%** |
+| Expressions (equals) | 10 | 47 | **21.3%** |
+| Statements | 34 | 300 | **11.3%** |
 
 **Note**: Test262 tests run in execute mode (parse + bytecode + VM execution) with full harness prelude (Test262Error, assert, $262).
 
-**Known parser gaps**: Many test failures are due to parser not supporting newer syntax (prefix-decrement in some contexts, `using` declarations, `for-await-of`), rather than runtime issues.
+**Known gaps**:
+- Parser: BigInt literals, `using` declarations, `for-await-of`, some prefix-decrement contexts
+- Runtime: `eval()` not implemented, ReferenceError for undeclared variables, Symbol primitives
+- Many test failures are parser issues rather than runtime issues
 
 ## Working Features (Verified via Tests)
 
@@ -110,10 +115,13 @@ The Corten interpreter provides predictable performance without warmup time.
 3. ~~Add built-in constructors (String, Boolean, Array, Number, Object)~~ ✅ **Done**
 4. ~~Fix string equality comparison~~ ✅ **Done**
 5. ~~Fix Test262 harness injection~~ ✅ **Done**
-6. Fix parser for prefix-decrement and newer syntax
-7. Improve statement compliance (strict mode enforcement)
-8. Integrate JIT compiler with execution pipeline
-9. Complete async/await runtime
+6. ~~Fix strict equality for Smi/Double comparison~~ ✅ **Done**
+7. Fix parser for BigInt and newer ES2024 syntax
+8. Implement `eval()` function for runtime code evaluation
+9. Fix ReferenceError for undeclared variables
+10. Improve statement compliance (strict mode enforcement)
+11. Integrate JIT compiler with execution pipeline
+12. Complete async/await runtime
 
 ---
 
