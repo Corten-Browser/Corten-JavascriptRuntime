@@ -30,6 +30,12 @@ pub struct Parser<'a> {
     lexer: Lexer<'a>,
     source: &'a str,
     last_position: Option<core_types::SourcePosition>,
+    /// Track if we're in strict mode
+    strict_mode: bool,
+    /// Track loop depth for break/continue validation
+    loop_depth: usize,
+    /// Track function depth for return validation
+    function_depth: usize,
 }
 
 impl<'a> Parser<'a> {
@@ -39,6 +45,9 @@ impl<'a> Parser<'a> {
             lexer: Lexer::new(source),
             source,
             last_position: None,
+            strict_mode: false,
+            loop_depth: 0,
+            function_depth: 0,
         }
     }
 
@@ -461,11 +470,11 @@ impl<'a> Parser<'a> {
         let test = self.parse_expression()?;
         self.expect_punctuator(Punctuator::RParen)?;
 
-        let consequent = Box::new(self.parse_statement()?);
+        let consequent = Box::new(self.parse_substatement()?);
 
         let alternate = if self.check_keyword(Keyword::Else)? {
             self.lexer.next_token()?;
-            Some(Box::new(self.parse_statement()?))
+            Some(Box::new(self.parse_substatement()?))
         } else {
             None
         };
@@ -483,7 +492,10 @@ impl<'a> Parser<'a> {
         self.expect_punctuator(Punctuator::LParen)?;
         let test = self.parse_expression()?;
         self.expect_punctuator(Punctuator::RParen)?;
-        let body = Box::new(self.parse_statement()?);
+
+        self.loop_depth += 1;
+        let body = Box::new(self.parse_substatement()?);
+        self.loop_depth -= 1;
 
         Ok(Statement::WhileStatement {
             test,
@@ -543,7 +555,10 @@ impl<'a> Parser<'a> {
         };
 
         self.expect_punctuator(Punctuator::RParen)?;
-        let body = Box::new(self.parse_statement()?);
+        
+        self.loop_depth += 1;
+        let body = Box::new(self.parse_substatement()?);
+        self.loop_depth -= 1;
 
         Ok(Statement::ForStatement {
             init,
@@ -556,6 +571,15 @@ impl<'a> Parser<'a> {
 
     fn parse_break_statement(&mut self) -> Result<Statement, JsError> {
         self.expect_keyword(Keyword::Break)?;
+
+        // Break must be inside a loop or switch
+        if self.loop_depth == 0 {
+            return Err(syntax_error(
+                "Illegal break statement",
+                self.last_position.clone(),
+            ));
+        }
+
         self.consume_semicolon()?;
         Ok(Statement::BreakStatement {
             label: None,
@@ -565,6 +589,15 @@ impl<'a> Parser<'a> {
 
     fn parse_continue_statement(&mut self) -> Result<Statement, JsError> {
         self.expect_keyword(Keyword::Continue)?;
+
+        // Continue must be inside a loop
+        if self.loop_depth == 0 {
+            return Err(syntax_error(
+                "Illegal continue statement",
+                self.last_position.clone(),
+            ));
+        }
+
         self.consume_semicolon()?;
         Ok(Statement::ContinueStatement {
             label: None,
@@ -1529,6 +1562,93 @@ impl<'a> Parser<'a> {
     fn check_restricted_production(&self) -> bool {
         self.lexer.line_terminator_before_token
     }
+}
+
+    /// Check if an identifier name is a reserved word
+    fn is_reserved_word(&self, name: &str) -> bool {
+        matches!(
+            name,
+            "break" | "case" | "catch" | "continue" | "debugger"
+            | "default" | "delete" | "do" | "else" | "finally"
+            | "for" | "function" | "if" | "in" | "instanceof"
+            | "new" | "return" | "switch" | "this" | "throw"
+            | "try" | "typeof" | "var" | "void" | "while"
+            | "with" | "class" | "const" | "enum" | "export"
+            | "extends" | "import" | "super"
+        )
+    }
+
+    /// Check if an identifier name is a strict mode reserved word
+    fn is_strict_reserved_word(&self, name: &str) -> bool {
+        matches!(
+            name,
+            "implements" | "interface" | "let" | "package" | "private"
+            | "protected" | "public" | "static" | "yield"
+        )
+    }
+
+    /// Validate that an identifier is not a reserved word
+    fn validate_identifier(&self, name: &str) -> Result<(), JsError> {
+        if self.is_reserved_word(name) {
+            return Err(syntax_error(
+                &format!("'{}' is a reserved word and cannot be used as an identifier", name),
+                self.last_position.clone(),
+            ));
+        }
+
+        if self.strict_mode && self.is_strict_reserved_word(name) {
+            return Err(syntax_error(
+                &format!("'{}' is a reserved word in strict mode", name),
+                self.last_position.clone(),
+            ));
+        }
+
+        Ok(())
+    }
+
+    /// Check if an expression is a valid assignment target
+    fn is_valid_assignment_target(&self, expr: &Expression) -> bool {
+        matches!(
+            expr,
+            Expression::Identifier(_)
+                | Expression::MemberAccess { .. }
+                | Expression::ComputedMemberAccess { .. }
+        )
+    }
+
+    /// Parse a statement in a context where lexical declarations are not allowed
+    /// (e.g., after if, while, for without braces)
+    fn parse_substatement(&mut self) -> Result<Statement, JsError> {
+        let token = self.lexer.peek_token()?.clone();
+
+        // Lexical declarations (let, const) are not allowed in statement positions
+        if matches!(token, Token::Keyword(Keyword::Let) | Token::Keyword(Keyword::Const)) {
+            return Err(syntax_error(
+                "Lexical declaration cannot appear in a single-statement context",
+                self.last_position.clone(),
+            ));
+        }
+
+        // Class declarations are not allowed in statement positions
+        if matches!(token, Token::Keyword(Keyword::Class)) {
+            return Err(syntax_error(
+                "Class declaration cannot appear in a single-statement context",
+                self.last_position.clone(),
+            ));
+        }
+
+        // Function declarations are only allowed in non-strict mode
+        if matches!(token, Token::Keyword(Keyword::Function)) && self.strict_mode {
+            return Err(syntax_error(
+                "Function declaration cannot appear in a single-statement context in strict mode",
+                self.last_position.clone(),
+            ));
+        }
+
+        // Parse the statement normally
+        self.parse_statement()
+    }
+
 }
 
 #[cfg(test)]

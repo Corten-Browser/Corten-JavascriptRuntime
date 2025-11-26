@@ -80,6 +80,53 @@ Tests both parsing and runtime execution. This mode:
 - ✗ Slower (~100-200 tests per second)
 - ✗ May fail due to missing runtime features
 
+## Test262 Harness Implementation
+
+### $262 Global Object
+
+The Test262 test suite requires a special `$262` global object with helper functions. Our implementation provides:
+
+**Location**: `components/test262_harness/src/harness.rs` (HARNESS_PRELUDE constant)
+
+**Available functions**:
+- `$262.createRealm()` - Create isolated global environment (stub)
+- `$262.evalScript(code)` - Evaluate code in current realm (stub)
+- `$262.gc()` - Trigger garbage collection (no-op)
+- `$262.detachArrayBuffer(buffer)` - Detach ArrayBuffer (stub)
+- `$262.global` - Reference to global object
+- `$262.agent.*` - Agent-related functions for concurrent tests (stubs)
+
+**Native implementations**: `components/builtins/src/test262.rs`
+
+Provides Rust-native implementations for future integration:
+- `Test262Object::create_realm()` - Native realm creation
+- `Test262Object::eval_script()` - Native eval integration
+- `Test262Object::gc()` - GC trigger integration
+- `Assert::assert()`, `Assert::same_value()`, `Assert::not_same_value()`, `Assert::throws()` - Native assertion functions
+
+### Test262Error Constructor
+
+A custom error type used by Test262 tests for assertion failures. Defined in HARNESS_PRELUDE and automatically available to all tests.
+
+### Assert Functions
+
+Assertion helpers provided to tests:
+- `assert(condition, message)` - Throw error if condition is false
+- `assert.sameValue(actual, expected, message)` - Strict equality check (===)
+- `assert.notSameValue(actual, unexpected, message)` - Strict inequality check (!==)
+- `assert.throws(ErrorType, fn, message)` - Expect exception from function
+
+### Harness Injection
+
+The harness prelude is automatically executed before each test in execute mode:
+
+1. Test262 harness creates fresh VM
+2. HARNESS_PRELUDE is parsed and executed
+3. Test code is executed with $262 and assert functions available
+4. Test results are collected
+
+This ensures all tests have access to the required Test262-specific globals without modifying the core runtime.
+
 ## Current Baseline Results
 
 Results captured on: November 26, 2025

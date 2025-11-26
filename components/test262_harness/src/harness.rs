@@ -21,6 +21,16 @@ pub enum TestResult {
 
 /// Test262 harness prelude that provides assert functions
 pub const HARNESS_PRELUDE: &str = r#"
+// Test262Error constructor
+function Test262Error(message) {
+    this.message = message || '';
+}
+Test262Error.prototype = new Error();
+Test262Error.prototype.constructor = Test262Error;
+Test262Error.prototype.toString = function() {
+    return 'Test262Error: ' + this.message;
+};
+
 // Test262 $262 object and assert functions
 var $262 = {
     createRealm: function() { return {}; },
@@ -261,6 +271,11 @@ impl Test262Harness {
                     // Create a fresh VM for each test
                     let mut vm = VM::new();
 
+                    // Execute harness prelude to set up $262 and assert functions
+                    if let Err(e) = Self::setup_harness_prelude(&mut vm) {
+                        return TestResult::Fail(format!("Harness setup failed: {:?}", e));
+                    }
+
                     // Register nested functions
                     let nested_functions = generator.take_nested_functions();
                     for func_bytecode in nested_functions {
@@ -385,6 +400,41 @@ impl Test262Harness {
     /// Get number of skipped tests
     pub fn skip_count(&self) -> usize {
         self.results.values().filter(|r| r.is_skip()).count()
+    }
+
+    /// Set up the test262 harness prelude in the VM
+    /// This creates the $262 object and assert functions in the global scope
+    fn setup_harness_prelude(vm: &mut VM) -> Result<(), JsError> {
+        // Parse the harness prelude
+        let ast = parser::Parser::new(HARNESS_PRELUDE)
+            .parse()
+            .map_err(|e| JsError {
+                kind: ErrorKind::SyntaxError,
+                message: format!("Failed to parse harness prelude: {:?}", e),
+                stack: vec![],
+                source_position: None,
+            })?;
+
+        // Generate bytecode
+        let mut generator = parser::BytecodeGenerator::new();
+        let bytecode = generator.generate(&ast)
+            .map_err(|e| JsError {
+                kind: ErrorKind::InternalError,
+                message: format!("Failed to generate bytecode for harness prelude: {:?}", e),
+                stack: vec![],
+                source_position: None,
+            })?;
+
+        // Register any nested functions from the prelude
+        let nested_functions = generator.take_nested_functions();
+        for func_bytecode in nested_functions {
+            vm.register_function(func_bytecode);
+        }
+
+        // Execute the prelude to set up global functions
+        vm.execute(&bytecode)?;
+
+        Ok(())
     }
 }
 

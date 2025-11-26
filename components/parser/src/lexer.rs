@@ -183,6 +183,8 @@ pub enum Token {
     Identifier(String),
     /// Number literal
     Number(f64),
+    /// BigInt literal (integer with 'n' suffix)
+    BigIntLiteral(String),
     /// String literal
     String(String),
     /// Template literal part
@@ -516,17 +518,117 @@ impl<'a> Lexer<'a> {
     }
 
     fn scan_number(&mut self, first: char) -> Result<Token, JsError> {
+        let start_pos = self.current_position();
         let mut num_str = first.to_string();
+        let mut is_float = false;
 
-        while !self.is_at_end() && (self.peek().is_ascii_digit() || self.peek() == '.') {
-            if self.peek() == '.' && num_str.contains('.') {
-                break;
+        // Check for hex (0x), binary (0b), or octal (0o) literals
+        if first == '0' && !self.is_at_end() {
+            let next = self.peek();
+            match next {
+                'x' | 'X' => {
+                    // Hexadecimal
+                    num_str.push(self.advance());
+                    if self.is_at_end() || !self.peek().is_ascii_hexdigit() {
+                        return Err(JsError {
+                            kind: ErrorKind::SyntaxError,
+                            message: "Invalid hexadecimal literal".to_string(),
+                            stack: vec![],
+                            source_position: Some(start_pos),
+                        });
+                    }
+                    while !self.is_at_end() && self.peek().is_ascii_hexdigit() {
+                        num_str.push(self.advance());
+                    }
+                }
+                'b' | 'B' => {
+                    // Binary
+                    num_str.push(self.advance());
+                    if self.is_at_end() || (self.peek() != '0' && self.peek() != '1') {
+                        return Err(JsError {
+                            kind: ErrorKind::SyntaxError,
+                            message: "Invalid binary literal".to_string(),
+                            stack: vec![],
+                            source_position: Some(start_pos),
+                        });
+                    }
+                    while !self.is_at_end() && (self.peek() == '0' || self.peek() == '1') {
+                        num_str.push(self.advance());
+                    }
+                }
+                'o' | 'O' => {
+                    // Octal
+                    num_str.push(self.advance());
+                    if self.is_at_end() || !('0'..='7').contains(&self.peek()) {
+                        return Err(JsError {
+                            kind: ErrorKind::SyntaxError,
+                            message: "Invalid octal literal".to_string(),
+                            stack: vec![],
+                            source_position: Some(start_pos),
+                        });
+                    }
+                    while !self.is_at_end() && ('0'..='7').contains(&self.peek()) {
+                        num_str.push(self.advance());
+                    }
+                }
+                _ => {
+                    // Regular decimal number starting with 0
+                    self.scan_decimal_digits(&mut num_str, &mut is_float);
+                }
             }
+        } else {
+            // Regular decimal number
+            self.scan_decimal_digits(&mut num_str, &mut is_float);
+        }
+
+        // Check for BigInt suffix 'n'
+        if !self.is_at_end() && self.peek() == 'n' {
+            if is_float {
+                return Err(JsError {
+                    kind: ErrorKind::SyntaxError,
+                    message: "BigInt literals cannot have decimal points".to_string(),
+                    stack: vec![],
+                    source_position: Some(start_pos),
+                });
+            }
+            self.advance(); // consume 'n'
+            return Ok(Token::BigIntLiteral(num_str));
+        }
+
+        // Parse as regular number
+        let value = num_str.parse::<f64>().map_err(|_| JsError {
+            kind: ErrorKind::SyntaxError,
+            message: format!("Invalid number: {}", num_str),
+            stack: vec![],
+            source_position: Some(start_pos),
+        })?;
+
+        Ok(Token::Number(value))
+    }
+
+    fn scan_decimal_digits(&mut self, num_str: &mut String, is_float: &mut bool) {
+        // Scan integer part
+        while !self.is_at_end() && self.peek().is_ascii_digit() {
             num_str.push(self.advance());
+        }
+
+        // Handle decimal point
+        if !self.is_at_end() && self.peek() == '.' {
+            // Look ahead to ensure it's not a method call (e.g., 123.toString())
+            if let Some(next) = self.peek_next() {
+                if next.is_ascii_digit() {
+                    *is_float = true;
+                    num_str.push(self.advance()); // consume '.'
+                    while !self.is_at_end() && self.peek().is_ascii_digit() {
+                        num_str.push(self.advance());
+                    }
+                }
+            }
         }
 
         // Handle exponent
         if !self.is_at_end() && (self.peek() == 'e' || self.peek() == 'E') {
+            *is_float = true;
             num_str.push(self.advance());
             if !self.is_at_end() && (self.peek() == '+' || self.peek() == '-') {
                 num_str.push(self.advance());
@@ -535,15 +637,6 @@ impl<'a> Lexer<'a> {
                 num_str.push(self.advance());
             }
         }
-
-        let value = num_str.parse::<f64>().map_err(|_| JsError {
-            kind: ErrorKind::SyntaxError,
-            message: format!("Invalid number: {}", num_str),
-            stack: vec![],
-            source_position: Some(self.current_position()),
-        })?;
-
-        Ok(Token::Number(value))
     }
 
     fn scan_identifier(&mut self, first: char) -> Result<Token, JsError> {
@@ -805,5 +898,62 @@ mod tests {
             lexer.next_token().unwrap(),
             Token::Identifier(s) if s == "bar"
         ));
+    }
+
+    #[test]
+    fn test_lexer_bigint_decimal() {
+        let mut lexer = Lexer::new("123n");
+        let token = lexer.next_token().unwrap();
+        assert!(matches!(token, Token::BigIntLiteral(s) if s == "123"));
+    }
+
+    #[test]
+    fn test_lexer_bigint_hex() {
+        let mut lexer = Lexer::new("0x1fn");
+        let token = lexer.next_token().unwrap();
+        assert!(matches!(token, Token::BigIntLiteral(s) if s == "0x1f"));
+    }
+
+    #[test]
+    fn test_lexer_bigint_binary() {
+        let mut lexer = Lexer::new("0b101n");
+        let token = lexer.next_token().unwrap();
+        assert!(matches!(token, Token::BigIntLiteral(s) if s == "0b101"));
+    }
+
+    #[test]
+    fn test_lexer_bigint_octal() {
+        let mut lexer = Lexer::new("0o77n");
+        let token = lexer.next_token().unwrap();
+        assert!(matches!(token, Token::BigIntLiteral(s) if s == "0o77"));
+    }
+
+    #[test]
+    fn test_lexer_bigint_error_float() {
+        let mut lexer = Lexer::new("123.45n");
+        let result = lexer.next_token();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().message.contains("BigInt"));
+    }
+
+    #[test]
+    fn test_lexer_hex_number() {
+        let mut lexer = Lexer::new("0x1f");
+        let token = lexer.next_token().unwrap();
+        assert!(matches!(token, Token::Number(_)));
+    }
+
+    #[test]
+    fn test_lexer_binary_number() {
+        let mut lexer = Lexer::new("0b101");
+        let token = lexer.next_token().unwrap();
+        assert!(matches!(token, Token::Number(_)));
+    }
+
+    #[test]
+    fn test_lexer_octal_number() {
+        let mut lexer = Lexer::new("0o77");
+        let token = lexer.next_token().unwrap();
+        assert!(matches!(token, Token::Number(_)));
     }
 }
