@@ -777,8 +777,14 @@ impl Dispatcher {
 
                     match method {
                         Value::NativeFunction(name) => {
-                            let result = self.call_native_function(&name, args)?;
-                            self.stack.push(result);
+                            // Check if this is an array prototype method that needs the receiver
+                            if name.starts_with("Array.prototype.") {
+                                let result = self.call_array_prototype_method(&name, receiver, args, functions)?;
+                                self.stack.push(result);
+                            } else {
+                                let result = self.call_native_function(&name, args)?;
+                                self.stack.push(result);
+                            }
                         }
                         Value::HeapObject(idx) => {
                             // User-defined method - call with this binding
@@ -1116,6 +1122,832 @@ impl Dispatcher {
             _ => Err(JsError {
                 kind: ErrorKind::TypeError,
                 message: format!("{} is not a function", name),
+                stack: vec![],
+                source_position: None,
+            }),
+        }
+    }
+
+    /// Call an Array prototype method with receiver and callback support
+    fn call_array_prototype_method(
+        &mut self,
+        name: &str,
+        receiver: Value,
+        args: Vec<Value>,
+        functions: &[BytecodeChunk],
+    ) -> Result<Value, JsError> {
+        // Extract array from receiver
+        let (array_ref, array_len) = match &receiver {
+            Value::NativeObject(obj) => {
+                let borrowed = obj.borrow();
+                if let Some(gc_obj) = borrowed.downcast_ref::<Box<dyn Any>>() {
+                    if let Some(gc_object) = gc_obj.downcast_ref::<GCObject>() {
+                        if let Value::Smi(len) = gc_object.get("length") {
+                            (obj.clone(), len as usize)
+                        } else {
+                            return Err(JsError {
+                                kind: ErrorKind::TypeError,
+                                message: "Cannot call array method on non-array".to_string(),
+                                stack: vec![],
+                                source_position: None,
+                            });
+                        }
+                    } else {
+                        return Err(JsError {
+                            kind: ErrorKind::TypeError,
+                            message: "Invalid array object".to_string(),
+                            stack: vec![],
+                            source_position: None,
+                        });
+                    }
+                } else {
+                    return Err(JsError {
+                        kind: ErrorKind::TypeError,
+                        message: "Invalid array object".to_string(),
+                        stack: vec![],
+                        source_position: None,
+                    });
+                }
+            }
+            _ => {
+                return Err(JsError {
+                    kind: ErrorKind::TypeError,
+                    message: "Cannot call array method on non-array".to_string(),
+                    stack: vec![],
+                    source_position: None,
+                });
+            }
+        };
+
+        match name {
+            "Array.prototype.map" => {
+                // Get callback function from args
+                let callback = args.first().cloned().unwrap_or(Value::Undefined);
+                let callback_idx = match callback {
+                    Value::HeapObject(idx) => idx,
+                    _ => {
+                        return Err(JsError {
+                            kind: ErrorKind::TypeError,
+                            message: "Array.prototype.map callback must be a function".to_string(),
+                            stack: vec![],
+                            source_position: None,
+                        });
+                    }
+                };
+
+                // Create result array
+                let result_array = if let Some(ref heap) = self.heap {
+                    let gc_object = heap.create_object();
+                    let boxed: Box<dyn Any> = Box::new(gc_object);
+                    Rc::new(RefCell::new(boxed)) as Rc<RefCell<dyn Any>>
+                } else {
+                    return Err(JsError {
+                        kind: ErrorKind::InternalError,
+                        message: "Heap not initialized".to_string(),
+                        stack: vec![],
+                        source_position: None,
+                    });
+                };
+
+                // Iterate over array elements and call callback
+                for i in 0..array_len {
+                    // Get element from source array
+                    let element = {
+                        let borrowed = array_ref.borrow();
+                        if let Some(gc_obj) = borrowed.downcast_ref::<Box<dyn Any>>() {
+                            if let Some(gc_object) = gc_obj.downcast_ref::<GCObject>() {
+                                gc_object.get(&i.to_string())
+                            } else {
+                                Value::Undefined
+                            }
+                        } else {
+                            Value::Undefined
+                        }
+                    };
+
+                    // Call callback(element, index, array)
+                    let callback_args = vec![element, Value::Smi(i as i32), receiver.clone()];
+                    let mapped_value = self.call_function_with_args(callback_idx, callback_args, functions)?;
+
+                    // Store result in new array
+                    {
+                        let mut borrowed = result_array.borrow_mut();
+                        if let Some(gc_obj) = borrowed.downcast_mut::<Box<dyn Any>>() {
+                            if let Some(gc_object) = gc_obj.downcast_mut::<GCObject>() {
+                                gc_object.set(i.to_string(), mapped_value);
+                            }
+                        }
+                    }
+                }
+
+                // Set length on result array
+                {
+                    let mut borrowed = result_array.borrow_mut();
+                    if let Some(gc_obj) = borrowed.downcast_mut::<Box<dyn Any>>() {
+                        if let Some(gc_object) = gc_obj.downcast_mut::<GCObject>() {
+                            gc_object.set("length".to_string(), Value::Smi(array_len as i32));
+                        }
+                    }
+                }
+
+                Ok(Value::NativeObject(result_array))
+            }
+
+            "Array.prototype.filter" => {
+                let callback = args.first().cloned().unwrap_or(Value::Undefined);
+                let callback_idx = match callback {
+                    Value::HeapObject(idx) => idx,
+                    _ => {
+                        return Err(JsError {
+                            kind: ErrorKind::TypeError,
+                            message: "Array.prototype.filter callback must be a function".to_string(),
+                            stack: vec![],
+                            source_position: None,
+                        });
+                    }
+                };
+
+                let result_array = if let Some(ref heap) = self.heap {
+                    let gc_object = heap.create_object();
+                    let boxed: Box<dyn Any> = Box::new(gc_object);
+                    Rc::new(RefCell::new(boxed)) as Rc<RefCell<dyn Any>>
+                } else {
+                    return Err(JsError {
+                        kind: ErrorKind::InternalError,
+                        message: "Heap not initialized".to_string(),
+                        stack: vec![],
+                        source_position: None,
+                    });
+                };
+
+                let mut result_idx = 0;
+                for i in 0..array_len {
+                    let element = {
+                        let borrowed = array_ref.borrow();
+                        if let Some(gc_obj) = borrowed.downcast_ref::<Box<dyn Any>>() {
+                            if let Some(gc_object) = gc_obj.downcast_ref::<GCObject>() {
+                                gc_object.get(&i.to_string())
+                            } else {
+                                Value::Undefined
+                            }
+                        } else {
+                            Value::Undefined
+                        }
+                    };
+
+                    let callback_args = vec![element.clone(), Value::Smi(i as i32), receiver.clone()];
+                    let predicate_result = self.call_function_with_args(callback_idx, callback_args, functions)?;
+
+                    if predicate_result.is_truthy() {
+                        let mut borrowed = result_array.borrow_mut();
+                        if let Some(gc_obj) = borrowed.downcast_mut::<Box<dyn Any>>() {
+                            if let Some(gc_object) = gc_obj.downcast_mut::<GCObject>() {
+                                gc_object.set(result_idx.to_string(), element);
+                                result_idx += 1;
+                            }
+                        }
+                    }
+                }
+
+                // Set length
+                {
+                    let mut borrowed = result_array.borrow_mut();
+                    if let Some(gc_obj) = borrowed.downcast_mut::<Box<dyn Any>>() {
+                        if let Some(gc_object) = gc_obj.downcast_mut::<GCObject>() {
+                            gc_object.set("length".to_string(), Value::Smi(result_idx as i32));
+                        }
+                    }
+                }
+
+                Ok(Value::NativeObject(result_array))
+            }
+
+            "Array.prototype.forEach" => {
+                let callback = args.first().cloned().unwrap_or(Value::Undefined);
+                let callback_idx = match callback {
+                    Value::HeapObject(idx) => idx,
+                    _ => {
+                        return Err(JsError {
+                            kind: ErrorKind::TypeError,
+                            message: "Array.prototype.forEach callback must be a function".to_string(),
+                            stack: vec![],
+                            source_position: None,
+                        });
+                    }
+                };
+
+                for i in 0..array_len {
+                    let element = {
+                        let borrowed = array_ref.borrow();
+                        if let Some(gc_obj) = borrowed.downcast_ref::<Box<dyn Any>>() {
+                            if let Some(gc_object) = gc_obj.downcast_ref::<GCObject>() {
+                                gc_object.get(&i.to_string())
+                            } else {
+                                Value::Undefined
+                            }
+                        } else {
+                            Value::Undefined
+                        }
+                    };
+
+                    let callback_args = vec![element, Value::Smi(i as i32), receiver.clone()];
+                    self.call_function_with_args(callback_idx, callback_args, functions)?;
+                }
+
+                Ok(Value::Undefined)
+            }
+
+            "Array.prototype.reduce" => {
+                let callback = args.first().cloned().unwrap_or(Value::Undefined);
+                let callback_idx = match callback {
+                    Value::HeapObject(idx) => idx,
+                    _ => {
+                        return Err(JsError {
+                            kind: ErrorKind::TypeError,
+                            message: "Array.prototype.reduce callback must be a function".to_string(),
+                            stack: vec![],
+                            source_position: None,
+                        });
+                    }
+                };
+
+                let mut accumulator = args.get(1).cloned();
+                let start_idx = if accumulator.is_some() { 0 } else { 1 };
+
+                // If no initial value, use first element
+                if accumulator.is_none() {
+                    if array_len == 0 {
+                        return Err(JsError {
+                            kind: ErrorKind::TypeError,
+                            message: "Reduce of empty array with no initial value".to_string(),
+                            stack: vec![],
+                            source_position: None,
+                        });
+                    }
+                    let first_elem = {
+                        let borrowed = array_ref.borrow();
+                        if let Some(gc_obj) = borrowed.downcast_ref::<Box<dyn Any>>() {
+                            if let Some(gc_object) = gc_obj.downcast_ref::<GCObject>() {
+                                gc_object.get("0")
+                            } else {
+                                Value::Undefined
+                            }
+                        } else {
+                            Value::Undefined
+                        }
+                    };
+                    accumulator = Some(first_elem);
+                }
+
+                let mut acc = accumulator.unwrap();
+
+                for i in start_idx..array_len {
+                    let element = {
+                        let borrowed = array_ref.borrow();
+                        if let Some(gc_obj) = borrowed.downcast_ref::<Box<dyn Any>>() {
+                            if let Some(gc_object) = gc_obj.downcast_ref::<GCObject>() {
+                                gc_object.get(&i.to_string())
+                            } else {
+                                Value::Undefined
+                            }
+                        } else {
+                            Value::Undefined
+                        }
+                    };
+
+                    // callback(accumulator, currentValue, currentIndex, array)
+                    let callback_args = vec![acc, element, Value::Smi(i as i32), receiver.clone()];
+                    acc = self.call_function_with_args(callback_idx, callback_args, functions)?;
+                }
+
+                Ok(acc)
+            }
+
+            "Array.prototype.find" => {
+                let callback = args.first().cloned().unwrap_or(Value::Undefined);
+                let callback_idx = match callback {
+                    Value::HeapObject(idx) => idx,
+                    _ => {
+                        return Err(JsError {
+                            kind: ErrorKind::TypeError,
+                            message: "Array.prototype.find callback must be a function".to_string(),
+                            stack: vec![],
+                            source_position: None,
+                        });
+                    }
+                };
+
+                for i in 0..array_len {
+                    let element = {
+                        let borrowed = array_ref.borrow();
+                        if let Some(gc_obj) = borrowed.downcast_ref::<Box<dyn Any>>() {
+                            if let Some(gc_object) = gc_obj.downcast_ref::<GCObject>() {
+                                gc_object.get(&i.to_string())
+                            } else {
+                                Value::Undefined
+                            }
+                        } else {
+                            Value::Undefined
+                        }
+                    };
+
+                    let callback_args = vec![element.clone(), Value::Smi(i as i32), receiver.clone()];
+                    let result = self.call_function_with_args(callback_idx, callback_args, functions)?;
+
+                    if result.is_truthy() {
+                        return Ok(element);
+                    }
+                }
+
+                Ok(Value::Undefined)
+            }
+
+            "Array.prototype.findIndex" => {
+                let callback = args.first().cloned().unwrap_or(Value::Undefined);
+                let callback_idx = match callback {
+                    Value::HeapObject(idx) => idx,
+                    _ => {
+                        return Err(JsError {
+                            kind: ErrorKind::TypeError,
+                            message: "Array.prototype.findIndex callback must be a function".to_string(),
+                            stack: vec![],
+                            source_position: None,
+                        });
+                    }
+                };
+
+                for i in 0..array_len {
+                    let element = {
+                        let borrowed = array_ref.borrow();
+                        if let Some(gc_obj) = borrowed.downcast_ref::<Box<dyn Any>>() {
+                            if let Some(gc_object) = gc_obj.downcast_ref::<GCObject>() {
+                                gc_object.get(&i.to_string())
+                            } else {
+                                Value::Undefined
+                            }
+                        } else {
+                            Value::Undefined
+                        }
+                    };
+
+                    let callback_args = vec![element, Value::Smi(i as i32), receiver.clone()];
+                    let result = self.call_function_with_args(callback_idx, callback_args, functions)?;
+
+                    if result.is_truthy() {
+                        return Ok(Value::Smi(i as i32));
+                    }
+                }
+
+                Ok(Value::Smi(-1))
+            }
+
+            "Array.prototype.some" => {
+                let callback = args.first().cloned().unwrap_or(Value::Undefined);
+                let callback_idx = match callback {
+                    Value::HeapObject(idx) => idx,
+                    _ => {
+                        return Err(JsError {
+                            kind: ErrorKind::TypeError,
+                            message: "Array.prototype.some callback must be a function".to_string(),
+                            stack: vec![],
+                            source_position: None,
+                        });
+                    }
+                };
+
+                for i in 0..array_len {
+                    let element = {
+                        let borrowed = array_ref.borrow();
+                        if let Some(gc_obj) = borrowed.downcast_ref::<Box<dyn Any>>() {
+                            if let Some(gc_object) = gc_obj.downcast_ref::<GCObject>() {
+                                gc_object.get(&i.to_string())
+                            } else {
+                                Value::Undefined
+                            }
+                        } else {
+                            Value::Undefined
+                        }
+                    };
+
+                    let callback_args = vec![element, Value::Smi(i as i32), receiver.clone()];
+                    let result = self.call_function_with_args(callback_idx, callback_args, functions)?;
+
+                    if result.is_truthy() {
+                        return Ok(Value::Boolean(true));
+                    }
+                }
+
+                Ok(Value::Boolean(false))
+            }
+
+            "Array.prototype.every" => {
+                let callback = args.first().cloned().unwrap_or(Value::Undefined);
+                let callback_idx = match callback {
+                    Value::HeapObject(idx) => idx,
+                    _ => {
+                        return Err(JsError {
+                            kind: ErrorKind::TypeError,
+                            message: "Array.prototype.every callback must be a function".to_string(),
+                            stack: vec![],
+                            source_position: None,
+                        });
+                    }
+                };
+
+                for i in 0..array_len {
+                    let element = {
+                        let borrowed = array_ref.borrow();
+                        if let Some(gc_obj) = borrowed.downcast_ref::<Box<dyn Any>>() {
+                            if let Some(gc_object) = gc_obj.downcast_ref::<GCObject>() {
+                                gc_object.get(&i.to_string())
+                            } else {
+                                Value::Undefined
+                            }
+                        } else {
+                            Value::Undefined
+                        }
+                    };
+
+                    let callback_args = vec![element, Value::Smi(i as i32), receiver.clone()];
+                    let result = self.call_function_with_args(callback_idx, callback_args, functions)?;
+
+                    if !result.is_truthy() {
+                        return Ok(Value::Boolean(false));
+                    }
+                }
+
+                Ok(Value::Boolean(true))
+            }
+
+            "Array.prototype.includes" => {
+                let search_element = args.first().cloned().unwrap_or(Value::Undefined);
+                let from_index = args.get(1).map(|v| self.to_number(v) as i32).unwrap_or(0);
+
+                let start = if from_index < 0 {
+                    (array_len as i32 + from_index).max(0) as usize
+                } else {
+                    from_index as usize
+                };
+
+                for i in start..array_len {
+                    let element = {
+                        let borrowed = array_ref.borrow();
+                        if let Some(gc_obj) = borrowed.downcast_ref::<Box<dyn Any>>() {
+                            if let Some(gc_object) = gc_obj.downcast_ref::<GCObject>() {
+                                gc_object.get(&i.to_string())
+                            } else {
+                                Value::Undefined
+                            }
+                        } else {
+                            Value::Undefined
+                        }
+                    };
+
+                    // Use strict equality
+                    if element == search_element {
+                        return Ok(Value::Boolean(true));
+                    }
+                }
+
+                Ok(Value::Boolean(false))
+            }
+
+            "Array.prototype.indexOf" => {
+                let search_element = args.first().cloned().unwrap_or(Value::Undefined);
+                let from_index = args.get(1).map(|v| self.to_number(v) as i32).unwrap_or(0);
+
+                let start = if from_index < 0 {
+                    (array_len as i32 + from_index).max(0) as usize
+                } else {
+                    from_index as usize
+                };
+
+                for i in start..array_len {
+                    let element = {
+                        let borrowed = array_ref.borrow();
+                        if let Some(gc_obj) = borrowed.downcast_ref::<Box<dyn Any>>() {
+                            if let Some(gc_object) = gc_obj.downcast_ref::<GCObject>() {
+                                gc_object.get(&i.to_string())
+                            } else {
+                                Value::Undefined
+                            }
+                        } else {
+                            Value::Undefined
+                        }
+                    };
+
+                    if element == search_element {
+                        return Ok(Value::Smi(i as i32));
+                    }
+                }
+
+                Ok(Value::Smi(-1))
+            }
+
+            "Array.prototype.push" => {
+                // Get current length and add new elements
+                let new_len = array_len + args.len();
+
+                {
+                    let mut borrowed = array_ref.borrow_mut();
+                    if let Some(gc_obj) = borrowed.downcast_mut::<Box<dyn Any>>() {
+                        if let Some(gc_object) = gc_obj.downcast_mut::<GCObject>() {
+                            for (i, arg) in args.into_iter().enumerate() {
+                                gc_object.set((array_len + i).to_string(), arg);
+                            }
+                            gc_object.set("length".to_string(), Value::Smi(new_len as i32));
+                        }
+                    }
+                }
+
+                Ok(Value::Smi(new_len as i32))
+            }
+
+            "Array.prototype.pop" => {
+                if array_len == 0 {
+                    return Ok(Value::Undefined);
+                }
+
+                let last_idx = array_len - 1;
+                let last_elem = {
+                    let borrowed = array_ref.borrow();
+                    if let Some(gc_obj) = borrowed.downcast_ref::<Box<dyn Any>>() {
+                        if let Some(gc_object) = gc_obj.downcast_ref::<GCObject>() {
+                            gc_object.get(&last_idx.to_string())
+                        } else {
+                            Value::Undefined
+                        }
+                    } else {
+                        Value::Undefined
+                    }
+                };
+
+                // Update length (don't actually delete, just decrement length)
+                {
+                    let mut borrowed = array_ref.borrow_mut();
+                    if let Some(gc_obj) = borrowed.downcast_mut::<Box<dyn Any>>() {
+                        if let Some(gc_object) = gc_obj.downcast_mut::<GCObject>() {
+                            gc_object.set("length".to_string(), Value::Smi(last_idx as i32));
+                        }
+                    }
+                }
+
+                Ok(last_elem)
+            }
+
+            "Array.prototype.shift" => {
+                if array_len == 0 {
+                    return Ok(Value::Undefined);
+                }
+
+                let first_elem = {
+                    let borrowed = array_ref.borrow();
+                    if let Some(gc_obj) = borrowed.downcast_ref::<Box<dyn Any>>() {
+                        if let Some(gc_object) = gc_obj.downcast_ref::<GCObject>() {
+                            gc_object.get("0")
+                        } else {
+                            Value::Undefined
+                        }
+                    } else {
+                        Value::Undefined
+                    }
+                };
+
+                // Shift all elements down
+                {
+                    let mut borrowed = array_ref.borrow_mut();
+                    if let Some(gc_obj) = borrowed.downcast_mut::<Box<dyn Any>>() {
+                        if let Some(gc_object) = gc_obj.downcast_mut::<GCObject>() {
+                            for i in 1..array_len {
+                                let elem = gc_object.get(&i.to_string());
+                                gc_object.set((i - 1).to_string(), elem);
+                            }
+                            gc_object.set("length".to_string(), Value::Smi((array_len - 1) as i32));
+                        }
+                    }
+                }
+
+                Ok(first_elem)
+            }
+
+            "Array.prototype.unshift" => {
+                let shift_count = args.len();
+                let new_len = array_len + shift_count;
+
+                {
+                    let mut borrowed = array_ref.borrow_mut();
+                    if let Some(gc_obj) = borrowed.downcast_mut::<Box<dyn Any>>() {
+                        if let Some(gc_object) = gc_obj.downcast_mut::<GCObject>() {
+                            // Shift existing elements up
+                            for i in (0..array_len).rev() {
+                                let elem = gc_object.get(&i.to_string());
+                                gc_object.set((i + shift_count).to_string(), elem);
+                            }
+                            // Insert new elements at beginning
+                            for (i, arg) in args.into_iter().enumerate() {
+                                gc_object.set(i.to_string(), arg);
+                            }
+                            gc_object.set("length".to_string(), Value::Smi(new_len as i32));
+                        }
+                    }
+                }
+
+                Ok(Value::Smi(new_len as i32))
+            }
+
+            "Array.prototype.slice" => {
+                let start_arg = args.first().map(|v| self.to_number(v) as i32).unwrap_or(0);
+                let end_arg = args.get(1).map(|v| self.to_number(v) as i32).unwrap_or(array_len as i32);
+
+                let start = if start_arg < 0 {
+                    (array_len as i32 + start_arg).max(0) as usize
+                } else {
+                    (start_arg as usize).min(array_len)
+                };
+
+                let end = if end_arg < 0 {
+                    (array_len as i32 + end_arg).max(0) as usize
+                } else {
+                    (end_arg as usize).min(array_len)
+                };
+
+                let result_array = if let Some(ref heap) = self.heap {
+                    let gc_object = heap.create_object();
+                    let boxed: Box<dyn Any> = Box::new(gc_object);
+                    Rc::new(RefCell::new(boxed)) as Rc<RefCell<dyn Any>>
+                } else {
+                    return Err(JsError {
+                        kind: ErrorKind::InternalError,
+                        message: "Heap not initialized".to_string(),
+                        stack: vec![],
+                        source_position: None,
+                    });
+                };
+
+                let slice_len = if end > start { end - start } else { 0 };
+
+                for i in 0..slice_len {
+                    let element = {
+                        let borrowed = array_ref.borrow();
+                        if let Some(gc_obj) = borrowed.downcast_ref::<Box<dyn Any>>() {
+                            if let Some(gc_object) = gc_obj.downcast_ref::<GCObject>() {
+                                gc_object.get(&(start + i).to_string())
+                            } else {
+                                Value::Undefined
+                            }
+                        } else {
+                            Value::Undefined
+                        }
+                    };
+
+                    let mut borrowed = result_array.borrow_mut();
+                    if let Some(gc_obj) = borrowed.downcast_mut::<Box<dyn Any>>() {
+                        if let Some(gc_object) = gc_obj.downcast_mut::<GCObject>() {
+                            gc_object.set(i.to_string(), element);
+                        }
+                    }
+                }
+
+                {
+                    let mut borrowed = result_array.borrow_mut();
+                    if let Some(gc_obj) = borrowed.downcast_mut::<Box<dyn Any>>() {
+                        if let Some(gc_object) = gc_obj.downcast_mut::<GCObject>() {
+                            gc_object.set("length".to_string(), Value::Smi(slice_len as i32));
+                        }
+                    }
+                }
+
+                Ok(Value::NativeObject(result_array))
+            }
+
+            "Array.prototype.concat" => {
+                let result_array = if let Some(ref heap) = self.heap {
+                    let gc_object = heap.create_object();
+                    let boxed: Box<dyn Any> = Box::new(gc_object);
+                    Rc::new(RefCell::new(boxed)) as Rc<RefCell<dyn Any>>
+                } else {
+                    return Err(JsError {
+                        kind: ErrorKind::InternalError,
+                        message: "Heap not initialized".to_string(),
+                        stack: vec![],
+                        source_position: None,
+                    });
+                };
+
+                let mut result_idx = 0;
+
+                // Copy elements from original array
+                for i in 0..array_len {
+                    let element = {
+                        let borrowed = array_ref.borrow();
+                        if let Some(gc_obj) = borrowed.downcast_ref::<Box<dyn Any>>() {
+                            if let Some(gc_object) = gc_obj.downcast_ref::<GCObject>() {
+                                gc_object.get(&i.to_string())
+                            } else {
+                                Value::Undefined
+                            }
+                        } else {
+                            Value::Undefined
+                        }
+                    };
+
+                    let mut borrowed = result_array.borrow_mut();
+                    if let Some(gc_obj) = borrowed.downcast_mut::<Box<dyn Any>>() {
+                        if let Some(gc_object) = gc_obj.downcast_mut::<GCObject>() {
+                            gc_object.set(result_idx.to_string(), element);
+                            result_idx += 1;
+                        }
+                    }
+                }
+
+                // Concat arguments (simplified - doesn't flatten arrays)
+                for arg in args {
+                    let mut borrowed = result_array.borrow_mut();
+                    if let Some(gc_obj) = borrowed.downcast_mut::<Box<dyn Any>>() {
+                        if let Some(gc_object) = gc_obj.downcast_mut::<GCObject>() {
+                            gc_object.set(result_idx.to_string(), arg);
+                            result_idx += 1;
+                        }
+                    }
+                }
+
+                {
+                    let mut borrowed = result_array.borrow_mut();
+                    if let Some(gc_obj) = borrowed.downcast_mut::<Box<dyn Any>>() {
+                        if let Some(gc_object) = gc_obj.downcast_mut::<GCObject>() {
+                            gc_object.set("length".to_string(), Value::Smi(result_idx as i32));
+                        }
+                    }
+                }
+
+                Ok(Value::NativeObject(result_array))
+            }
+
+            "Array.prototype.join" => {
+                let separator = match args.first() {
+                    Some(Value::String(s)) => s.clone(),
+                    Some(v) => self.to_string_value(v),
+                    None => ",".to_string(),
+                };
+
+                let mut parts = Vec::with_capacity(array_len);
+                for i in 0..array_len {
+                    let element = {
+                        let borrowed = array_ref.borrow();
+                        if let Some(gc_obj) = borrowed.downcast_ref::<Box<dyn Any>>() {
+                            if let Some(gc_object) = gc_obj.downcast_ref::<GCObject>() {
+                                gc_object.get(&i.to_string())
+                            } else {
+                                Value::Undefined
+                            }
+                        } else {
+                            Value::Undefined
+                        }
+                    };
+
+                    match element {
+                        Value::Undefined | Value::Null => parts.push(String::new()),
+                        _ => parts.push(self.to_string_value(&element)),
+                    }
+                }
+
+                Ok(Value::String(parts.join(&separator)))
+            }
+
+            "Array.prototype.reverse" => {
+                // Reverse in place
+                {
+                    let mut borrowed = array_ref.borrow_mut();
+                    if let Some(gc_obj) = borrowed.downcast_mut::<Box<dyn Any>>() {
+                        if let Some(gc_object) = gc_obj.downcast_mut::<GCObject>() {
+                            let half = array_len / 2;
+                            for i in 0..half {
+                                let j = array_len - 1 - i;
+                                let elem_i = gc_object.get(&i.to_string());
+                                let elem_j = gc_object.get(&j.to_string());
+                                gc_object.set(i.to_string(), elem_j);
+                                gc_object.set(j.to_string(), elem_i);
+                            }
+                        }
+                    }
+                }
+
+                Ok(receiver)
+            }
+
+            "Array.prototype.splice" | "Array.prototype.sort" => {
+                // These are more complex - return error for now
+                Err(JsError {
+                    kind: ErrorKind::TypeError,
+                    message: format!("{} is not fully implemented yet", name),
+                    stack: vec![],
+                    source_position: None,
+                })
+            }
+
+            _ => Err(JsError {
+                kind: ErrorKind::TypeError,
+                message: format!("Unknown array method: {}", name),
                 stack: vec![],
                 source_position: None,
             }),
