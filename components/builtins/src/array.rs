@@ -1,6 +1,61 @@
-//! Array.prototype methods
+//! Array.prototype methods and static methods
 
 use crate::value::{JsError, JsResult, JsValue};
+
+/// Array static methods
+pub struct Array;
+
+impl Array {
+    /// Array.isArray(value) - Check if value is an array
+    pub fn is_array(value: &JsValue) -> bool {
+        value.is_array()
+    }
+
+    /// Array.of(...items) - Create array from arguments
+    pub fn of(items: Vec<JsValue>) -> JsValue {
+        JsValue::array_from(items)
+    }
+
+    /// Array.from(arrayLike, mapFn?, thisArg?) - Create array from array-like or iterable
+    /// Basic implementation: handles arrays and strings
+    pub fn from(array_like: &JsValue, map_fn: Option<fn(JsValue) -> JsResult<JsValue>>) -> JsResult<JsValue> {
+        match array_like {
+            JsValue::Array(array_data) => {
+                let data = array_data.borrow();
+                let mut result = Vec::new();
+
+                if let Some(mapper) = map_fn {
+                    for element in &data.elements {
+                        result.push(mapper(element.clone())?);
+                    }
+                } else {
+                    result = data.elements.clone();
+                }
+
+                Ok(JsValue::array_from(result))
+            }
+            JsValue::String(s) => {
+                let chars: Vec<JsValue> = s.chars()
+                    .map(|c| JsValue::string(c.to_string()))
+                    .collect();
+
+                if let Some(mapper) = map_fn {
+                    let mut result = Vec::new();
+                    for ch in chars {
+                        result.push(mapper(ch)?);
+                    }
+                    Ok(JsValue::array_from(result))
+                } else {
+                    Ok(JsValue::array_from(chars))
+                }
+            }
+            _ => {
+                // For non-array-like values, return empty array
+                Ok(JsValue::array())
+            }
+        }
+    }
+}
 
 /// Array.prototype methods
 pub struct ArrayPrototype;

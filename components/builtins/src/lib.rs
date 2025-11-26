@@ -57,7 +57,7 @@ pub mod value;
 pub mod weakref;
 
 // Re-export main types for convenience
-pub use array::ArrayPrototype;
+pub use array::{Array, ArrayPrototype};
 pub use async_generator::{
     AsyncGeneratorFunction, AsyncGeneratorObject, AsyncGeneratorPromise, AsyncGeneratorState,
     AsyncIteratorHelper,

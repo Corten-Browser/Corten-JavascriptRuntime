@@ -4,7 +4,7 @@
 
 use async_runtime::PromiseState;
 use bytecode_system::{BytecodeChunk, Opcode, UpvalueDescriptor};
-use builtins::{ConsoleObject, JSONObject, JsValue as BuiltinValue, MathObject, NumberObject};
+use builtins::{Array, ConsoleObject, JSONObject, JsValue as BuiltinValue, MathObject, NumberObject};
 use core_types::{ErrorKind, JsError, Value};
 use std::any::Any;
 use std::cell::RefCell;
@@ -138,6 +138,12 @@ impl Dispatcher {
         globals.insert(
             "Number".to_string(),
             Value::NativeFunction("Number".to_string()),
+        );
+
+        // Inject Object constructor
+        globals.insert(
+            "Object".to_string(),
+            Value::NativeFunction("Object".to_string()),
         );
 
         // Inject global constants
@@ -473,6 +479,18 @@ impl Dispatcher {
                     let result = self.greater_than_equal(a, b);
                     self.stack.push(result);
                 }
+                Opcode::Instanceof => {
+                    let constructor = self.stack.pop().unwrap_or(Value::Undefined);
+                    let obj = self.stack.pop().unwrap_or(Value::Undefined);
+                    let result = self.instanceof_check(obj, constructor);
+                    self.stack.push(result);
+                }
+                Opcode::In => {
+                    let obj = self.stack.pop().unwrap_or(Value::Undefined);
+                    let prop = self.stack.pop().unwrap_or(Value::Undefined);
+                    let result = self.in_check(prop, obj);
+                    self.stack.push(result);
+                }
                 Opcode::Jump(target) => {
                     ctx.instruction_pointer = target;
                 }
@@ -674,6 +692,24 @@ impl Dispatcher {
                                     "parseFloat" => self.stack.push(Value::NativeFunction("Number.parseFloat".to_string())),
                                     _ => self.stack.push(Value::Undefined),
                                 }
+                            } else if fn_name == "Array" {
+                                // Handle Array constructor properties
+                                match name.as_str() {
+                                    "isArray" => self.stack.push(Value::NativeFunction("Array.isArray".to_string())),
+                                    "of" => self.stack.push(Value::NativeFunction("Array.of".to_string())),
+                                    "from" => self.stack.push(Value::NativeFunction("Array.from".to_string())),
+                                    _ => self.stack.push(Value::Undefined),
+                                }
+                            } else if fn_name == "Object" {
+                                // Handle Object constructor properties
+                                match name.as_str() {
+                                    "keys" => self.stack.push(Value::NativeFunction("Object.keys".to_string())),
+                                    "values" => self.stack.push(Value::NativeFunction("Object.values".to_string())),
+                                    "entries" => self.stack.push(Value::NativeFunction("Object.entries".to_string())),
+                                    "assign" => self.stack.push(Value::NativeFunction("Object.assign".to_string())),
+                                    _ => self.stack.push(Value::Undefined),
+                                }
+
                             } else {
                                 self.stack.push(Value::Undefined);
                             }
@@ -1309,6 +1345,259 @@ impl Dispatcher {
                 Ok(Value::Double(NumberObject::parse_float(&s)))
             }
             // Error constructors
+            // Array static methods
+            "Array.isArray" => {
+                if let Some(value) = args.first() {
+                    // Check if the value is a heap object with a "length" property (array)
+                    let is_array = if let Value::HeapObject(obj_id) = value {
+                        if let Some(ref heap) = self.heap {
+                            let gc_obj = heap.get_object(*obj_id);
+                            matches!(gc_obj.get("length"), Value::Smi(_))
+                        } else {
+                            false
+                        }
+                    } else {
+                        false
+                    };
+                    Ok(Value::Boolean(is_array))
+                } else {
+                    Ok(Value::Boolean(false))
+                }
+            }
+            "Array.of" => {
+                // Create array from arguments
+                if let Some(ref heap) = self.heap {
+                    let gc_object = heap.create_object();
+
+                    // Store all arguments as array elements
+                    for (i, arg) in args.iter().enumerate() {
+                        gc_object.set(i.to_string(), arg.clone());
+                    }
+
+                    // Set length property
+                    gc_object.set("length".to_string(), Value::Smi(args.len() as i32));
+
+                    // Get object ID and return as HeapObject
+                    let obj_id = heap.allocate(gc_object);
+                    Ok(Value::HeapObject(obj_id))
+                } else {
+                    Ok(Value::Undefined)
+                }
+            }
+            "Array.from" => {
+                // Array.from(arrayLike, mapFn?, thisArg?)
+                // Basic implementation: handle arrays and strings
+                if let Some(array_like) = args.first() {
+                    if let Some(ref heap) = self.heap {
+                        let gc_object = heap.create_object();
+                        let mut elements = Vec::new();
+
+                        match array_like {
+                            Value::HeapObject(obj_id) => {
+                                // Try to get length property
+                                let source_obj = heap.get_object(*obj_id);
+                                if let Value::Smi(len) = source_obj.get("length") {
+                                    // It's an array-like object
+                                    for i in 0..len {
+                                        let elem = source_obj.get(i.to_string());
+                                        elements.push(elem);
+                                    }
+                                }
+                            }
+                            Value::HeapObject(_) => {
+                                // Handle string as HeapObject if applicable
+                                // For now, just create empty array
+                            }
+                            _ => {
+                                // For other types, create empty array
+                            }
+                        }
+
+                        // Create new array with elements
+                        for (i, elem) in elements.iter().enumerate() {
+                            gc_object.set(i.to_string(), elem.clone());
+                        }
+
+                        gc_object.set("length".to_string(), Value::Smi(elements.len() as i32));
+
+                        let obj_id = heap.allocate(gc_object);
+                        Ok(Value::HeapObject(obj_id))
+                    } else {
+                        Ok(Value::Undefined)
+                    }
+                } else {
+                    Ok(Value::Undefined)
+                }
+            }
+            // Object static methods
+            "Object.keys" => {
+                if let Some(value) = args.first() {
+                    match value {
+                        Value::NativeObject(obj_ref) => {
+                            let borrowed = obj_ref.borrow();
+                            if let Some(gc_obj) = borrowed.downcast_ref::<Box<dyn Any>>() {
+                                if let Some(gc_object) = gc_obj.downcast_ref::<GCObject>() {
+                                    // Get all keys from the object
+                                    let keys = gc_object.keys();
+                                    drop(borrowed);
+                                    
+                                    // Create an array with the keys
+                                    if let Some(ref heap) = self.heap {
+                                        let result_obj = heap.create_object();
+                                        for (i, key) in keys.iter().enumerate() {
+                                            result_obj.set(i.to_string(), Value::String(key.clone()));
+                                        }
+                                        result_obj.set("length".to_string(), Value::Smi(keys.len() as i32));
+                                        
+                                        let obj_id = heap.allocate(result_obj);
+                                        return Ok(Value::HeapObject(obj_id));
+                                    }
+                                }
+                            }
+                            Ok(Value::HeapObject(0)) // Empty array fallback
+                        }
+                        _ => Ok(Value::HeapObject(0)) // Empty array for non-objects
+                    }
+                } else {
+                    Err(JsError {
+                        kind: ErrorKind::TypeError,
+                        message: "Object.keys requires an argument".to_string(),
+                        stack: vec![],
+                        source_position: None,
+                    })
+                }
+            }
+            "Object.values" => {
+                if let Some(value) = args.first() {
+                    match value {
+                        Value::NativeObject(obj_ref) => {
+                            let borrowed = obj_ref.borrow();
+                            if let Some(gc_obj) = borrowed.downcast_ref::<Box<dyn Any>>() {
+                                if let Some(gc_object) = gc_obj.downcast_ref::<GCObject>() {
+                                    // Get all keys and values
+                                    let keys = gc_object.keys();
+                                    let values: Vec<Value> = keys.iter()
+                                        .map(|k| gc_object.get(k))
+                                        .collect();
+                                    drop(borrowed);
+                                    
+                                    // Create an array with the values
+                                    if let Some(ref heap) = self.heap {
+                                        let result_obj = heap.create_object();
+                                        for (i, val) in values.iter().enumerate() {
+                                            result_obj.set(i.to_string(), val.clone());
+                                        }
+                                        result_obj.set("length".to_string(), Value::Smi(values.len() as i32));
+                                        
+                                        let obj_id = heap.allocate(result_obj);
+                                        return Ok(Value::HeapObject(obj_id));
+                                    }
+                                }
+                            }
+                            Ok(Value::HeapObject(0)) // Empty array fallback
+                        }
+                        _ => Ok(Value::HeapObject(0)) // Empty array for non-objects
+                    }
+                } else {
+                    Err(JsError {
+                        kind: ErrorKind::TypeError,
+                        message: "Object.values requires an argument".to_string(),
+                        stack: vec![],
+                        source_position: None,
+                    })
+                }
+            }
+            "Object.entries" => {
+                if let Some(value) = args.first() {
+                    match value {
+                        Value::NativeObject(obj_ref) => {
+                            let borrowed = obj_ref.borrow();
+                            if let Some(gc_obj) = borrowed.downcast_ref::<Box<dyn Any>>() {
+                                if let Some(gc_object) = gc_obj.downcast_ref::<GCObject>() {
+                                    // Get all keys and create [key, value] pairs
+                                    let keys = gc_object.keys();
+                                    let entries: Vec<(String, Value)> = keys.iter()
+                                        .map(|k| (k.clone(), gc_object.get(k)))
+                                        .collect();
+                                    drop(borrowed);
+                                    
+                                    // Create an array with [key, value] pairs
+                                    if let Some(ref heap) = self.heap {
+                                        let result_obj = heap.create_object();
+                                        for (i, (key, val)) in entries.iter().enumerate() {
+                                            // Create inner array for [key, value]
+                                            let pair_obj = heap.create_object();
+                                            pair_obj.set("0".to_string(), Value::String(key.clone()));
+                                            pair_obj.set("1".to_string(), val.clone());
+                                            pair_obj.set("length".to_string(), Value::Smi(2));
+                                            
+                                            let pair_id = heap.allocate(pair_obj);
+                                            result_obj.set(i.to_string(), Value::HeapObject(pair_id));
+                                        }
+                                        result_obj.set("length".to_string(), Value::Smi(entries.len() as i32));
+                                        
+                                        let obj_id = heap.allocate(result_obj);
+                                        return Ok(Value::HeapObject(obj_id));
+                                    }
+                                }
+                            }
+                            Ok(Value::HeapObject(0)) // Empty array fallback
+                        }
+                        _ => Ok(Value::HeapObject(0)) // Empty array for non-objects
+                    }
+                } else {
+                    Err(JsError {
+                        kind: ErrorKind::TypeError,
+                        message: "Object.entries requires an argument".to_string(),
+                        stack: vec![],
+                        source_position: None,
+                    })
+                }
+            }
+            "Object.assign" => {
+                // Object.assign(target, ...sources)
+                if args.is_empty() {
+                    return Err(JsError {
+                        kind: ErrorKind::TypeError,
+                        message: "Object.assign requires at least one argument".to_string(),
+                        stack: vec![],
+                        source_position: None,
+                    });
+                }
+                
+                let target = args[0].clone();
+                
+                // Copy properties from all sources to target
+                if let Value::NativeObject(target_ref) = &target {
+                    for source_val in args.iter().skip(1) {
+                        if let Value::NativeObject(source_ref) = source_val {
+                            let source_borrowed = source_ref.borrow();
+                            if let Some(source_gc_obj) = source_borrowed.downcast_ref::<Box<dyn Any>>() {
+                                if let Some(source_gc_object) = source_gc_obj.downcast_ref::<GCObject>() {
+                                    // Get all keys from source
+                                    let keys = source_gc_object.keys();
+                                    let key_value_pairs: Vec<(String, Value)> = keys.iter()
+                                        .map(|k| (k.clone(), source_gc_object.get(k)))
+                                        .collect();
+                                    drop(source_borrowed);
+                                    
+                                    // Copy to target
+                                    let mut target_borrowed = target_ref.borrow_mut();
+                                    if let Some(target_gc_obj) = target_borrowed.downcast_mut::<Box<dyn Any>>() {
+                                        if let Some(target_gc_object) = target_gc_obj.downcast_mut::<GCObject>() {
+                                            for (key, value) in key_value_pairs {
+                                                target_gc_object.set(key, value);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                
+                Ok(target)
+            }
             "Error" => self.create_error_object("Error", args),
             "TypeError" => self.create_error_object("TypeError", args),
             "ReferenceError" => self.create_error_object("ReferenceError", args),
@@ -2710,7 +2999,12 @@ impl Dispatcher {
             (Value::Double(x), Value::Double(y)) => Ok(Value::Double(*x + *y)),
             (Value::Smi(x), Value::Double(y)) => Ok(Value::Double(*x as f64 + *y)),
             (Value::Double(x), Value::Smi(y)) => Ok(Value::Double(*x + *y as f64)),
-            _ => Ok(Value::Double(f64::NAN)),
+            // Type coercion for other types (null, undefined, boolean, etc.)
+            _ => {
+                let a_num = self.to_number(&a);
+                let b_num = self.to_number(&b);
+                Ok(Value::Double(a_num + b_num))
+            }
         }
     }
 
@@ -2754,7 +3048,12 @@ impl Dispatcher {
             (Value::Double(x), Value::Double(y)) => Ok(Value::Double(x - y)),
             (Value::Smi(x), Value::Double(y)) => Ok(Value::Double(x as f64 - y)),
             (Value::Double(x), Value::Smi(y)) => Ok(Value::Double(x - y as f64)),
-            _ => Ok(Value::Double(f64::NAN)),
+            // Type coercion for other types (null, undefined, boolean, etc.)
+            (a, b) => {
+                let a_num = self.to_number(&a);
+                let b_num = self.to_number(&b);
+                Ok(Value::Double(a_num - b_num))
+            }
         }
     }
 
@@ -2764,7 +3063,12 @@ impl Dispatcher {
             (Value::Double(x), Value::Double(y)) => Ok(Value::Double(x * y)),
             (Value::Smi(x), Value::Double(y)) => Ok(Value::Double(x as f64 * y)),
             (Value::Double(x), Value::Smi(y)) => Ok(Value::Double(x * y as f64)),
-            _ => Ok(Value::Double(f64::NAN)),
+            // Type coercion for other types (null, undefined, boolean, etc.)
+            (a, b) => {
+                let a_num = self.to_number(&a);
+                let b_num = self.to_number(&b);
+                Ok(Value::Double(a_num * b_num))
+            }
         }
     }
 
@@ -2881,6 +3185,73 @@ impl Dispatcher {
         let a_num = self.to_number(&a);
         let b_num = self.to_number(&b);
         Value::Boolean(a_num >= b_num)
+    }
+
+    fn instanceof_check(&self, obj: Value, constructor: Value) -> Value {
+        // Basic instanceof implementation for Test262 compliance
+        // In JavaScript: obj instanceof Constructor
+        // Returns true if Constructor.prototype is in obj's prototype chain
+
+        match (&obj, &constructor) {
+            // Primitives are not instances of constructors
+            (Value::Undefined, _) | (Value::Null, _) => Value::Boolean(false),
+            (Value::Boolean(_), _) | (Value::Smi(_), _) | (Value::Double(_), _) => {
+                Value::Boolean(false)
+            }
+
+            // Check if constructor is actually a constructor
+            (_, Value::NativeFunction(name)) => {
+                // For native constructors, check object properties
+                // This is a simplified check - full implementation would check prototype chain
+                match name.as_str() {
+                    "Error" | "TypeError" | "ReferenceError" | "RangeError" |
+                    "SyntaxError" | "URIError" | "EvalError" => {
+                        // Check if obj is an error object
+                        // For now, return false - would need to check object's constructor property
+                        Value::Boolean(false)
+                    }
+                    "Array" => {
+                        // Check if obj is an array
+                        Value::Boolean(false)
+                    }
+                    "Object" => {
+                        // All objects are instances of Object
+                        Value::Boolean(matches!(obj, Value::HeapObject(_) | Value::NativeObject(_)))
+                    }
+                    "Function" => {
+                        // Check if obj is a function
+                        Value::Boolean(matches!(obj, Value::NativeFunction(_)))
+                    }
+                    _ => Value::Boolean(false),
+                }
+            }
+
+            // HeapObject instanceof constructor would need prototype chain walking
+            (Value::HeapObject(_), _) | (Value::NativeObject(_), _) => {
+                // TODO: Implement prototype chain walking
+                // For now, return false
+                Value::Boolean(false)
+            }
+
+            _ => Value::Boolean(false),
+        }
+    }
+
+    fn in_check(&self, _prop: Value, obj: Value) -> Value {
+        // Basic 'in' operator implementation
+        // Returns true if property exists in object or its prototype chain
+
+        match obj {
+            Value::HeapObject(_) | Value::NativeObject(_) => {
+                // TODO: Check if property exists in object
+                // For now, return false
+                Value::Boolean(false)
+            }
+            _ => {
+                // Non-objects don't have properties
+                Value::Boolean(false)
+            }
+        }
     }
 }
 
