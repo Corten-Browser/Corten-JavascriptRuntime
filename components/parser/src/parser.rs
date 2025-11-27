@@ -317,12 +317,40 @@ impl<'a> Parser<'a> {
                     value: Pattern::RestElement(Box::new(pattern)),
                     shorthand: false,
                 });
+            } else if self.check_punctuator(Punctuator::LBracket)? {
+                // Computed property key: { [expr]: pattern }
+                self.lexer.next_token()?;
+                let _key_expr = self.parse_assignment_expression()?;
+                self.expect_punctuator(Punctuator::RBracket)?;
+                self.expect_punctuator(Punctuator::Colon)?;
+                let value = self.parse_pattern()?;
+
+                // Check for default value
+                let final_value = if self.check_punctuator(Punctuator::Assign)? {
+                    self.lexer.next_token()?;
+                    let default_value = self.parse_assignment_expression()?;
+                    Pattern::AssignmentPattern {
+                        left: Box::new(value),
+                        right: Box::new(default_value),
+                    }
+                } else {
+                    value
+                };
+
+                // For computed keys, use special marker (could be improved)
+                properties.push(ObjectPatternProperty {
+                    key: "[computed]".to_string(),
+                    value: final_value,
+                    shorthand: false,
+                });
             } else {
-                let key = self.expect_identifier()?;
+                // Regular key: identifier, string, or number
+                let key = self.expect_property_name()?;
                 let (value, shorthand) = if self.check_punctuator(Punctuator::Colon)? {
                     self.lexer.next_token()?;
                     (self.parse_pattern()?, false)
                 } else {
+                    // Shorthand only valid for identifiers
                     (Pattern::Identifier(key.clone()), true)
                 };
 
