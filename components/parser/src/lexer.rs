@@ -332,7 +332,7 @@ impl<'a> Lexer<'a> {
         // Record the line before skipping whitespace
         let line_before = self.line;
 
-        self.skip_whitespace_and_comments();
+        self.skip_whitespace_and_comments()?;
 
         // Check if we crossed a line boundary (for ASI)
         self.line_terminator_before_token = self.line > line_before;
@@ -1062,7 +1062,7 @@ impl<'a> Lexer<'a> {
         })
     }
 
-    fn skip_whitespace_and_comments(&mut self) {
+    fn skip_whitespace_and_comments(&mut self) -> Result<(), JsError> {
         while !self.is_at_end() {
             match self.peek() {
                 // ECMAScript WhiteSpace: TAB, VT, FF, SP, NBSP, ZWNBSP (BOM), and other Zs category
@@ -1096,12 +1096,16 @@ impl<'a> Lexer<'a> {
                         }
                     } else if self.peek_next() == Some('*') {
                         // Block comment
+                        let comment_start_line = self.line;
+                        let comment_start_col = self.column;
                         self.advance(); // /
                         self.advance(); // *
+                        let mut found_end = false;
                         while !self.is_at_end() {
                             if self.peek() == '*' && self.peek_next() == Some('/') {
                                 self.advance(); // *
                                 self.advance(); // /
+                                found_end = true;
                                 break;
                             }
                             // Track all line terminators: LF, CR, LS (U+2028), PS (U+2029)
@@ -1121,6 +1125,18 @@ impl<'a> Lexer<'a> {
                             }
                             self.advance();
                         }
+                        if !found_end {
+                            return Err(JsError {
+                                kind: ErrorKind::SyntaxError,
+                                message: "Unterminated multi-line comment".to_string(),
+                                stack: vec![],
+                                source_position: Some(SourcePosition {
+                                    line: comment_start_line,
+                                    column: comment_start_col,
+                                    offset: 0,
+                                }),
+                            });
+                        }
                     } else {
                         break;
                     }
@@ -1128,6 +1144,7 @@ impl<'a> Lexer<'a> {
                 _ => break,
             }
         }
+        Ok(())
     }
 
     fn is_at_end(&self) -> bool {

@@ -44,6 +44,8 @@ pub struct Parser<'a> {
     in_class_method: bool,
     /// Track if we're inside a class constructor (allows super())
     in_constructor: bool,
+    /// Track if we're inside any method (class or object literal - allows super.property)
+    in_method: bool,
 }
 
 impl<'a> Parser<'a> {
@@ -60,6 +62,7 @@ impl<'a> Parser<'a> {
             in_async: false,
             in_class_method: false,
             in_constructor: false,
+            in_method: false,
         }
     }
 
@@ -852,12 +855,72 @@ impl<'a> Parser<'a> {
         self.expect_punctuator(Punctuator::LBrace)?;
         let mut statements = Vec::new();
 
+        // Check for directive prologue at the start of function body
+        let prev_strict = self.strict_mode;
+        self.check_function_directive_prologue()?;
+
         while !self.check_punctuator(Punctuator::RBrace)? {
             statements.push(self.parse_statement()?);
         }
 
         self.expect_punctuator(Punctuator::RBrace)?;
+
+        // Restore strict mode after function body
+        self.strict_mode = prev_strict;
+
         Ok(statements)
+    }
+
+    /// Check for directive prologue in function body
+    fn check_function_directive_prologue(&mut self) -> Result<(), JsError> {
+        // Look for string literal expression statements at the start
+        while !self.check_punctuator(Punctuator::RBrace)? {
+            let token = self.lexer.peek_token()?.clone();
+
+            // Check if it's a string literal that could be a directive
+            if let Token::String(ref s) = token {
+                let is_use_strict = s == "use strict";
+
+                // Peek ahead to see if this is a statement (followed by ; or newline)
+                // Save position for potential rollback
+                let saved_pos = self.lexer.position;
+                let saved_line = self.lexer.line;
+                let saved_column = self.lexer.column;
+                let saved_line_term = self.lexer.line_terminator_before_token;
+                let saved_token = self.lexer.current_token.clone();
+
+                self.lexer.next_token()?; // consume string
+
+                // Check if it's a directive (ends with semicolon or has ASI)
+                let is_directive = self.check_punctuator(Punctuator::Semicolon)?
+                    || self.check_punctuator(Punctuator::RBrace)?
+                    || self.lexer.line_terminator_before_token;
+
+                // Restore position - we'll parse normally
+                self.lexer.position = saved_pos;
+                self.lexer.line = saved_line;
+                self.lexer.column = saved_column;
+                self.lexer.line_terminator_before_token = saved_line_term;
+                self.lexer.current_token = saved_token;
+
+                if is_directive && is_use_strict {
+                    self.strict_mode = true;
+                }
+
+                if !is_directive {
+                    // Not a directive, stop looking
+                    break;
+                }
+
+                // Parse the directive as a normal statement and continue checking
+                // Actually, let the main loop handle it - just break after setting strict mode
+                break;
+            } else {
+                // No more potential directives
+                break;
+            }
+        }
+        Ok(())
     }
 
     /// Parse function body with async/generator context tracking
@@ -876,6 +939,40 @@ impl<'a> Parser<'a> {
 
         self.in_async = prev_async;
         self.in_generator = prev_generator;
+
+        Ok(body)
+    }
+
+    /// Parse method body (sets in_method flag for super access)
+    fn parse_method_body(&mut self) -> Result<Vec<Statement>, JsError> {
+        let prev_method = self.in_method;
+        self.in_method = true;
+
+        let body = self.parse_function_body()?;
+
+        self.in_method = prev_method;
+        Ok(body)
+    }
+
+    /// Parse method body with async/generator context tracking
+    fn parse_method_body_with_context(
+        &mut self,
+        is_async: bool,
+        is_generator: bool,
+    ) -> Result<Vec<Statement>, JsError> {
+        let prev_async = self.in_async;
+        let prev_generator = self.in_generator;
+        let prev_method = self.in_method;
+
+        self.in_async = is_async;
+        self.in_generator = is_generator;
+        self.in_method = true;
+
+        let body = self.parse_function_body()?;
+
+        self.in_async = prev_async;
+        self.in_generator = prev_generator;
+        self.in_method = prev_method;
 
         Ok(body)
     }
@@ -1363,13 +1460,201 @@ impl<'a> Parser<'a> {
     fn parse_block_body(&mut self) -> Result<Vec<Statement>, JsError> {
         self.expect_punctuator(Punctuator::LBrace)?;
         let mut statements = Vec::new();
+        let mut lexical_names: std::collections::HashSet<String> = std::collections::HashSet::new();
 
+        // First pass: parse all statements and collect lexical names (but not var names yet)
         while !self.check_punctuator(Punctuator::RBrace)? {
-            statements.push(self.parse_statement()?);
+            let stmt = self.parse_statement()?;
+
+            // Check for duplicate lexical declarations (let/const/function/class at this level)
+            Self::check_lexical_declaration(&stmt, &mut lexical_names, &self.last_position)?;
+
+            statements.push(stmt);
         }
 
         self.expect_punctuator(Punctuator::RBrace)?;
+
+        // Second pass: collect ALL var names (including from nested blocks) and check against lexical names
+        let mut var_names: std::collections::HashSet<String> = std::collections::HashSet::new();
+        Self::collect_var_declared_names(&statements, &mut var_names);
+
+        // Check var names against lexical names
+        for var_name in &var_names {
+            if lexical_names.contains(var_name) {
+                return Err(syntax_error(
+                    &format!("Identifier '{}' has already been declared", var_name),
+                    None,
+                ));
+            }
+        }
+
         Ok(statements)
+    }
+
+    /// Check a statement for lexical declarations and detect duplicates
+    fn check_lexical_declaration(
+        stmt: &Statement,
+        lexical_names: &mut std::collections::HashSet<String>,
+        position: &Option<core_types::SourcePosition>,
+    ) -> Result<(), JsError> {
+        match stmt {
+            // const and let declarations
+            Statement::VariableDeclaration { kind, declarations, .. } => {
+                if matches!(kind, crate::ast::VariableKind::Let | crate::ast::VariableKind::Const) {
+                    for decl in declarations {
+                        let mut names = Vec::new();
+                        Self::collect_bound_names(&decl.id, &mut names);
+                        for name in names {
+                            // Check against existing lexical names
+                            if lexical_names.contains(&name) {
+                                return Err(syntax_error(
+                                    &format!("Identifier '{}' has already been declared", name),
+                                    position.clone(),
+                                ));
+                            }
+                            lexical_names.insert(name);
+                        }
+                    }
+                }
+            }
+            // Function declarations are lexically scoped in blocks
+            Statement::FunctionDeclaration { name, .. } => {
+                if lexical_names.contains(name) {
+                    return Err(syntax_error(
+                        &format!("Identifier '{}' has already been declared", name),
+                        position.clone(),
+                    ));
+                }
+                lexical_names.insert(name.clone());
+            }
+            // Class declarations
+            Statement::ClassDeclaration { name, .. } => {
+                if lexical_names.contains(name) {
+                    return Err(syntax_error(
+                        &format!("Identifier '{}' has already been declared", name),
+                        position.clone(),
+                    ));
+                }
+                lexical_names.insert(name.clone());
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    /// Recursively collect VarDeclaredNames from statements (including nested blocks)
+    fn collect_var_declared_names(statements: &[Statement], var_names: &mut std::collections::HashSet<String>) {
+        for stmt in statements {
+            Self::collect_var_declared_names_stmt(stmt, var_names);
+        }
+    }
+
+    /// Collect VarDeclaredNames from a single statement (including nested blocks)
+    fn collect_var_declared_names_stmt(stmt: &Statement, var_names: &mut std::collections::HashSet<String>) {
+        match stmt {
+            // Var declarations contribute their names
+            Statement::VariableDeclaration { kind, declarations, .. } => {
+                if matches!(kind, crate::ast::VariableKind::Var) {
+                    for decl in declarations {
+                        let mut names = Vec::new();
+                        Self::collect_bound_names(&decl.id, &mut names);
+                        for name in names {
+                            var_names.insert(name);
+                        }
+                    }
+                }
+            }
+            // Block statements - var names from inside hoist out
+            Statement::BlockStatement { body, .. } => {
+                Self::collect_var_declared_names(body, var_names);
+            }
+            // If statements - check both branches
+            Statement::IfStatement { consequent, alternate, .. } => {
+                Self::collect_var_declared_names_stmt(consequent, var_names);
+                if let Some(alt) = alternate {
+                    Self::collect_var_declared_names_stmt(alt, var_names);
+                }
+            }
+            // While/DoWhile - check body
+            Statement::WhileStatement { body, .. } => {
+                Self::collect_var_declared_names_stmt(body, var_names);
+            }
+            Statement::DoWhileStatement { body, .. } => {
+                Self::collect_var_declared_names_stmt(body, var_names);
+            }
+            // For statement - check init and body
+            Statement::ForStatement { init, body, .. } => {
+                if let Some(init_val) = init {
+                    Self::collect_var_declared_names_forinit(init_val, var_names);
+                }
+                Self::collect_var_declared_names_stmt(body, var_names);
+            }
+            // ForIn/ForOf - check left and body
+            Statement::ForInStatement { left, body, .. } => {
+                Self::collect_var_declared_names_forinof_left(left, var_names);
+                Self::collect_var_declared_names_stmt(body, var_names);
+            }
+            Statement::ForOfStatement { left, body, .. } => {
+                Self::collect_var_declared_names_forinof_left(left, var_names);
+                Self::collect_var_declared_names_stmt(body, var_names);
+            }
+            // Switch - check all case bodies
+            Statement::SwitchStatement { cases, .. } => {
+                for case in cases {
+                    Self::collect_var_declared_names(&case.consequent, var_names);
+                }
+            }
+            // Try - check all parts
+            Statement::TryStatement { block, handler, finalizer, .. } => {
+                Self::collect_var_declared_names(block, var_names);
+                if let Some(h) = handler {
+                    Self::collect_var_declared_names(&h.body, var_names);
+                }
+                if let Some(f) = finalizer {
+                    Self::collect_var_declared_names(f, var_names);
+                }
+            }
+            // With - check body
+            Statement::WithStatement { body, .. } => {
+                Self::collect_var_declared_names_stmt(body, var_names);
+            }
+            // Labeled - check body
+            Statement::LabeledStatement { body, .. } => {
+                Self::collect_var_declared_names_stmt(body, var_names);
+            }
+            // Function declarations do NOT contribute var names (they're lexical in blocks)
+            // NOTE: In function body context (not block), function declarations ARE var-scoped
+            // But this function is for block-level VarDeclaredNames collection
+            _ => {}
+        }
+    }
+
+    /// Collect VarDeclaredNames from ForInOfLeft
+    fn collect_var_declared_names_forinof_left(left: &crate::ast::ForInOfLeft, var_names: &mut std::collections::HashSet<String>) {
+        if let crate::ast::ForInOfLeft::VariableDeclaration { kind, id } = left {
+            if matches!(kind, crate::ast::VariableKind::Var) {
+                let mut names = Vec::new();
+                Self::collect_bound_names(id, &mut names);
+                for name in names {
+                    var_names.insert(name);
+                }
+            }
+        }
+    }
+
+    /// Collect VarDeclaredNames from ForInit
+    fn collect_var_declared_names_forinit(init: &crate::ast::ForInit, var_names: &mut std::collections::HashSet<String>) {
+        if let crate::ast::ForInit::VariableDeclaration { kind, declarations } = init {
+            if matches!(kind, crate::ast::VariableKind::Var) {
+                for decl in declarations {
+                    let mut names = Vec::new();
+                    Self::collect_bound_names(&decl.id, &mut names);
+                    for name in names {
+                        var_names.insert(name);
+                    }
+                }
+            }
+        }
     }
 
     fn parse_expression_statement(&mut self) -> Result<Statement, JsError> {
@@ -1487,6 +1772,16 @@ impl<'a> Parser<'a> {
             Expression::CallExpression { .. } => {
                 // Call expressions are never valid assignment targets
                 Err(syntax_error("Call expression cannot be assigned", None))
+            }
+            // Handle array destructuring: [a, b] = value
+            Expression::ArrayExpression { .. } => {
+                let pattern = self.expression_to_pattern(expr)?;
+                Ok(AssignmentTarget::Pattern(pattern))
+            }
+            // Handle object destructuring: {a, b} = value
+            Expression::ObjectExpression { .. } => {
+                let pattern = self.expression_to_pattern(expr)?;
+                Ok(AssignmentTarget::Pattern(pattern))
             }
             _ => Err(syntax_error("Invalid assignment target", None)),
         }
@@ -2169,8 +2464,8 @@ impl<'a> Parser<'a> {
             }
             Token::Keyword(Keyword::Super) => {
                 self.lexer.next_token()?;
-                // super is only valid inside class methods/constructors
-                if !self.in_class_method && !self.in_constructor {
+                // super is valid inside any method (class or object literal) or constructor
+                if !self.in_class_method && !self.in_constructor && !self.in_method {
                     return Err(syntax_error(
                         "'super' keyword is unexpected here",
                         self.last_position.clone(),
@@ -2504,22 +2799,47 @@ impl<'a> Parser<'a> {
             }
             // Handle array destructuring
             Expression::ArrayExpression { elements, .. } => {
-                let patterns: Result<Vec<Option<Pattern>>, _> = elements
-                    .into_iter()
-                    .map(|e| {
-                        match e {
-                            Some(crate::ast::ArrayElement::Expression(expr)) => {
-                                self.expression_to_pattern(expr).map(Some)
-                            }
-                            Some(crate::ast::ArrayElement::Spread(expr)) => {
-                                let inner = self.expression_to_pattern(expr)?;
-                                Ok(Some(Pattern::RestElement(Box::new(inner))))
-                            }
-                            None => Ok(None),
+                let mut patterns: Vec<Option<Pattern>> = Vec::new();
+                let mut seen_rest = false;
+
+                for (i, e) in elements.into_iter().enumerate() {
+                    if seen_rest {
+                        // Rest element must be last
+                        return Err(syntax_error(
+                            "Rest element must be last element",
+                            self.last_position.clone(),
+                        ));
+                    }
+
+                    match e {
+                        Some(crate::ast::ArrayElement::Expression(expr)) => {
+                            patterns.push(Some(self.expression_to_pattern(expr)?));
                         }
-                    })
-                    .collect();
-                Ok(Pattern::ArrayPattern(patterns?))
+                        Some(crate::ast::ArrayElement::Spread(expr)) => {
+                            // Check if the spread argument has an initializer (rest can't have default)
+                            if matches!(expr, Expression::AssignmentExpression { .. }) {
+                                return Err(syntax_error(
+                                    "Rest element may not have a default initializer",
+                                    self.last_position.clone(),
+                                ));
+                            }
+                            let inner = self.expression_to_pattern(expr)?;
+                            // Also check if the inner pattern is an AssignmentPattern
+                            if matches!(inner, Pattern::AssignmentPattern { .. }) {
+                                return Err(syntax_error(
+                                    "Rest element may not have a default initializer",
+                                    self.last_position.clone(),
+                                ));
+                            }
+                            patterns.push(Some(Pattern::RestElement(Box::new(inner))));
+                            seen_rest = true;
+                        }
+                        None => {
+                            patterns.push(None);
+                        }
+                    }
+                }
+                Ok(Pattern::ArrayPattern(patterns))
             }
             // Handle object destructuring
             Expression::ObjectExpression { properties, .. } => {
@@ -2655,7 +2975,7 @@ impl<'a> Parser<'a> {
                 };
 
                 let params = self.parse_parameters()?;
-                let body = self.parse_function_body_with_context(false, true)?;
+                let body = self.parse_method_body_with_context(false, true)?;
 
                 let func_name = match &key {
                     PropertyKey::Identifier(s) => Some(s.clone()),
@@ -2685,7 +3005,7 @@ impl<'a> Parser<'a> {
                 if self.check_punctuator(Punctuator::LParen)? {
                     // Computed method: [expr]() {}
                     let params = self.parse_parameters()?;
-                    let body = self.parse_function_body()?;
+                    let body = self.parse_method_body()?;
 
                     let func = Expression::FunctionExpression {
                         name: None,
@@ -2746,7 +3066,7 @@ impl<'a> Parser<'a> {
                 } else if self.check_punctuator(Punctuator::LParen)? {
                     // Method shorthand: { get() {} } - "get" is the method name
                     let params = self.parse_parameters()?;
-                    let body = self.parse_function_body()?;
+                    let body = self.parse_method_body()?;
 
                     let func = Expression::FunctionExpression {
                         name: Some("get".to_string()),
@@ -2778,7 +3098,7 @@ impl<'a> Parser<'a> {
                     };
                     self.expect_punctuator(Punctuator::LParen)?;
                     self.expect_punctuator(Punctuator::RParen)?;
-                    let body = self.parse_function_body()?;
+                    let body = self.parse_method_body()?;
 
                     let func_name = match &key {
                         PropertyKey::Identifier(s) => Some(s.clone()),
@@ -2832,7 +3152,7 @@ impl<'a> Parser<'a> {
                 } else if self.check_punctuator(Punctuator::LParen)? {
                     // Method shorthand: { set(v) {} } - "set" is the method name
                     let params = self.parse_parameters()?;
-                    let body = self.parse_function_body()?;
+                    let body = self.parse_method_body()?;
 
                     let func = Expression::FunctionExpression {
                         name: Some("set".to_string()),
@@ -2863,7 +3183,7 @@ impl<'a> Parser<'a> {
                         (PropertyKey::Identifier(key), false)
                     };
                     let params = self.parse_parameters()?;
-                    let body = self.parse_function_body()?;
+                    let body = self.parse_method_body()?;
 
                     let func_name = match &key {
                         PropertyKey::Identifier(s) => Some(s.clone()),
@@ -2922,7 +3242,7 @@ impl<'a> Parser<'a> {
 
                     let key = self.expect_identifier()?;
                     let params = self.parse_parameters()?;
-                    let body = self.parse_function_body_with_context(true, is_generator)?;
+                    let body = self.parse_method_body_with_context(true, is_generator)?;
 
                     let func = Expression::FunctionExpression {
                         name: Some(key.clone()),
@@ -2945,7 +3265,7 @@ impl<'a> Parser<'a> {
                 self.lexer.next_token()?;
                 let key = self.expect_identifier()?;
                 let params = self.parse_parameters()?;
-                let body = self.parse_function_body_with_context(false, true)?;
+                let body = self.parse_method_body_with_context(false, true)?;
 
                 let func = Expression::FunctionExpression {
                     name: Some(key.clone()),
@@ -2970,7 +3290,7 @@ impl<'a> Parser<'a> {
                 if self.check_punctuator(Punctuator::LParen)? {
                     // Method shorthand: name() {}
                     let params = self.parse_parameters()?;
-                    let body = self.parse_function_body()?;
+                    let body = self.parse_method_body()?;
 
                     let func = Expression::FunctionExpression {
                         name: Some(key.clone()),
@@ -2996,6 +3316,24 @@ impl<'a> Parser<'a> {
                         key: PropertyKey::Identifier(key),
                         value,
                         shorthand: false,
+                        computed: false,
+                    });
+                } else if self.check_punctuator(Punctuator::Assign)? {
+                    // CoverInitializedName: { key = defaultValue }
+                    // This is only valid when re-interpreted as a pattern
+                    self.lexer.next_token()?; // consume =
+                    let default_value = self.parse_assignment_expression()?;
+                    // Create an AssignmentExpression that will be converted to AssignmentPattern later
+                    let value = Expression::AssignmentExpression {
+                        left: AssignmentTarget::Identifier(key.clone()),
+                        operator: AssignmentOperator::Assign,
+                        right: Box::new(default_value),
+                        position: None,
+                    };
+                    properties.push(ObjectProperty::Property {
+                        key: PropertyKey::Identifier(key.clone()),
+                        value,
+                        shorthand: true,
                         computed: false,
                     });
                 } else {
@@ -3489,12 +3827,41 @@ impl<'a> Parser<'a> {
             ));
         }
 
-        // Function declarations are only allowed in non-strict mode
-        if matches!(token, Token::Keyword(Keyword::Function)) && self.strict_mode {
+        // Function declarations are not allowed in statement positions (ES6+)
+        // This includes both sync and async functions
+        if matches!(token, Token::Keyword(Keyword::Function)) {
             return Err(syntax_error(
-                "Function declaration cannot appear in a single-statement context in strict mode",
+                "Function declaration cannot appear in a single-statement context",
                 self.last_position.clone(),
             ));
+        }
+
+        // Async function declarations are also not allowed in statement positions
+        if matches!(token, Token::Keyword(Keyword::Async)) {
+            // Peek ahead to see if this is an async function declaration
+            let saved_pos = self.lexer.position;
+            let saved_line = self.lexer.line;
+            let saved_column = self.lexer.column;
+            let saved_line_term = self.lexer.line_terminator_before_token;
+
+            self.lexer.next_token()?;
+            let next = self.lexer.peek_token()?;
+            let is_async_function = matches!(next, Token::Keyword(Keyword::Function))
+                && !self.lexer.line_terminator_before_token;
+
+            // Restore position
+            self.lexer.position = saved_pos;
+            self.lexer.line = saved_line;
+            self.lexer.column = saved_column;
+            self.lexer.line_terminator_before_token = saved_line_term;
+            self.lexer.current_token = Some(token.clone());
+
+            if is_async_function {
+                return Err(syntax_error(
+                    "Async function declaration cannot appear in a single-statement context",
+                    self.last_position.clone(),
+                ));
+            }
         }
 
         // Parse the statement normally
