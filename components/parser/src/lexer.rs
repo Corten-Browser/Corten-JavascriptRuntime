@@ -1065,7 +1065,8 @@ impl<'a> Lexer<'a> {
     fn skip_whitespace_and_comments(&mut self) {
         while !self.is_at_end() {
             match self.peek() {
-                ' ' | '\t' => {
+                // ECMAScript WhiteSpace: TAB, VT, FF, SP, NBSP, ZWNBSP (BOM), and other Zs category
+                ' ' | '\t' | '\u{000B}' | '\u{000C}' | '\u{00A0}' | '\u{FEFF}' => {
                     self.advance();
                 }
                 '\n' | '\u{2028}' | '\u{2029}' => {
