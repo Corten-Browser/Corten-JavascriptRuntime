@@ -1470,6 +1470,23 @@ impl BytecodeGenerator {
                     self.visit_expression(expr)?;
                 }
             }
+
+            Expression::ClassExpression {
+                body,
+                super_class,
+                ..
+            } => {
+                // Visit superclass if present
+                if let Some(super_expr) = super_class {
+                    self.visit_expression(super_expr)?;
+                }
+                // Visit method bodies in the class
+                for element in body {
+                    if let crate::ast::ClassElement::MethodDefinition { value, .. } = element {
+                        self.visit_expression(value)?;
+                    }
+                }
+            }
         }
         Ok(())
     }

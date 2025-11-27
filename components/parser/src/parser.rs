@@ -36,6 +36,10 @@ pub struct Parser<'a> {
     loop_depth: usize,
     /// Track function depth for return validation
     function_depth: usize,
+    /// Track if we're inside a generator function (for yield expressions)
+    in_generator: bool,
+    /// Track if we're inside an async function (for await expressions)
+    in_async: bool,
 }
 
 impl<'a> Parser<'a> {
@@ -48,6 +52,8 @@ impl<'a> Parser<'a> {
             strict_mode: false,
             loop_depth: 0,
             function_depth: 0,
+            in_generator: false,
+            in_async: false,
         }
     }
 
@@ -419,7 +425,7 @@ impl<'a> Parser<'a> {
 
         let name = self.expect_identifier()?;
         let params = self.parse_parameters()?;
-        let body = self.parse_function_body()?;
+        let body = self.parse_function_body_with_context(false, is_generator)?;
 
         Ok(Statement::FunctionDeclaration {
             name,
@@ -445,7 +451,7 @@ impl<'a> Parser<'a> {
 
             let name = self.expect_identifier()?;
             let params = self.parse_parameters()?;
-            let body = self.parse_function_body()?;
+            let body = self.parse_function_body_with_context(true, is_generator)?;
 
             Ok(Statement::FunctionDeclaration {
                 name,
@@ -632,7 +638,7 @@ impl<'a> Parser<'a> {
             if self.check_punctuator(Punctuator::LParen)? {
                 // Method
                 let params = self.parse_parameters()?;
-                let body = self.parse_function_body()?;
+                let body = self.parse_function_body_with_context(is_async, is_generator)?;
 
                 elements.push(ClassElement::MethodDefinition {
                     key,
@@ -670,6 +676,33 @@ impl<'a> Parser<'a> {
 
         self.expect_punctuator(Punctuator::RBrace)?;
         Ok(elements)
+    }
+
+    fn parse_class_expression(&mut self) -> Result<Expression, JsError> {
+        self.expect_keyword(Keyword::Class)?;
+
+        // Name is optional for class expressions
+        let name = if let Token::Identifier(_, _) = self.lexer.peek_token()? {
+            Some(self.expect_identifier()?)
+        } else {
+            None
+        };
+
+        let super_class = if self.check_keyword(Keyword::Extends)? {
+            self.lexer.next_token()?;
+            Some(Box::new(self.parse_left_hand_side_expression()?))
+        } else {
+            None
+        };
+
+        let body = self.parse_class_body()?;
+
+        Ok(Expression::ClassExpression {
+            name,
+            super_class,
+            body,
+            position: None,
+        })
     }
 
     fn parse_parameters(&mut self) -> Result<Vec<Pattern>, JsError> {
@@ -729,6 +762,26 @@ impl<'a> Parser<'a> {
 
         self.expect_punctuator(Punctuator::RBrace)?;
         Ok(statements)
+    }
+
+    /// Parse function body with async/generator context tracking
+    fn parse_function_body_with_context(
+        &mut self,
+        is_async: bool,
+        is_generator: bool,
+    ) -> Result<Vec<Statement>, JsError> {
+        let prev_async = self.in_async;
+        let prev_generator = self.in_generator;
+
+        self.in_async = is_async;
+        self.in_generator = is_generator;
+
+        let body = self.parse_function_body()?;
+
+        self.in_async = prev_async;
+        self.in_generator = prev_generator;
+
+        Ok(body)
     }
 
     fn parse_return_statement(&mut self) -> Result<Statement, JsError> {
@@ -1616,11 +1669,51 @@ impl<'a> Parser<'a> {
             });
         }
 
-        if self.check_keyword(Keyword::Await)? {
+        // await is only an AwaitExpression when inside an async function
+        // Otherwise it should be treated as an identifier
+        if self.in_async && self.check_keyword(Keyword::Await)? {
             self.lexer.next_token()?;
             let argument = Box::new(self.parse_unary_expression()?);
             return Ok(Expression::AwaitExpression {
                 argument,
+                position: None,
+            });
+        }
+
+        // yield is only a YieldExpression when inside a generator function
+        // Otherwise it should be treated as an identifier
+        if self.in_generator && self.check_keyword(Keyword::Yield)? {
+            self.lexer.next_token()?;
+
+            // Check for yield* (delegate)
+            let delegate = if self.check_punctuator(Punctuator::Star)? {
+                self.lexer.next_token()?;
+                true
+            } else {
+                false
+            };
+
+            // Check if there's an argument (yield can be used without argument)
+            // If there's a line terminator or the next token can't start an expression, no argument
+            let argument = if delegate {
+                // yield* requires an argument
+                Some(Box::new(self.parse_assignment_expression()?))
+            } else if self.lexer.line_terminator_before_token
+                || self.check_punctuator(Punctuator::Semicolon)?
+                || self.check_punctuator(Punctuator::RBrace)?
+                || self.check_punctuator(Punctuator::RParen)?
+                || self.check_punctuator(Punctuator::RBracket)?
+                || self.check_punctuator(Punctuator::Comma)?
+                || self.is_at_end()?
+            {
+                None
+            } else {
+                Some(Box::new(self.parse_assignment_expression()?))
+            };
+
+            return Ok(Expression::YieldExpression {
+                argument,
+                delegate,
                 position: None,
             });
         }
@@ -1978,6 +2071,7 @@ impl<'a> Parser<'a> {
             }
             Token::Keyword(Keyword::Function) => self.parse_function_expression(),
             Token::Keyword(Keyword::Async) => self.parse_async_function_expression(),
+            Token::Keyword(Keyword::Class) => self.parse_class_expression(),
             // yield and let are valid identifiers in non-strict mode (outside generators)
             Token::Keyword(Keyword::Yield) => {
                 self.lexer.next_token()?;
@@ -2021,6 +2115,14 @@ impl<'a> Parser<'a> {
                     position: None,
                 })
             }
+            // 'await' is an identifier outside async functions
+            Token::Keyword(Keyword::Await) if !self.in_async => {
+                self.lexer.next_token()?;
+                Ok(Expression::Identifier {
+                    name: "await".to_string(),
+                    position: None,
+                })
+            }
             Token::BigIntLiteral(s) => {
                 self.lexer.next_token()?;
                 Ok(Expression::Literal {
@@ -2050,7 +2152,7 @@ impl<'a> Parser<'a> {
             None
         };
         let params = self.parse_parameters()?;
-        let body = self.parse_function_body()?;
+        let body = self.parse_function_body_with_context(false, is_generator)?;
 
         Ok(Expression::FunctionExpression {
             name,
@@ -2080,7 +2182,7 @@ impl<'a> Parser<'a> {
                 None
             };
             let params = self.parse_parameters()?;
-            let body = self.parse_function_body()?;
+            let body = self.parse_function_body_with_context(true, is_generator)?;
 
             Ok(Expression::FunctionExpression {
                 name,
@@ -2094,7 +2196,7 @@ impl<'a> Parser<'a> {
             // Async arrow function with parens: async (params) => body
             let params = self.parse_parameters()?;
             self.expect_punctuator(Punctuator::Arrow)?;
-            let body = self.parse_arrow_body()?;
+            let body = self.parse_arrow_body_with_context(true)?;
 
             Ok(Expression::ArrowFunctionExpression {
                 params,
@@ -2106,7 +2208,7 @@ impl<'a> Parser<'a> {
             // Async arrow function without parens: async x => body
             self.lexer.next_token()?;
             self.expect_punctuator(Punctuator::Arrow)?;
-            let body = self.parse_arrow_body()?;
+            let body = self.parse_arrow_body_with_context(true)?;
 
             Ok(Expression::ArrowFunctionExpression {
                 params: vec![Pattern::Identifier(name)],
@@ -2250,6 +2352,23 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// Parse arrow function body with async context tracking
+    fn parse_arrow_body_with_context(&mut self, is_async: bool) -> Result<ArrowFunctionBody, JsError> {
+        let prev_async = self.in_async;
+        self.in_async = is_async;
+
+        let result = if self.check_punctuator(Punctuator::LBrace)? {
+            let body = self.parse_function_body()?;
+            Ok(ArrowFunctionBody::Block(body))
+        } else {
+            let expr = self.parse_assignment_expression()?;
+            Ok(ArrowFunctionBody::Expression(Box::new(expr)))
+        };
+
+        self.in_async = prev_async;
+        result
+    }
+
     fn parse_array_literal(&mut self) -> Result<Expression, JsError> {
         self.expect_punctuator(Punctuator::LBracket)?;
         let mut elements = Vec::new();
@@ -2307,7 +2426,7 @@ impl<'a> Parser<'a> {
                 };
 
                 let params = self.parse_parameters()?;
-                let body = self.parse_function_body()?;
+                let body = self.parse_function_body_with_context(false, true)?;
 
                 let func_name = match &key {
                     PropertyKey::Identifier(s) => Some(s.clone()),
@@ -2574,7 +2693,7 @@ impl<'a> Parser<'a> {
 
                     let key = self.expect_identifier()?;
                     let params = self.parse_parameters()?;
-                    let body = self.parse_function_body()?;
+                    let body = self.parse_function_body_with_context(true, is_generator)?;
 
                     let func = Expression::FunctionExpression {
                         name: Some(key.clone()),
@@ -2597,7 +2716,7 @@ impl<'a> Parser<'a> {
                 self.lexer.next_token()?;
                 let key = self.expect_identifier()?;
                 let params = self.parse_parameters()?;
-                let body = self.parse_function_body()?;
+                let body = self.parse_function_body_with_context(false, true)?;
 
                 let func = Expression::FunctionExpression {
                     name: Some(key.clone()),

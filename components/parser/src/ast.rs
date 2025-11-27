@@ -449,6 +449,18 @@ pub enum Expression {
         position: Option<SourcePosition>,
     },
 
+    /// Class expression
+    ClassExpression {
+        /// Class name (optional for expressions)
+        name: Option<String>,
+        /// Superclass
+        super_class: Option<Box<Expression>>,
+        /// Class body
+        body: Vec<ClassElement>,
+        /// Source location
+        position: Option<SourcePosition>,
+    },
+
     /// Template literal
     TemplateLiteral {
         /// Quasis (string parts)
