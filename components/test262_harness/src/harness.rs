@@ -207,8 +207,16 @@ impl Test262Harness {
             return TestResult::Skip(format!("Missing features: {:?}", missing));
         }
 
+        // Prepare source - wrap in strict mode if needed
+        let source = if test.metadata.is_strict_only() {
+            // For onlyStrict tests, prepend "use strict" directive
+            format!("\"use strict\";\n{}", test.source)
+        } else {
+            test.source.clone()
+        };
+
         // Try to parse the test source
-        let parse_result = parser::Parser::new(&test.source).parse();
+        let parse_result = parser::Parser::new(&source).parse();
 
         if test.metadata.expects_parse_error() {
             // Negative parse test: expect parsing to fail
