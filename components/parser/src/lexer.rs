@@ -254,18 +254,19 @@ impl<'a> Lexer<'a> {
         // Hashbang is only valid at position 0
         if self.position == 0 && !self.is_at_end() {
             if self.peek() == '#' && self.peek_next() == Some('!') {
-                // Skip until end of line
-                while !self.is_at_end() && self.peek() != '\n' && self.peek() != '\r' {
+                // Skip until end of line (any LineTerminator)
+                while !self.is_at_end() && !self.is_line_terminator(self.peek()) {
                     self.advance();
                 }
                 // Advance past the line terminator if present
                 if !self.is_at_end() {
-                    if self.peek() == '\r' {
+                    let c = self.peek();
+                    if c == '\r' {
                         self.advance();
                         if !self.is_at_end() && self.peek() == '\n' {
                             self.advance();
                         }
-                    } else if self.peek() == '\n' {
+                    } else if self.is_line_terminator(c) {
                         self.advance();
                     }
                     self.line = 2;
@@ -273,6 +274,11 @@ impl<'a> Lexer<'a> {
                 }
             }
         }
+    }
+
+    /// Check if character is a line terminator (per ECMAScript spec)
+    fn is_line_terminator(&self, c: char) -> bool {
+        matches!(c, '\n' | '\r' | '\u{2028}' | '\u{2029}')
     }
 
     /// Get the next token from the source
