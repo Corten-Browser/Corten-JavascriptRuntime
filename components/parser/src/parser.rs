@@ -1902,6 +1902,8 @@ impl<'a> Parser<'a> {
         // After parsing an identifier, if next token is =>, this is an arrow function
         if let Expression::Identifier { ref name, .. } = expr {
             if self.check_punctuator(Punctuator::Arrow)? {
+                // Validate the parameter identifier (e.g., no 'arguments'/'eval' in strict mode)
+                self.validate_binding_identifier(name)?;
                 self.lexer.next_token()?; // consume =>
                 let body = self.parse_arrow_body()?;
                 return Ok(Expression::ArrowFunctionExpression {
@@ -2815,6 +2817,8 @@ impl<'a> Parser<'a> {
             })
         } else if let Token::Identifier(name, _) = self.lexer.peek_token()?.clone() {
             // Async arrow function without parens: async x => body
+            // Validate the parameter identifier (e.g., no 'arguments'/'eval' in strict mode)
+            self.validate_binding_identifier(&name)?;
             self.lexer.next_token()?;
             self.expect_punctuator(Punctuator::Arrow)?;
             let body = self.parse_arrow_body_with_context(true)?;
