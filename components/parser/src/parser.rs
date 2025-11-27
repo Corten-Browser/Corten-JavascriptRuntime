@@ -259,9 +259,9 @@ impl<'a> Parser<'a> {
         match token {
             Token::Identifier(name, _has_escapes) => {
                 self.lexer.next_token()?;
-                // Validate the identifier is not a reserved word
+                // Validate the identifier is not a reserved word and is valid as a binding
                 // Per ES spec, even escaped reserved words are invalid as identifiers
-                self.validate_identifier(&name)?;
+                self.validate_binding_identifier(&name)?;
                 Ok(Pattern::Identifier(name))
             }
             // yield is a valid identifier in non-strict mode (outside generators)
@@ -3088,9 +3088,9 @@ impl<'a> Parser<'a> {
         self.update_position()?;
         let token = self.lexer.next_token()?;
         if let Token::Identifier(name, _has_escapes) = token {
-            // Validate the identifier is not a reserved word
+            // Validate the identifier is not a reserved word and is valid as a binding
             // Per ES spec, even escaped reserved words are invalid as identifiers
-            self.validate_identifier(&name)?;
+            self.validate_binding_identifier(&name)?;
             Ok(name)
         } else {
             Err(unexpected_token(
@@ -3271,6 +3271,8 @@ impl<'a> Parser<'a> {
     }
 
     /// Validate that an identifier is not a reserved word
+    /// Validate an identifier reference (not binding)
+    /// This is called when an identifier is used as a reference (e.g., in expressions)
     fn validate_identifier(&self, name: &str) -> Result<(), JsError> {
         if self.is_reserved_word(name) {
             return Err(syntax_error(
@@ -3282,14 +3284,6 @@ impl<'a> Parser<'a> {
         if self.strict_mode && self.is_strict_reserved_word(name) {
             return Err(syntax_error(
                 &format!("'{}' is a reserved word in strict mode", name),
-                self.last_position.clone(),
-            ));
-        }
-
-        // 'arguments' and 'eval' cannot be used as binding identifiers in strict mode
-        if self.strict_mode && (name == "arguments" || name == "eval") {
-            return Err(syntax_error(
-                &format!("'{}' cannot be used as an identifier in strict mode", name),
                 self.last_position.clone(),
             ));
         }
@@ -3306,6 +3300,23 @@ impl<'a> Parser<'a> {
         if self.in_generator && name == "yield" {
             return Err(syntax_error(
                 "'yield' is not allowed as an identifier in generator functions",
+                self.last_position.clone(),
+            ));
+        }
+
+        Ok(())
+    }
+
+    /// Validate a binding identifier (e.g., in variable declarations, function names, parameters)
+    /// This is stricter than validate_identifier because it also restricts eval/arguments in strict mode
+    fn validate_binding_identifier(&self, name: &str) -> Result<(), JsError> {
+        // First apply all the regular identifier checks
+        self.validate_identifier(name)?;
+
+        // 'arguments' and 'eval' cannot be used as binding identifiers in strict mode
+        if self.strict_mode && (name == "arguments" || name == "eval") {
+            return Err(syntax_error(
+                &format!("'{}' cannot be used as a binding identifier in strict mode", name),
                 self.last_position.clone(),
             ));
         }
