@@ -40,6 +40,10 @@ pub struct Parser<'a> {
     in_generator: bool,
     /// Track if we're inside an async function (for await expressions)
     in_async: bool,
+    /// Track if we're inside a class method (allows super.property)
+    in_class_method: bool,
+    /// Track if we're inside a class constructor (allows super())
+    in_constructor: bool,
 }
 
 impl<'a> Parser<'a> {
@@ -54,6 +58,8 @@ impl<'a> Parser<'a> {
             function_depth: 0,
             in_generator: false,
             in_async: false,
+            in_class_method: false,
+            in_constructor: false,
         }
     }
 
@@ -258,9 +264,16 @@ impl<'a> Parser<'a> {
                 self.validate_identifier(&name)?;
                 Ok(Pattern::Identifier(name))
             }
-            // yield and let are valid identifiers in non-strict mode (outside generators)
+            // yield is a valid identifier in non-strict mode (outside generators)
             Token::Keyword(Keyword::Yield) => {
                 self.lexer.next_token()?;
+                // In generator context, 'yield' cannot be used as identifier
+                if self.in_generator {
+                    return Err(syntax_error(
+                        "'yield' is not allowed as an identifier in generator functions",
+                        self.last_position.clone(),
+                    ));
+                }
                 // In strict mode, 'yield' is a reserved word
                 if self.strict_mode {
                     return Err(syntax_error(
@@ -295,7 +308,13 @@ impl<'a> Parser<'a> {
             // 'await' can be used as identifier outside async functions
             Token::Keyword(Keyword::Await) => {
                 self.lexer.next_token()?;
-                // TODO: In async function context, this would be an error
+                // In async function context, 'await' cannot be used as identifier
+                if self.in_async {
+                    return Err(syntax_error(
+                        "'await' is not allowed as an identifier in async functions",
+                        self.last_position.clone(),
+                    ));
+                }
                 Ok(Pattern::Identifier("await".to_string()))
             }
             Token::Punctuator(Punctuator::LBrace) => self.parse_object_pattern(),
@@ -452,8 +471,29 @@ impl<'a> Parser<'a> {
         }
 
         let name = self.expect_identifier()?;
+
+        // Set generator context before parsing parameters so 'yield' is properly rejected
+        let prev_generator = self.in_generator;
+        // Clear class context - regular functions cannot use super
+        let prev_in_class_method = self.in_class_method;
+        let prev_in_constructor = self.in_constructor;
+
+        self.in_generator = is_generator;
+        self.in_class_method = false;
+        self.in_constructor = false;
+
         let params = self.parse_parameters()?;
-        let body = self.parse_function_body_with_context(false, is_generator)?;
+        // Validate for duplicate parameters
+        self.validate_parameters(&params)?;
+        let body = self.parse_function_body()?;
+        // Validate "use strict" with non-simple params
+        self.validate_params_with_body(&params, &body)?;
+        // Validate parameter names don't conflict with lexical declarations in body
+        self.validate_params_body_lexical(&params, &body)?;
+
+        self.in_generator = prev_generator;
+        self.in_class_method = prev_in_class_method;
+        self.in_constructor = prev_in_constructor;
 
         Ok(Statement::FunctionDeclaration {
             name,
@@ -478,8 +518,32 @@ impl<'a> Parser<'a> {
             }
 
             let name = self.expect_identifier()?;
+
+            // Set async context before parsing parameters so 'await' is properly rejected
+            let prev_async = self.in_async;
+            let prev_generator = self.in_generator;
+            // Clear class context - regular async functions cannot use super
+            let prev_in_class_method = self.in_class_method;
+            let prev_in_constructor = self.in_constructor;
+
+            self.in_async = true;
+            self.in_generator = is_generator;
+            self.in_class_method = false;
+            self.in_constructor = false;
+
             let params = self.parse_parameters()?;
-            let body = self.parse_function_body_with_context(true, is_generator)?;
+            // Validate for duplicate parameters
+            self.validate_parameters(&params)?;
+            let body = self.parse_function_body()?;
+            // Validate "use strict" with non-simple params
+            self.validate_params_with_body(&params, &body)?;
+            // Validate parameter names don't conflict with lexical declarations in body
+            self.validate_params_body_lexical(&params, &body)?;
+
+            self.in_async = prev_async;
+            self.in_generator = prev_generator;
+            self.in_class_method = prev_in_class_method;
+            self.in_constructor = prev_in_constructor;
 
             Ok(Statement::FunctionDeclaration {
                 name,
@@ -664,9 +728,17 @@ impl<'a> Parser<'a> {
             }
 
             if self.check_punctuator(Punctuator::LParen)? {
-                // Method
+                // Method - set class context for super validation
+                let prev_in_class_method = self.in_class_method;
+                let prev_in_constructor = self.in_constructor;
+                self.in_class_method = true;
+                self.in_constructor = kind == MethodKind::Constructor;
+
                 let params = self.parse_parameters()?;
                 let body = self.parse_function_body_with_context(is_async, is_generator)?;
+
+                self.in_class_method = prev_in_class_method;
+                self.in_constructor = prev_in_constructor;
 
                 elements.push(ClassElement::MethodDefinition {
                     key,
@@ -741,18 +813,14 @@ impl<'a> Parser<'a> {
             if self.check_punctuator(Punctuator::Spread)? {
                 self.lexer.next_token()?;
                 let pattern = self.parse_pattern()?;
-                // Check for default value on rest element
-                let final_pattern = if self.check_punctuator(Punctuator::Assign)? {
-                    self.lexer.next_token()?;
-                    let default_value = self.parse_assignment_expression()?;
-                    Pattern::AssignmentPattern {
-                        left: Box::new(Pattern::RestElement(Box::new(pattern))),
-                        right: Box::new(default_value),
-                    }
-                } else {
-                    Pattern::RestElement(Box::new(pattern))
-                };
-                params.push(final_pattern);
+                // Rest parameters cannot have default values
+                if self.check_punctuator(Punctuator::Assign)? {
+                    return Err(syntax_error(
+                        "Rest parameter may not have a default initializer",
+                        self.last_position.clone(),
+                    ));
+                }
+                params.push(Pattern::RestElement(Box::new(pattern)));
                 break;
             }
 
@@ -884,7 +952,8 @@ impl<'a> Parser<'a> {
         self.expect_punctuator(Punctuator::LParen)?;
         let test = self.parse_expression()?;
         self.expect_punctuator(Punctuator::RParen)?;
-        self.consume_semicolon()?;
+        // Use special ASI handling for do-while per ECMAScript 12.9.1
+        self.consume_semicolon_do_while()?;
         Ok(Statement::DoWhileStatement {
             body,
             test,
@@ -1318,6 +1387,8 @@ impl<'a> Parser<'a> {
 
             if self.check_punctuator(Punctuator::Colon)? {
                 // This is a labeled statement
+                // Validate the label identifier (await/yield restrictions apply)
+                self.validate_identifier(&name)?;
                 self.lexer.next_token()?; // consume ':'
                 let body = Box::new(self.parse_statement()?);
                 return Ok(Statement::LabeledStatement {
@@ -2035,6 +2106,9 @@ impl<'a> Parser<'a> {
         match token {
             Token::Identifier(name, _has_escapes) => {
                 self.lexer.next_token()?;
+                // Validate identifier references in async/generator context
+                // This catches escaped reserved words like \u0061wait (await)
+                self.validate_identifier(&name)?;
                 Ok(Expression::Identifier {
                     name,
                     position: None,
@@ -2095,6 +2169,13 @@ impl<'a> Parser<'a> {
             }
             Token::Keyword(Keyword::Super) => {
                 self.lexer.next_token()?;
+                // super is only valid inside class methods/constructors
+                if !self.in_class_method && !self.in_constructor {
+                    return Err(syntax_error(
+                        "'super' keyword is unexpected here",
+                        self.last_position.clone(),
+                    ));
+                }
                 Ok(Expression::SuperExpression { position: None })
             }
             Token::Keyword(Keyword::Function) => self.parse_function_expression(),
@@ -2179,8 +2260,23 @@ impl<'a> Parser<'a> {
         } else {
             None
         };
+
+        // Clear class context - function expressions cannot use super
+        let prev_in_class_method = self.in_class_method;
+        let prev_in_constructor = self.in_constructor;
+        self.in_class_method = false;
+        self.in_constructor = false;
+
         let params = self.parse_parameters()?;
         let body = self.parse_function_body_with_context(false, is_generator)?;
+
+        // Validate use strict with non-simple parameters
+        self.validate_params_with_body(&params, &body)?;
+        // Validate parameter names don't conflict with lexical declarations in body
+        self.validate_params_body_lexical(&params, &body)?;
+
+        self.in_class_method = prev_in_class_method;
+        self.in_constructor = prev_in_constructor;
 
         Ok(Expression::FunctionExpression {
             name,
@@ -2209,8 +2305,23 @@ impl<'a> Parser<'a> {
             } else {
                 None
             };
+
+            // Clear class context - async function expressions cannot use super
+            let prev_in_class_method = self.in_class_method;
+            let prev_in_constructor = self.in_constructor;
+            self.in_class_method = false;
+            self.in_constructor = false;
+
             let params = self.parse_parameters()?;
             let body = self.parse_function_body_with_context(true, is_generator)?;
+
+            // Validate use strict with non-simple parameters
+            self.validate_params_with_body(&params, &body)?;
+            // Validate parameter names don't conflict with lexical declarations in body
+            self.validate_params_body_lexical(&params, &body)?;
+
+            self.in_class_method = prev_in_class_method;
+            self.in_constructor = prev_in_constructor;
 
             Ok(Expression::FunctionExpression {
                 name,
@@ -2295,9 +2406,12 @@ impl<'a> Parser<'a> {
             if self.check_punctuator(Punctuator::Arrow)? {
                 self.lexer.next_token()?;
                 let param = self.expression_to_pattern(first)?;
+                let params = vec![param];
                 let body = self.parse_arrow_body()?;
+                // Validate "use strict" with non-simple parameters
+                self.validate_arrow_params_with_body(&params, &body)?;
                 return Ok(Expression::ArrowFunctionExpression {
-                    params: vec![param],
+                    params,
                     body,
                     is_async: false,
                     position: None,
@@ -2311,9 +2425,15 @@ impl<'a> Parser<'a> {
             let mut exprs = vec![first];
             let mut has_rest = false;
             let mut rest_param: Option<Pattern> = None;
+            let mut has_trailing_comma = false;
 
             while self.check_punctuator(Punctuator::Comma)? {
                 self.lexer.next_token()?;
+                // Check for trailing comma: (a, b,)
+                if self.check_punctuator(Punctuator::RParen)? {
+                    has_trailing_comma = true;
+                    break;
+                }
                 // Check for rest parameter: (a, b, ...c)
                 if self.check_punctuator(Punctuator::Spread)? {
                     self.lexer.next_token()?;
@@ -2335,7 +2455,11 @@ impl<'a> Parser<'a> {
                 if let Some(rest) = rest_param {
                     params.push(rest);
                 }
+                // Validate for duplicate parameters
+                self.validate_parameters(&params)?;
                 let body = self.parse_arrow_body()?;
+                // Validate "use strict" with non-simple parameters
+                self.validate_arrow_params_with_body(&params, &body)?;
                 return Ok(Expression::ArrowFunctionExpression {
                     params,
                     body,
@@ -2344,8 +2468,8 @@ impl<'a> Parser<'a> {
                 });
             }
 
-            if has_rest {
-                return Err(syntax_error("Rest parameter must be in arrow function", None));
+            if has_rest || has_trailing_comma {
+                return Err(syntax_error("Rest parameter or trailing comma must be in arrow function", None));
             }
 
             // Sequence expression
@@ -2366,7 +2490,84 @@ impl<'a> Parser<'a> {
                 let inner = self.expression_to_pattern(*argument)?;
                 Ok(Pattern::RestElement(Box::new(inner)))
             }
+            // Handle assignment expressions for default parameters: x = value
+            Expression::AssignmentExpression { left, right, operator, .. } => {
+                if matches!(operator, crate::ast::AssignmentOperator::Assign) {
+                    let left_pattern = self.assignment_target_to_pattern(left)?;
+                    Ok(Pattern::AssignmentPattern {
+                        left: Box::new(left_pattern),
+                        right: right,
+                    })
+                } else {
+                    Err(syntax_error("Invalid parameter", None))
+                }
+            }
+            // Handle array destructuring
+            Expression::ArrayExpression { elements, .. } => {
+                let patterns: Result<Vec<Option<Pattern>>, _> = elements
+                    .into_iter()
+                    .map(|e| {
+                        match e {
+                            Some(crate::ast::ArrayElement::Expression(expr)) => {
+                                self.expression_to_pattern(expr).map(Some)
+                            }
+                            Some(crate::ast::ArrayElement::Spread(expr)) => {
+                                let inner = self.expression_to_pattern(expr)?;
+                                Ok(Some(Pattern::RestElement(Box::new(inner))))
+                            }
+                            None => Ok(None),
+                        }
+                    })
+                    .collect();
+                Ok(Pattern::ArrayPattern(patterns?))
+            }
+            // Handle object destructuring
+            Expression::ObjectExpression { properties, .. } => {
+                let patterns: Result<Vec<ObjectPatternProperty>, _> = properties
+                    .into_iter()
+                    .map(|prop| {
+                        match prop {
+                            ObjectProperty::Property { key, value, shorthand, .. } => {
+                                let value_pattern = self.expression_to_pattern(value)?;
+                                let key_str = match key {
+                                    PropertyKey::Identifier(s) => s,
+                                    PropertyKey::String(s) => s,
+                                    PropertyKey::Number(n) => n.to_string(),
+                                    PropertyKey::Computed(_) => {
+                                        return Err(syntax_error("Computed keys not supported in pattern", None));
+                                    }
+                                };
+                                Ok(ObjectPatternProperty {
+                                    key: key_str,
+                                    value: value_pattern,
+                                    shorthand,
+                                })
+                            }
+                            ObjectProperty::SpreadElement(expr) => {
+                                let pattern = self.expression_to_pattern(expr)?;
+                                Ok(ObjectPatternProperty {
+                                    key: String::new(),
+                                    value: Pattern::RestElement(Box::new(pattern)),
+                                    shorthand: false,
+                                })
+                            }
+                        }
+                    })
+                    .collect();
+                Ok(Pattern::ObjectPattern(patterns?))
+            }
             _ => Err(syntax_error("Invalid parameter", None)),
+        }
+    }
+
+    /// Convert an AssignmentTarget to a Pattern
+    fn assignment_target_to_pattern(&self, target: crate::ast::AssignmentTarget) -> Result<Pattern, JsError> {
+        match target {
+            crate::ast::AssignmentTarget::Identifier(name) => Ok(Pattern::Identifier(name)),
+            crate::ast::AssignmentTarget::Member(_expr) => {
+                Err(syntax_error("Member expressions not supported as parameters", None))
+            }
+            crate::ast::AssignmentTarget::Pattern(pattern) => Ok(pattern),
         }
     }
 
@@ -3022,6 +3223,22 @@ impl<'a> Parser<'a> {
         })
     }
 
+    /// Consume a semicolon for do-while statements with special ASI handling.
+    /// Per ECMAScript 12.9.1, ASI applies after `)` in do-while even without
+    /// a line terminator: "The previous token is ) and the inserted semicolon
+    /// would then be parsed as the terminating semicolon of a do-while statement."
+    fn consume_semicolon_do_while(&mut self) -> Result<(), JsError> {
+        // If there's an explicit semicolon, consume it
+        if self.check_punctuator(Punctuator::Semicolon)? {
+            self.lexer.next_token()?;
+            return Ok(());
+        }
+
+        // For do-while, ASI always applies after `)` - no line terminator required
+        // This is a special case in ECMAScript 12.9.1
+        Ok(())
+    }
+
     /// Check if ASI should apply for restricted productions
     /// (return, break, continue, throw must not have line terminator before operand)
     fn check_restricted_production(&self) -> bool {
@@ -3069,6 +3286,30 @@ impl<'a> Parser<'a> {
             ));
         }
 
+        // 'arguments' and 'eval' cannot be used as binding identifiers in strict mode
+        if self.strict_mode && (name == "arguments" || name == "eval") {
+            return Err(syntax_error(
+                &format!("'{}' cannot be used as an identifier in strict mode", name),
+                self.last_position.clone(),
+            ));
+        }
+
+        // 'await' is a reserved word in async function contexts
+        if self.in_async && name == "await" {
+            return Err(syntax_error(
+                "'await' is not allowed as an identifier in async functions",
+                self.last_position.clone(),
+            ));
+        }
+
+        // 'yield' is a reserved word in generator function contexts
+        if self.in_generator && name == "yield" {
+            return Err(syntax_error(
+                "'yield' is not allowed as an identifier in generator functions",
+                self.last_position.clone(),
+            ));
+        }
+
         Ok(())
     }
 
@@ -3079,6 +3320,141 @@ impl<'a> Parser<'a> {
             Expression::Identifier { .. }
                 | Expression::MemberExpression { .. }
         )
+    }
+
+    /// Collect all bound names from a pattern into a vector
+    fn collect_bound_names(pattern: &Pattern, names: &mut Vec<String>) {
+        match pattern {
+            Pattern::Identifier(name) => names.push(name.clone()),
+            Pattern::ObjectPattern(properties) => {
+                for prop in properties {
+                    // ObjectPatternProperty has key and value fields
+                    Self::collect_bound_names(&prop.value, names);
+                }
+            }
+            Pattern::ArrayPattern(elements) => {
+                for elem in elements {
+                    if let Some(pattern) = elem {
+                        Self::collect_bound_names(pattern, names);
+                    }
+                }
+            }
+            Pattern::AssignmentPattern { left, .. } => {
+                Self::collect_bound_names(left, names);
+            }
+            Pattern::RestElement(inner) => {
+                Self::collect_bound_names(inner, names);
+            }
+        }
+    }
+
+    /// Check if a parameter list is "simple" (no defaults, rest, or destructuring)
+    fn is_simple_parameter_list(params: &[Pattern]) -> bool {
+        params.iter().all(|p| matches!(p, Pattern::Identifier(_)))
+    }
+
+    /// Check if body contains a "use strict" directive as first statement
+    fn body_contains_use_strict(body: &[Statement]) -> bool {
+        if let Some(first) = body.first() {
+            if let Statement::ExpressionStatement { expression, .. } = first {
+                if let Expression::Literal { value: crate::ast::Literal::String(s), .. } = expression {
+                    return s == "use strict";
+                }
+            }
+        }
+        false
+    }
+
+    /// Validate that non-simple parameters are not used with "use strict" directive in body
+    fn validate_params_with_body(&self, params: &[Pattern], body: &[Statement]) -> Result<(), JsError> {
+        if Self::body_contains_use_strict(body) && !Self::is_simple_parameter_list(params) {
+            return Err(syntax_error(
+                "Illegal 'use strict' directive in function with non-simple parameter list",
+                self.last_position.clone(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Validate arrow function params with arrow body
+    fn validate_arrow_params_with_body(&self, params: &[Pattern], body: &ArrowFunctionBody) -> Result<(), JsError> {
+        if let ArrowFunctionBody::Block(stmts) = body {
+            if Self::body_contains_use_strict(stmts) && !Self::is_simple_parameter_list(params) {
+                return Err(syntax_error(
+                    "Illegal 'use strict' directive in function with non-simple parameter list",
+                    self.last_position.clone(),
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// Collect lexically declared names (let/const) from top-level statements
+    fn collect_lexically_declared_names(body: &[Statement], names: &mut Vec<String>) {
+        for stmt in body {
+            match stmt {
+                Statement::VariableDeclaration { kind, declarations, .. } => {
+                    // Only let and const are lexical declarations
+                    if matches!(kind, crate::ast::VariableKind::Let | crate::ast::VariableKind::Const) {
+                        for decl in declarations {
+                            Self::collect_bound_names(&decl.id, names);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// Validate that parameter names don't conflict with lexically declared names in body
+    fn validate_params_body_lexical(&self, params: &[Pattern], body: &[Statement]) -> Result<(), JsError> {
+        // Collect parameter bound names
+        let mut param_names = Vec::new();
+        for param in params {
+            Self::collect_bound_names(param, &mut param_names);
+        }
+
+        // Collect lexically declared names from body
+        let mut lexical_names = Vec::new();
+        Self::collect_lexically_declared_names(body, &mut lexical_names);
+
+        // Check for conflicts
+        for param_name in &param_names {
+            if lexical_names.contains(param_name) {
+                return Err(syntax_error(
+                    &format!("Identifier '{}' has already been declared", param_name),
+                    self.last_position.clone(),
+                ));
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Validate parameters for duplicates based on context
+    fn validate_parameters(&self, params: &[Pattern]) -> Result<(), JsError> {
+        let mut names = Vec::new();
+        for param in params {
+            Self::collect_bound_names(param, &mut names);
+        }
+
+        // Check for duplicates
+        let mut seen = std::collections::HashSet::new();
+        for name in &names {
+            if !seen.insert(name.clone()) {
+                // Duplicate found
+                // In strict mode or async functions, always error
+                // In non-strict mode with non-simple params, also error
+                if self.strict_mode || self.in_async || !Self::is_simple_parameter_list(params) {
+                    return Err(syntax_error(
+                        &format!("Duplicate parameter name '{}'", name),
+                        self.last_position.clone(),
+                    ));
+                }
+            }
+        }
+
+        Ok(())
     }
 
     /// Parse a statement in a context where lexical declarations are not allowed
