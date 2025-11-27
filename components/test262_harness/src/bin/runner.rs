@@ -26,6 +26,8 @@ struct Stats {
 struct TestMetadata {
     is_negative_parse: bool,
     is_module: bool,
+    is_only_strict: bool,
+    is_no_strict: bool,
     features: Vec<String>,
     expected_error: Option<String>,
 }
@@ -34,6 +36,8 @@ impl TestMetadata {
     fn parse(source: &str) -> Self {
         let mut is_negative_parse = false;
         let mut is_module = false;
+        let mut is_only_strict = false;
+        let mut is_no_strict = false;
         let mut features = Vec::new();
         let mut expected_error = None;
 
@@ -58,6 +62,14 @@ impl TestMetadata {
                     is_module = true;
                 }
 
+                // Check for strict mode flags
+                if yaml.contains("onlyStrict") {
+                    is_only_strict = true;
+                }
+                if yaml.contains("noStrict") {
+                    is_no_strict = true;
+                }
+
                 // Extract features
                 let mut in_features = false;
                 for line in yaml.lines() {
@@ -79,6 +91,8 @@ impl TestMetadata {
         TestMetadata {
             is_negative_parse,
             is_module,
+            is_only_strict,
+            is_no_strict,
             features,
             expected_error,
         }
@@ -258,6 +272,13 @@ fn run_single_test(path: &Path, execute: bool) -> TestResult {
     if metadata.is_module {
         return TestResult::Skip("Module test".to_string());
     }
+
+    // Prepend "use strict"; for onlyStrict tests
+    let source = if metadata.is_only_strict {
+        format!("\"use strict\";\n{}", source)
+    } else {
+        source
+    };
 
     // Try to parse
     let parse_result = parser::Parser::new(&source).parse();
