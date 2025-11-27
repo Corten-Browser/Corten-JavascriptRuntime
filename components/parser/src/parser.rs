@@ -2955,7 +2955,12 @@ impl<'a> Parser<'a> {
 
     fn expression_to_pattern(&self, expr: Expression) -> Result<Pattern, JsError> {
         match expr {
-            Expression::Identifier { name, .. } => Ok(Pattern::Identifier(name)),
+            Expression::Identifier { name, .. } => {
+                // Validate the identifier is not a reserved word
+                // This catches escaped reserved words like bre\u0061k -> break
+                self.validate_binding_identifier(&name)?;
+                Ok(Pattern::Identifier(name))
+            }
             Expression::SpreadElement { argument, .. } => {
                 let inner = self.expression_to_pattern(*argument)?;
                 Ok(Pattern::RestElement(Box::new(inner)))
