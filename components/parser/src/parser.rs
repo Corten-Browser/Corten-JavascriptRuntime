@@ -481,13 +481,17 @@ impl<'a> Parser<'a> {
 
         let name = self.expect_identifier()?;
 
-        // Set generator context before parsing parameters so 'yield' is properly rejected
+        // Save context flags
         let prev_generator = self.in_generator;
+        let prev_async = self.in_async;
         // Clear class context - regular functions cannot use super
         let prev_in_class_method = self.in_class_method;
         let prev_in_constructor = self.in_constructor;
 
+        // Set context for this function - regular functions are NOT async
+        // so 'await' is allowed as an identifier inside them
         self.in_generator = is_generator;
+        self.in_async = false;  // Regular function declarations are not async
         self.in_class_method = false;
         self.in_constructor = false;
 
@@ -500,7 +504,9 @@ impl<'a> Parser<'a> {
         // Validate parameter names don't conflict with lexical declarations in body
         self.validate_params_body_lexical(&params, &body)?;
 
+        // Restore context
         self.in_generator = prev_generator;
+        self.in_async = prev_async;
         self.in_class_method = prev_in_class_method;
         self.in_constructor = prev_in_constructor;
 
