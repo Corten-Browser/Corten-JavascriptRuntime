@@ -1757,10 +1757,81 @@ impl<'a> Parser<'a> {
                     self.iteration_labels.insert(name.clone());
                 }
 
+                // Check for disallowed declarations after labels:
+                // - async function declarations
+                // - generator function declarations
+                // - class declarations
+                // - lexical declarations (let, const)
+                if self.check_keyword(Keyword::Class)? {
+                    return Err(syntax_error(
+                        "Class declaration is not allowed in statement position",
+                        self.last_position.clone(),
+                    ));
+                }
+
+                // Check for async function declarations after label
+                if self.check_keyword(Keyword::Async)? {
+                    // Peek to see if it's followed by 'function' (without line terminator)
+                    let saved_pos = self.lexer.position;
+                    let saved_line = self.lexer.line;
+                    let saved_col = self.lexer.column;
+                    let saved_line_term = self.lexer.line_terminator_before_token;
+                    let saved_tok = self.lexer.current_token.clone();
+
+                    self.lexer.next_token()?; // consume async
+                    if !self.lexer.line_terminator_before_token && self.check_keyword(Keyword::Function)? {
+                        return Err(syntax_error(
+                            "Async function declaration is not allowed in statement position",
+                            self.last_position.clone(),
+                        ));
+                    }
+
+                    // Restore
+                    self.lexer.position = saved_pos;
+                    self.lexer.line = saved_line;
+                    self.lexer.column = saved_col;
+                    self.lexer.line_terminator_before_token = saved_line_term;
+                    self.lexer.current_token = saved_tok;
+                }
+
                 // Also check for nested labels that might wrap an iteration
                 // e.g., label1: label2: while(...)
                 // We'll determine this after parsing the body
                 let body = Box::new(self.parse_statement()?);
+
+                // Check if the parsed body is a disallowed declaration type
+                // (catches generator functions which start with 'function *')
+                match body.as_ref() {
+                    Statement::FunctionDeclaration { is_generator: true, .. }
+                    | Statement::FunctionDeclaration { is_async: true, .. } => {
+                        return Err(syntax_error(
+                            "Generator/async function declaration is not allowed in statement position",
+                            self.last_position.clone(),
+                        ));
+                    }
+                    // In strict mode, function declarations are not allowed after labels
+                    Statement::FunctionDeclaration { .. } if self.strict_mode => {
+                        return Err(syntax_error(
+                            "Function declaration is not allowed in statement position in strict mode",
+                            self.last_position.clone(),
+                        ));
+                    }
+                    Statement::ClassDeclaration { .. } => {
+                        return Err(syntax_error(
+                            "Class declaration is not allowed in statement position",
+                            self.last_position.clone(),
+                        ));
+                    }
+                    Statement::VariableDeclaration { kind, .. }
+                        if matches!(kind, crate::ast::VariableKind::Let | crate::ast::VariableKind::Const) =>
+                    {
+                        return Err(syntax_error(
+                            "Lexical declaration is not allowed in statement position",
+                            self.last_position.clone(),
+                        ));
+                    }
+                    _ => {}
+                }
 
                 // If body is a labeled statement wrapping an iteration,
                 // this label is also an iteration label
