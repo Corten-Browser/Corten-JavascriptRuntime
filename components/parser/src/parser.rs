@@ -46,6 +46,10 @@ pub struct Parser<'a> {
     in_constructor: bool,
     /// Track if we're inside any method (class or object literal - allows super.property)
     in_method: bool,
+    /// Track active labels for break/continue validation
+    active_labels: std::collections::HashSet<String>,
+    /// Track labels that are iteration statements (for continue validation)
+    iteration_labels: std::collections::HashSet<String>,
 }
 
 impl<'a> Parser<'a> {
@@ -63,6 +67,8 @@ impl<'a> Parser<'a> {
             in_class_method: false,
             in_constructor: false,
             in_method: false,
+            active_labels: std::collections::HashSet::new(),
+            iteration_labels: std::collections::HashSet::new(),
         }
     }
 
@@ -859,14 +865,25 @@ impl<'a> Parser<'a> {
         let prev_strict = self.strict_mode;
         self.check_function_directive_prologue()?;
 
+        // Save and clear label sets - labels don't cross function boundaries
+        let prev_active_labels = std::mem::take(&mut self.active_labels);
+        let prev_iteration_labels = std::mem::take(&mut self.iteration_labels);
+
+        // Save and reset loop depth - loops don't cross function boundaries
+        let prev_loop_depth = self.loop_depth;
+        self.loop_depth = 0;
+
         while !self.check_punctuator(Punctuator::RBrace)? {
             statements.push(self.parse_statement()?);
         }
 
         self.expect_punctuator(Punctuator::RBrace)?;
 
-        // Restore strict mode after function body
+        // Restore strict mode and labels after function body
         self.strict_mode = prev_strict;
+        self.active_labels = prev_active_labels;
+        self.iteration_labels = prev_iteration_labels;
+        self.loop_depth = prev_loop_depth;
 
         Ok(statements)
     }
@@ -1347,6 +1364,16 @@ impl<'a> Parser<'a> {
             ));
         }
 
+        // Break with label must target an enclosing label
+        if let Some(ref label_name) = label {
+            if !self.active_labels.contains(label_name) {
+                return Err(syntax_error(
+                    &format!("Undefined label '{}'", label_name),
+                    self.last_position.clone(),
+                ));
+            }
+        }
+
         self.consume_semicolon()?;
         Ok(Statement::BreakStatement {
             label,
@@ -1380,6 +1407,24 @@ impl<'a> Parser<'a> {
                 "Illegal continue statement",
                 self.last_position.clone(),
             ));
+        }
+
+        // Continue with label must target an enclosing iteration label
+        if let Some(ref label_name) = label {
+            if !self.iteration_labels.contains(label_name) {
+                // Label exists but is not an iteration statement
+                if self.active_labels.contains(label_name) {
+                    return Err(syntax_error(
+                        &format!("Label '{}' is not an iteration statement", label_name),
+                        self.last_position.clone(),
+                    ));
+                } else {
+                    return Err(syntax_error(
+                        &format!("Undefined label '{}'", label_name),
+                        self.last_position.clone(),
+                    ));
+                }
+            }
         }
 
         self.consume_semicolon()?;
@@ -1657,6 +1702,20 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// Check if a statement is an iteration statement or a labeled statement
+    /// that eventually wraps an iteration statement
+    fn is_iteration_labeled(stmt: &Statement) -> bool {
+        match stmt {
+            Statement::WhileStatement { .. }
+            | Statement::DoWhileStatement { .. }
+            | Statement::ForStatement { .. }
+            | Statement::ForInStatement { .. }
+            | Statement::ForOfStatement { .. } => true,
+            Statement::LabeledStatement { body, .. } => Self::is_iteration_labeled(body),
+            _ => false,
+        }
+    }
+
     fn parse_expression_statement(&mut self) -> Result<Statement, JsError> {
         // Check for labeled statement: identifier followed by colon
         if let Token::Identifier(name, _) = self.lexer.peek_token()?.clone() {
@@ -1674,8 +1733,47 @@ impl<'a> Parser<'a> {
                 // This is a labeled statement
                 // Validate the label identifier (await/yield restrictions apply)
                 self.validate_identifier(&name)?;
+
+                // Check for duplicate label in current label set
+                if self.active_labels.contains(&name) {
+                    return Err(syntax_error(
+                        &format!("Label '{}' has already been declared", name),
+                        self.last_position.clone(),
+                    ));
+                }
+
                 self.lexer.next_token()?; // consume ':'
+
+                // Add label to active labels
+                self.active_labels.insert(name.clone());
+
+                // Check if the body starts an iteration statement
+                // (while, do, for) - then this label is also an iteration label
+                let is_iteration = self.check_keyword(Keyword::While)?
+                    || self.check_keyword(Keyword::Do)?
+                    || self.check_keyword(Keyword::For)?;
+
+                if is_iteration {
+                    self.iteration_labels.insert(name.clone());
+                }
+
+                // Also check for nested labels that might wrap an iteration
+                // e.g., label1: label2: while(...)
+                // We'll determine this after parsing the body
                 let body = Box::new(self.parse_statement()?);
+
+                // If body is a labeled statement wrapping an iteration,
+                // this label is also an iteration label
+                if !is_iteration {
+                    if Self::is_iteration_labeled(&body) {
+                        self.iteration_labels.insert(name.clone());
+                    }
+                }
+
+                // Remove labels after parsing
+                self.active_labels.remove(&name);
+                self.iteration_labels.remove(&name);
+
                 return Ok(Statement::LabeledStatement {
                     label: name,
                     body,
@@ -2876,6 +2974,11 @@ impl<'a> Parser<'a> {
                     .collect();
                 Ok(Pattern::ObjectPattern(patterns?))
             }
+            // Handle member expressions as destructuring targets
+            // These are valid in destructuring assignment but not in function parameters
+            Expression::MemberExpression { .. } => {
+                Ok(Pattern::MemberExpression(Box::new(expr)))
+            }
             _ => Err(syntax_error("Invalid parameter", None)),
         }
     }
@@ -3694,6 +3797,8 @@ impl<'a> Parser<'a> {
             Pattern::RestElement(inner) => {
                 Self::collect_bound_names(inner, names);
             }
+            // Member expressions don't bind new names - they assign to existing properties
+            Pattern::MemberExpression(_) => {}
         }
     }
 

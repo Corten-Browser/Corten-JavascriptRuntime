@@ -526,6 +526,9 @@ pub enum Pattern {
     },
     /// Rest element (...rest)
     RestElement(Box<Pattern>),
+    /// Member expression target (for destructuring assignment, not parameters)
+    /// Example: [obj.prop] = [1] or [arr[0]] = [1]
+    MemberExpression(Box<Expression>),
 }
 
 /// Object pattern property

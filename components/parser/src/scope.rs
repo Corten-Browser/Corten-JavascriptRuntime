@@ -581,6 +581,11 @@ impl ScopeAnalyzer {
             Pattern::RestElement(p) => {
                 self.visit_pattern_refs(p)?;
             }
+            Pattern::MemberExpression(expr) => {
+                // For member expressions in destructuring, visit the expression
+                let mut expr_clone = (**expr).clone();
+                self.visit_expression(&mut expr_clone)?;
+            }
         }
         Ok(())
     }
@@ -608,6 +613,8 @@ impl ScopeAnalyzer {
             Pattern::RestElement(p) => {
                 self.declare_pattern(p, kind)?;
             }
+            // Member expressions don't declare new bindings
+            Pattern::MemberExpression(_) => {}
         }
         Ok(())
     }
