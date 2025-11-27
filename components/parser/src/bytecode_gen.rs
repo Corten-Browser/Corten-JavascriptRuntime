@@ -573,6 +573,79 @@ impl BytecodeGenerator {
                 self.loop_starts.pop();
             }
 
+            Statement::ForInStatement { left, right, body, .. } => {
+                // For-in loop: iterate over enumerable properties
+                // This is a simplified implementation that doesn't actually iterate
+                // A proper implementation would need runtime support for property enumeration
+
+                // For now, just evaluate the right side and execute the body once
+                // TODO: Implement proper iteration with a runtime iterator protocol
+                self.visit_expression(right)?;
+                self.chunk.emit(Opcode::Pop); // discard object
+
+                // Initialize the loop variable with undefined
+                match left {
+                    ForInOfLeft::VariableDeclaration { kind: _, id } => {
+                        if let Pattern::Identifier(name) = id {
+                            let reg = self.allocate_register();
+                            self.chunk.emit(Opcode::LoadUndefined);
+                            self.chunk.emit(Opcode::StoreLocal(reg));
+                            self.locals.insert(name.clone(), reg);
+                        }
+                    }
+                    ForInOfLeft::Pattern(Pattern::Identifier(name)) => {
+                        if let Some(&reg) = self.locals.get(name) {
+                            self.chunk.emit(Opcode::LoadUndefined);
+                            self.chunk.emit(Opcode::StoreLocal(reg));
+                        } else {
+                            self.chunk.emit(Opcode::LoadUndefined);
+                            self.chunk.emit(Opcode::StoreGlobal(name.clone()));
+                        }
+                    }
+                    _ => {}
+                }
+
+                // Note: Proper for-in would iterate over properties
+                // For now, just skip the body (don't execute)
+                let _ = body;
+            }
+
+            Statement::ForOfStatement { left, right, body, r#await: _, .. } => {
+                // For-of loop: iterate over iterable
+                // This is a simplified implementation that doesn't actually iterate
+                // A proper implementation would need runtime support for the iterator protocol
+
+                // For now, just evaluate the right side and skip
+                self.visit_expression(right)?;
+                self.chunk.emit(Opcode::Pop); // discard iterable
+
+                // Initialize the loop variable with undefined
+                match left {
+                    ForInOfLeft::VariableDeclaration { kind: _, id } => {
+                        if let Pattern::Identifier(name) = id {
+                            let reg = self.allocate_register();
+                            self.chunk.emit(Opcode::LoadUndefined);
+                            self.chunk.emit(Opcode::StoreLocal(reg));
+                            self.locals.insert(name.clone(), reg);
+                        }
+                    }
+                    ForInOfLeft::Pattern(Pattern::Identifier(name)) => {
+                        if let Some(&reg) = self.locals.get(name) {
+                            self.chunk.emit(Opcode::LoadUndefined);
+                            self.chunk.emit(Opcode::StoreLocal(reg));
+                        } else {
+                            self.chunk.emit(Opcode::LoadUndefined);
+                            self.chunk.emit(Opcode::StoreGlobal(name.clone()));
+                        }
+                    }
+                    _ => {}
+                }
+
+                // Note: Proper for-of would iterate over values
+                // For now, just skip the body (don't execute)
+                let _ = body;
+            }
+
             Statement::BlockStatement { body, .. } => {
                 for stmt in body {
                     self.visit_statement(stmt)?;
@@ -658,6 +731,103 @@ impl BytecodeGenerator {
             }
 
             Statement::EmptyStatement { .. } => {}
+
+            Statement::DoWhileStatement { body, test, .. } => {
+                let loop_start = self.chunk.instruction_count();
+
+                // Execute body
+                self.visit_statement(body)?;
+
+                // Evaluate condition
+                self.visit_expression(test)?;
+
+                // Jump back to start if condition is true
+                self.chunk.emit(Opcode::JumpIfTrue(loop_start));
+            }
+
+            Statement::SwitchStatement {
+                discriminant,
+                cases,
+                ..
+            } => {
+                use crate::ast::SwitchCase;
+                // Evaluate discriminant
+                self.visit_expression(discriminant)?;
+
+                // For now, emit a simple sequential check for each case
+                let mut jump_patches = Vec::new();
+                let mut default_idx = None;
+
+                for (i, case) in cases.iter().enumerate() {
+                    if let Some(test) = &case.test {
+                        // Duplicate discriminant for comparison
+                        self.chunk.emit(Opcode::Dup);
+                        self.visit_expression(test)?;
+                        self.chunk.emit(Opcode::StrictEqual);
+
+                        // If equal, jump to case body (we'll patch later)
+                        let jump_idx = self.chunk.instruction_count();
+                        self.chunk.emit(Opcode::JumpIfTrue(0)); // Will patch
+                        jump_patches.push((jump_idx, i));
+                    } else {
+                        // Default case
+                        default_idx = Some(i);
+                    }
+                }
+
+                // If no case matched, jump to default or end
+                let jump_to_default_idx = self.chunk.instruction_count();
+                self.chunk.emit(Opcode::Jump(0)); // Will patch
+
+                // Now emit case bodies
+                let mut case_starts = Vec::new();
+                for case in cases.iter() {
+                    case_starts.push(self.chunk.instruction_count());
+                    for stmt in &case.consequent {
+                        self.visit_statement(stmt)?;
+                    }
+                }
+
+                // End of switch
+                let switch_end = self.chunk.instruction_count();
+
+                // Patch all the jumps
+                for (jump_idx, case_idx) in jump_patches {
+                    if case_idx < case_starts.len() {
+                        self.patch_jump(jump_idx, case_starts[case_idx]);
+                    }
+                }
+
+                // Patch jump to default
+                if let Some(def_idx) = default_idx {
+                    if def_idx < case_starts.len() {
+                        self.patch_jump(jump_to_default_idx, case_starts[def_idx]);
+                    }
+                } else {
+                    self.patch_jump(jump_to_default_idx, switch_end);
+                }
+
+                // Pop discriminant
+                self.chunk.emit(Opcode::Pop);
+            }
+
+            Statement::WithStatement { object, body, .. } => {
+                // With is deprecated but must work in non-strict mode
+                // For now, just execute the body - proper scoping is complex
+                self.visit_expression(object)?;
+                self.chunk.emit(Opcode::Pop); // We should push to with-scope, but for now ignore
+                self.visit_statement(body)?;
+            }
+
+            Statement::DebuggerStatement { .. } => {
+                // Debugger statement is a no-op in bytecode
+            }
+
+            Statement::LabeledStatement { body, .. } => {
+                // For now, just execute the body
+                // Proper labeled break/continue support would need more work
+                self.visit_statement(body)?;
+            }
         }
         Ok(())
     }
@@ -763,7 +933,19 @@ impl BytecodeGenerator {
                         // void operator - discard value and push undefined
                         self.chunk.emit(Opcode::Void);
                     }
-                    _ => {}
+                    UnaryOperator::Delete => {
+                        // delete operator - handled based on argument type
+                        // For now, push true (always succeeds)
+                        self.chunk.emit(Opcode::Pop);  // discard the argument value
+                        self.chunk.emit(Opcode::LoadTrue);
+                    }
+                    UnaryOperator::Plus => {
+                        // Unary plus - coerce to number (ToNumber)
+                        // For now, it's a no-op since we emit the value already
+                    }
+                    UnaryOperator::BitwiseNot => {
+                        // Bitwise NOT - TODO: implement when we have bitwise ops
+                    }
                 }
             }
 
@@ -918,18 +1100,16 @@ impl BytecodeGenerator {
                         {
                             if *computed {
                                 // Computed assignment: obj[key] = value
-                                // SetIndex expects stack: [obj, key, value]
+                                // SetIndex expects stack: [obj, key, value], pushes value as result
                                 self.visit_expression(object)?;
                                 self.visit_expression(property)?;
                                 self.visit_expression(right)?;
-                                self.chunk.emit(Opcode::Dup); // Keep value on stack for expression result
                                 self.chunk.emit(Opcode::SetIndex);
                             } else {
                                 // Static assignment: obj.prop = value
-                                // StoreProperty expects stack: [obj, value]
+                                // StoreProperty expects stack: [obj, value], pushes value as result
                                 self.visit_expression(object)?;
                                 self.visit_expression(right)?;
-                                self.chunk.emit(Opcode::Dup); // Keep value on stack for expression result
                                 if let Expression::Identifier { name, .. } = property.as_ref() {
                                     self.chunk.emit(Opcode::StoreProperty(name.clone()));
                                 }
@@ -1047,6 +1227,24 @@ impl BytecodeGenerator {
                 self.chunk.emit(Opcode::CallNew(arguments.len() as u8));
             }
 
+            Expression::MetaProperty { meta, property, .. } => {
+                // Handle new.target and import.meta
+                if meta == "new" && property == "target" {
+                    // new.target - push undefined for now (proper implementation needs function context)
+                    self.chunk.emit(Opcode::LoadUndefined);
+                } else if meta == "import" && property == "meta" {
+                    // import.meta - push an empty object for now
+                    self.chunk.emit(Opcode::CreateObject);
+                } else {
+                    return Err(JsError {
+                        kind: ErrorKind::SyntaxError,
+                        message: format!("Unknown meta property: {}.{}", meta, property),
+                        stack: vec![],
+                        source_position: None,
+                    });
+                }
+            }
+
             Expression::ArrayExpression { elements, .. } => {
                 // Push all elements onto the stack first
                 let mut element_count = 0;
@@ -1084,6 +1282,8 @@ impl BytecodeGenerator {
                             self.chunk.emit(Opcode::Dup);
                             self.visit_expression(value)?;
                             self.chunk.emit(Opcode::StoreProperty(name.clone()));
+                            // Pop the value pushed by StoreProperty - we don't need it here
+                            self.chunk.emit(Opcode::Pop);
                         }
                     }
                 }
@@ -2358,7 +2558,7 @@ mod tests {
             name: "Counter".to_string(),
             super_class: None,
             body: vec![ClassElement::MethodDefinition {
-                key: "constructor".to_string(),
+                key: PropertyKey::Identifier("constructor".to_string()),
                 kind: MethodKind::Constructor,
                 value: Expression::FunctionExpression {
                     name: None,
@@ -2389,6 +2589,8 @@ mod tests {
                     position: None,
                 },
                 is_static: false,
+                is_private: false,
+                computed: false,
             }],
             position: None,
         }]);
@@ -2482,7 +2684,7 @@ mod tests {
                 name: "Foo".to_string(),
                 super_class: None,
                 body: vec![ClassElement::MethodDefinition {
-                    key: "constructor".to_string(),
+                    key: PropertyKey::Identifier("constructor".to_string()),
                     kind: MethodKind::Constructor,
                     value: Expression::FunctionExpression {
                         name: None,
@@ -2517,6 +2719,8 @@ mod tests {
                         position: None,
                     },
                     is_static: false,
+                    is_private: false,
+                    computed: false,
                 }],
                 position: None,
             },
@@ -2576,7 +2780,7 @@ mod tests {
             name: "Foo".to_string(),
             super_class: None,
             body: vec![ClassElement::MethodDefinition {
-                key: "constructor".to_string(),
+                key: PropertyKey::Identifier("constructor".to_string()),
                 kind: MethodKind::Constructor,
                 value: Expression::FunctionExpression {
                     name: None,
@@ -2607,6 +2811,8 @@ mod tests {
                     position: None,
                 },
                 is_static: false,
+                is_private: false,
+                computed: false,
             }],
             position: None,
         }]);
@@ -2650,7 +2856,7 @@ mod tests {
             name: "Foo".to_string(),
             super_class: None,
             body: vec![ClassElement::MethodDefinition {
-                key: "constructor".to_string(),
+                key: PropertyKey::Identifier("constructor".to_string()),
                 kind: MethodKind::Constructor,
                 value: Expression::FunctionExpression {
                     name: None,
@@ -2681,6 +2887,8 @@ mod tests {
                     position: None,
                 },
                 is_static: false,
+                is_private: false,
+                computed: false,
             }],
             position: None,
         }]);

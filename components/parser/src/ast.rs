@@ -106,6 +106,32 @@ pub enum Statement {
         position: Option<SourcePosition>,
     },
 
+    /// For...in loop
+    ForInStatement {
+        /// Left side (variable or pattern)
+        left: ForInOfLeft,
+        /// Object to iterate over
+        right: Expression,
+        /// Loop body
+        body: Box<Statement>,
+        /// Source location
+        position: Option<SourcePosition>,
+    },
+
+    /// For...of loop
+    ForOfStatement {
+        /// Left side (variable or pattern)
+        left: ForInOfLeft,
+        /// Iterable to iterate over
+        right: Expression,
+        /// Loop body
+        body: Box<Statement>,
+        /// Is await for-of
+        r#await: bool,
+        /// Source location
+        position: Option<SourcePosition>,
+    },
+
     /// Block statement
     BlockStatement {
         /// Block body
@@ -155,6 +181,61 @@ pub enum Statement {
         /// Source location
         position: Option<SourcePosition>,
     },
+
+    /// Do-while loop
+    DoWhileStatement {
+        /// Loop body
+        body: Box<Statement>,
+        /// Loop condition
+        test: Expression,
+        /// Source location
+        position: Option<SourcePosition>,
+    },
+
+    /// Switch statement
+    SwitchStatement {
+        /// Discriminant expression
+        discriminant: Expression,
+        /// Case clauses
+        cases: Vec<SwitchCase>,
+        /// Source location
+        position: Option<SourcePosition>,
+    },
+
+    /// With statement
+    WithStatement {
+        /// Object expression
+        object: Expression,
+        /// Body statement
+        body: Box<Statement>,
+        /// Source location
+        position: Option<SourcePosition>,
+    },
+
+    /// Debugger statement
+    DebuggerStatement {
+        /// Source location
+        position: Option<SourcePosition>,
+    },
+
+    /// Labeled statement
+    LabeledStatement {
+        /// Label name
+        label: String,
+        /// Body statement
+        body: Box<Statement>,
+        /// Source location
+        position: Option<SourcePosition>,
+    },
+}
+
+/// Switch case clause
+#[derive(Debug, Clone, PartialEq)]
+pub struct SwitchCase {
+    /// Test expression (None for default case)
+    pub test: Option<Expression>,
+    /// Consequent statements
+    pub consequent: Vec<Statement>,
 }
 
 /// JavaScript expressions
@@ -280,6 +361,16 @@ pub enum Expression {
         callee: Box<Expression>,
         /// Arguments
         arguments: Vec<Expression>,
+        /// Source location
+        position: Option<SourcePosition>,
+    },
+
+    /// Meta property (new.target, import.meta)
+    MetaProperty {
+        /// Meta (e.g., "new" or "import")
+        meta: String,
+        /// Property (e.g., "target" or "meta")
+        property: String,
         /// Source location
         position: Option<SourcePosition>,
     },
@@ -583,6 +674,22 @@ pub enum ForInit {
     Expression(Expression),
 }
 
+/// Left side of for-in/for-of loop
+#[derive(Debug, Clone, PartialEq)]
+pub enum ForInOfLeft {
+    /// Variable declaration (let x, const x, var x)
+    VariableDeclaration {
+        /// Kind
+        kind: VariableKind,
+        /// Binding pattern
+        id: Pattern,
+    },
+    /// Existing variable or pattern
+    Pattern(Pattern),
+    /// Left-hand side expression (e.g., member expression like x.y or x[0])
+    Expression(Expression),
+}
+
 /// Catch clause
 #[derive(Debug, Clone, PartialEq)]
 pub struct CatchClause {
@@ -598,22 +705,30 @@ pub enum ClassElement {
     /// Method definition
     MethodDefinition {
         /// Method name
-        key: String,
+        key: PropertyKey,
         /// Method kind
         kind: MethodKind,
         /// Value (function expression)
         value: Expression,
         /// Is static
         is_static: bool,
+        /// Is private (#name)
+        is_private: bool,
+        /// Is computed (e.g., [expr])
+        computed: bool,
     },
     /// Property definition
     PropertyDefinition {
         /// Property key
-        key: String,
+        key: PropertyKey,
         /// Initial value
         value: Option<Expression>,
         /// Is static
         is_static: bool,
+        /// Is private (#name)
+        is_private: bool,
+        /// Is computed (e.g., [expr])
+        computed: bool,
     },
 }
 

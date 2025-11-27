@@ -72,6 +72,20 @@ pub enum Keyword {
     Export,
     /// default keyword
     Default,
+    /// delete keyword
+    Delete,
+    /// with keyword
+    With,
+    /// switch keyword
+    Switch,
+    /// case keyword
+    Case,
+    /// do keyword
+    Do,
+    /// debugger keyword
+    Debugger,
+    /// static keyword
+    Static,
     // Note: 'constructor' is NOT a keyword - it's a special method name in classes
 }
 
@@ -179,8 +193,11 @@ pub enum Punctuator {
 /// Token produced by the lexer
 #[derive(Debug, Clone, PartialEq)]
 pub enum Token {
-    /// Identifier (variable name, etc.)
-    Identifier(String),
+    /// Identifier (variable name, etc.). Second field is true if the identifier
+    /// contained Unicode escape sequences (important for escaped keywords)
+    Identifier(String, bool),
+    /// Private identifier (#name) for class private fields/methods
+    PrivateIdentifier(String),
     /// Number literal
     Number(f64),
     /// BigInt literal (integer with 'n' suffix)
@@ -201,29 +218,60 @@ pub enum Token {
 pub struct Lexer<'a> {
     source: &'a str,
     chars: Vec<char>,
-    position: usize,
-    line: u32,
-    column: u32,
-    current_token: Option<Token>,
+    pub position: usize,
+    pub line: u32,
+    pub column: u32,
+    pub current_token: Option<Token>,
     /// Tracks if a line terminator was encountered before the current token
     /// Used for Automatic Semicolon Insertion (ASI)
     pub line_terminator_before_token: bool,
     /// Previous line number (used to detect line changes)
-    previous_line: u32,
+    pub previous_line: u32,
 }
 
 impl<'a> Lexer<'a> {
     /// Create a new lexer for the given source code
     pub fn new(source: &'a str) -> Self {
-        Self {
+        let chars: Vec<char> = source.chars().collect();
+        let mut lexer = Self {
             source,
-            chars: source.chars().collect(),
+            chars,
             position: 0,
             line: 1,
             column: 1,
             current_token: None,
             line_terminator_before_token: false,
             previous_line: 1,
+        };
+
+        // Handle hashbang comment at the start of the file
+        lexer.skip_hashbang();
+        lexer
+    }
+
+    /// Skip hashbang comment (#!) at the beginning of the source
+    fn skip_hashbang(&mut self) {
+        // Hashbang is only valid at position 0
+        if self.position == 0 && !self.is_at_end() {
+            if self.peek() == '#' && self.peek_next() == Some('!') {
+                // Skip until end of line
+                while !self.is_at_end() && self.peek() != '\n' && self.peek() != '\r' {
+                    self.advance();
+                }
+                // Advance past the line terminator if present
+                if !self.is_at_end() {
+                    if self.peek() == '\r' {
+                        self.advance();
+                        if !self.is_at_end() && self.peek() == '\n' {
+                            self.advance();
+                        }
+                    } else if self.peek() == '\n' {
+                        self.advance();
+                    }
+                    self.line = 2;
+                    self.column = 1;
+                }
+            }
         }
     }
 
@@ -241,6 +289,37 @@ impl<'a> Lexer<'a> {
             self.current_token = Some(self.scan_token()?);
         }
         Ok(self.current_token.as_ref().unwrap())
+    }
+
+    /// Check if the token after an identifier is the arrow (=>)
+    /// Used for detecting single-parameter arrow functions like: x => expr
+    pub fn check_arrow_after_identifier(&mut self) -> Result<bool, JsError> {
+        // Save lexer state
+        let saved_position = self.position;
+        let saved_line = self.line;
+        let saved_column = self.column;
+        let saved_previous_line = self.previous_line;
+        let saved_line_term = self.line_terminator_before_token;
+
+        // Clear current token cache and scan fresh
+        self.current_token = None;
+
+        // Scan the identifier token (skip it)
+        let _ = self.scan_token()?;
+
+        // Scan the next token and check if it's =>
+        let next = self.scan_token()?;
+        let is_arrow = matches!(next, Token::Punctuator(Punctuator::Arrow));
+
+        // Restore lexer state
+        self.position = saved_position;
+        self.line = saved_line;
+        self.column = saved_column;
+        self.previous_line = saved_previous_line;
+        self.line_terminator_before_token = saved_line_term;
+        self.current_token = None; // Clear so next peek re-scans
+
+        Ok(is_arrow)
     }
 
     fn scan_token(&mut self) -> Result<Token, JsError> {
@@ -412,6 +491,14 @@ impl<'a> Lexer<'a> {
 
             _ if is_id_start(ch) => self.scan_identifier(ch),
 
+            // Unicode escape sequence starting an identifier: \u0041 or \u{41}
+            '\\' if !self.is_at_end() && self.peek() == 'u' => {
+                self.scan_identifier_with_unicode_start()
+            }
+
+            // Private identifier (#name) for class private fields/methods
+            '#' => self.scan_private_identifier(),
+
             _ => Err(JsError {
                 kind: ErrorKind::SyntaxError,
                 message: format!("Unexpected character: '{}'", ch),
@@ -445,6 +532,25 @@ impl<'a> Lexer<'a> {
                     '\'' => value.push('\''),
                     '"' => value.push('"'),
                     '0' => value.push('\0'),
+                    // Line continuation: backslash followed by actual line terminator
+                    '\n' => {
+                        // Line continuation - skip the newline, don't add anything
+                        self.line += 1;
+                        self.column = 1;
+                    }
+                    '\r' => {
+                        // Line continuation with carriage return
+                        if self.peek() == '\n' {
+                            self.advance(); // consume the \n after \r
+                        }
+                        self.line += 1;
+                        self.column = 1;
+                    }
+                    // Line separator U+2028 and Paragraph separator U+2029 are also line terminators
+                    '\u{2028}' | '\u{2029}' => {
+                        self.line += 1;
+                        self.column = 1;
+                    }
                     _ => value.push(escaped),
                 }
             } else if self.peek() == '\n' {
@@ -521,6 +627,7 @@ impl<'a> Lexer<'a> {
         let start_pos = self.current_position();
         let mut num_str = first.to_string();
         let mut is_float = false;
+        let mut radix: Option<u32> = None; // None = decimal, Some(16) = hex, etc.
 
         // Check for hex (0x), binary (0b), or octal (0o) literals
         if first == '0' && !self.is_at_end() {
@@ -528,7 +635,8 @@ impl<'a> Lexer<'a> {
             match next {
                 'x' | 'X' => {
                     // Hexadecimal
-                    num_str.push(self.advance());
+                    self.advance(); // skip the 'x' (don't add to num_str for parsing)
+                    num_str.clear(); // We'll build the digits-only string
                     if self.is_at_end() || !self.peek().is_ascii_hexdigit() {
                         return Err(JsError {
                             kind: ErrorKind::SyntaxError,
@@ -540,10 +648,12 @@ impl<'a> Lexer<'a> {
                     while !self.is_at_end() && self.peek().is_ascii_hexdigit() {
                         num_str.push(self.advance());
                     }
+                    radix = Some(16);
                 }
                 'b' | 'B' => {
                     // Binary
-                    num_str.push(self.advance());
+                    self.advance(); // skip the 'b'
+                    num_str.clear();
                     if self.is_at_end() || (self.peek() != '0' && self.peek() != '1') {
                         return Err(JsError {
                             kind: ErrorKind::SyntaxError,
@@ -555,10 +665,12 @@ impl<'a> Lexer<'a> {
                     while !self.is_at_end() && (self.peek() == '0' || self.peek() == '1') {
                         num_str.push(self.advance());
                     }
+                    radix = Some(2);
                 }
                 'o' | 'O' => {
                     // Octal
-                    num_str.push(self.advance());
+                    self.advance(); // skip the 'o'
+                    num_str.clear();
                     if self.is_at_end() || !('0'..='7').contains(&self.peek()) {
                         return Err(JsError {
                             kind: ErrorKind::SyntaxError,
@@ -570,6 +682,7 @@ impl<'a> Lexer<'a> {
                     while !self.is_at_end() && ('0'..='7').contains(&self.peek()) {
                         num_str.push(self.advance());
                     }
+                    radix = Some(8);
                 }
                 _ => {
                     // Regular decimal number starting with 0
@@ -592,16 +705,37 @@ impl<'a> Lexer<'a> {
                 });
             }
             self.advance(); // consume 'n'
-            return Ok(Token::BigIntLiteral(num_str));
+            // For BigInt, reconstruct the full literal
+            let bigint_str = match radix {
+                Some(16) => format!("0x{}", num_str),
+                Some(8) => format!("0o{}", num_str),
+                Some(2) => format!("0b{}", num_str),
+                _ => num_str,
+            };
+            return Ok(Token::BigIntLiteral(bigint_str));
         }
 
         // Parse as regular number
-        let value = num_str.parse::<f64>().map_err(|_| JsError {
-            kind: ErrorKind::SyntaxError,
-            message: format!("Invalid number: {}", num_str),
-            stack: vec![],
-            source_position: Some(start_pos),
-        })?;
+        let value = match radix {
+            Some(base) => {
+                // Parse hex, binary, or octal
+                u64::from_str_radix(&num_str, base).map(|n| n as f64).map_err(|_| JsError {
+                    kind: ErrorKind::SyntaxError,
+                    message: format!("Invalid number literal"),
+                    stack: vec![],
+                    source_position: Some(start_pos),
+                })?
+            }
+            None => {
+                // Parse decimal
+                num_str.parse::<f64>().map_err(|_| JsError {
+                    kind: ErrorKind::SyntaxError,
+                    message: format!("Invalid number: {}", num_str),
+                    stack: vec![],
+                    source_position: Some(start_pos),
+                })?
+            }
+        };
 
         Ok(Token::Number(value))
     }
@@ -641,9 +775,34 @@ impl<'a> Lexer<'a> {
 
     fn scan_identifier(&mut self, first: char) -> Result<Token, JsError> {
         let mut ident = first.to_string();
+        let mut has_escape = false;
 
-        while !self.is_at_end() && is_id_continue(self.peek()) {
-            ident.push(self.advance());
+        while !self.is_at_end() {
+            if self.peek() == '\\' && self.peek_next() == Some('u') {
+                // Unicode escape in identifier
+                has_escape = true;
+                self.advance(); // consume '\'
+                let ch = self.parse_unicode_escape()?;
+                if !is_id_continue(ch) {
+                    return Err(JsError {
+                        kind: ErrorKind::SyntaxError,
+                        message: format!("Invalid Unicode escape sequence in identifier"),
+                        stack: vec![],
+                        source_position: Some(self.current_position()),
+                    });
+                }
+                ident.push(ch);
+            } else if is_id_continue(self.peek()) {
+                ident.push(self.advance());
+            } else {
+                break;
+            }
+        }
+
+        // If identifier had escape sequences, it cannot be a keyword
+        // Per spec, escaped keywords are identifiers
+        if has_escape {
+            return Ok(Token::Identifier(ident, true));
         }
 
         // Check for keywords
@@ -683,28 +842,249 @@ impl<'a> Lexer<'a> {
             "import" => Token::Keyword(Keyword::Import),
             "export" => Token::Keyword(Keyword::Export),
             "default" => Token::Keyword(Keyword::Default),
+            "delete" => Token::Keyword(Keyword::Delete),
+            "with" => Token::Keyword(Keyword::With),
+            "switch" => Token::Keyword(Keyword::Switch),
+            "case" => Token::Keyword(Keyword::Case),
+            "do" => Token::Keyword(Keyword::Do),
+            "debugger" => Token::Keyword(Keyword::Debugger),
+            "static" => Token::Keyword(Keyword::Static),
             // Note: 'constructor' is NOT a keyword - it's just a special method name
-            _ => Token::Identifier(ident),
+            _ => Token::Identifier(ident, false),
         };
 
         Ok(token)
     }
 
+    /// Scan a private identifier (#name)
+    fn scan_private_identifier(&mut self) -> Result<Token, JsError> {
+        let start_pos = self.current_position();
+
+        // The '#' has already been consumed by advance()
+        // Next character must be a valid identifier start OR a Unicode escape
+
+        let mut name = String::new();
+
+        // Check for first character: either Unicode escape or regular id start
+        if self.is_at_end() {
+            return Err(JsError {
+                kind: ErrorKind::SyntaxError,
+                message: "Private identifier must have a name".to_string(),
+                stack: vec![],
+                source_position: Some(start_pos),
+            });
+        }
+
+        // Handle first character
+        if self.peek() == '\\' && self.peek_next() == Some('u') {
+            // Unicode escape at start
+            self.advance(); // consume '\'
+            let ch = self.parse_unicode_escape()?;
+            if !is_id_start(ch) {
+                return Err(JsError {
+                    kind: ErrorKind::SyntaxError,
+                    message: "Invalid Unicode escape sequence in private identifier start".to_string(),
+                    stack: vec![],
+                    source_position: Some(start_pos),
+                });
+            }
+            name.push(ch);
+        } else if is_id_start(self.peek()) {
+            name.push(self.advance());
+        } else {
+            return Err(JsError {
+                kind: ErrorKind::SyntaxError,
+                message: "Private identifier must have a name".to_string(),
+                stack: vec![],
+                source_position: Some(start_pos),
+            });
+        }
+
+        // Scan the rest of the identifier
+        while !self.is_at_end() {
+            if self.peek() == '\\' && self.peek_next() == Some('u') {
+                // Unicode escape in identifier
+                self.advance(); // consume '\'
+                let ch = self.parse_unicode_escape()?;
+                if !is_id_continue(ch) {
+                    return Err(JsError {
+                        kind: ErrorKind::SyntaxError,
+                        message: "Invalid Unicode escape sequence in private identifier".to_string(),
+                        stack: vec![],
+                        source_position: Some(self.current_position()),
+                    });
+                }
+                name.push(ch);
+            } else if is_id_continue(self.peek()) {
+                name.push(self.advance());
+            } else {
+                break;
+            }
+        }
+
+        Ok(Token::PrivateIdentifier(name))
+    }
+
+    /// Scan an identifier that starts with a Unicode escape sequence
+    fn scan_identifier_with_unicode_start(&mut self) -> Result<Token, JsError> {
+        let start_pos = self.current_position();
+
+        // Parse the initial Unicode escape (we already consumed '\')
+        let first_char = self.parse_unicode_escape()?;
+
+        // Validate it's a valid identifier start character
+        if !is_id_start(first_char) {
+            return Err(JsError {
+                kind: ErrorKind::SyntaxError,
+                message: format!("Invalid Unicode escape sequence in identifier start"),
+                stack: vec![],
+                source_position: Some(start_pos),
+            });
+        }
+
+        let mut ident = first_char.to_string();
+
+        // Continue scanning the rest of the identifier
+        while !self.is_at_end() {
+            if self.peek() == '\\' && self.peek_next() == Some('u') {
+                // Unicode escape in identifier
+                self.advance(); // consume '\'
+                let ch = self.parse_unicode_escape()?;
+                if !is_id_continue(ch) {
+                    return Err(JsError {
+                        kind: ErrorKind::SyntaxError,
+                        message: format!("Invalid Unicode escape sequence in identifier"),
+                        stack: vec![],
+                        source_position: Some(start_pos),
+                    });
+                }
+                ident.push(ch);
+            } else if is_id_continue(self.peek()) {
+                ident.push(self.advance());
+            } else {
+                break;
+            }
+        }
+
+        // Check for keywords (identifiers with escapes cannot be keywords)
+        // Per spec, escaped keywords are still identifiers, not keywords
+        Ok(Token::Identifier(ident, true)) // true = has Unicode escapes
+    }
+
+    /// Parse a Unicode escape sequence: \uXXXX or \u{XXXX}
+    fn parse_unicode_escape(&mut self) -> Result<char, JsError> {
+        let start_pos = self.current_position();
+
+        // Consume 'u'
+        if self.is_at_end() || self.advance() != 'u' {
+            return Err(JsError {
+                kind: ErrorKind::SyntaxError,
+                message: "Expected 'u' in Unicode escape".to_string(),
+                stack: vec![],
+                source_position: Some(start_pos),
+            });
+        }
+
+        if self.is_at_end() {
+            return Err(JsError {
+                kind: ErrorKind::SyntaxError,
+                message: "Unexpected end of input in Unicode escape".to_string(),
+                stack: vec![],
+                source_position: Some(start_pos.clone()),
+            });
+        }
+
+        let code_point = if self.peek() == '{' {
+            // \u{XXXX} format (ES6 Unicode code point escape)
+            self.advance(); // consume '{'
+            let mut hex = String::new();
+            while !self.is_at_end() && self.peek() != '}' {
+                if !self.peek().is_ascii_hexdigit() {
+                    return Err(JsError {
+                        kind: ErrorKind::SyntaxError,
+                        message: "Invalid hex digit in Unicode escape".to_string(),
+                        stack: vec![],
+                        source_position: Some(start_pos.clone()),
+                    });
+                }
+                hex.push(self.advance());
+            }
+            if self.is_at_end() || self.peek() != '}' {
+                return Err(JsError {
+                    kind: ErrorKind::SyntaxError,
+                    message: "Expected '}' in Unicode escape".to_string(),
+                    stack: vec![],
+                    source_position: Some(start_pos.clone()),
+                });
+            }
+            self.advance(); // consume '}'
+
+            u32::from_str_radix(&hex, 16).map_err(|_| JsError {
+                kind: ErrorKind::SyntaxError,
+                message: "Invalid Unicode code point".to_string(),
+                stack: vec![],
+                source_position: Some(start_pos.clone()),
+            })?
+        } else {
+            // \uXXXX format (4 hex digits)
+            let mut hex = String::new();
+            for _ in 0..4 {
+                if self.is_at_end() || !self.peek().is_ascii_hexdigit() {
+                    return Err(JsError {
+                        kind: ErrorKind::SyntaxError,
+                        message: "Expected 4 hex digits in Unicode escape".to_string(),
+                        stack: vec![],
+                        source_position: Some(start_pos.clone()),
+                    });
+                }
+                hex.push(self.advance());
+            }
+            u32::from_str_radix(&hex, 16).map_err(|_| JsError {
+                kind: ErrorKind::SyntaxError,
+                message: "Invalid Unicode code point".to_string(),
+                stack: vec![],
+                source_position: Some(start_pos.clone()),
+            })?
+        };
+
+        // Convert to char
+        char::from_u32(code_point).ok_or_else(|| JsError {
+            kind: ErrorKind::SyntaxError,
+            message: format!("Invalid Unicode code point: {}", code_point),
+            stack: vec![],
+            source_position: Some(start_pos),
+        })
+    }
+
     fn skip_whitespace_and_comments(&mut self) {
         while !self.is_at_end() {
             match self.peek() {
-                ' ' | '\t' | '\r' => {
+                ' ' | '\t' => {
                     self.advance();
                 }
-                '\n' => {
+                '\n' | '\u{2028}' | '\u{2029}' => {
+                    // Line Feed (LF), Line Separator (LS), Paragraph Separator (PS)
                     self.advance();
+                    self.line += 1;
+                    self.column = 1;
+                }
+                '\r' => {
+                    // Carriage Return (CR) - handle CRLF as single line terminator
+                    self.advance();
+                    if !self.is_at_end() && self.peek() == '\n' {
+                        self.advance();
+                    }
                     self.line += 1;
                     self.column = 1;
                 }
                 '/' => {
                     if self.peek_next() == Some('/') {
-                        // Line comment
-                        while !self.is_at_end() && self.peek() != '\n' {
+                        // Line comment - also terminate on LS and PS
+                        while !self.is_at_end() {
+                            let ch = self.peek();
+                            if ch == '\n' || ch == '\r' || ch == '\u{2028}' || ch == '\u{2029}' {
+                                break;
+                            }
                             self.advance();
                         }
                     } else if self.peek_next() == Some('*') {
@@ -717,9 +1097,20 @@ impl<'a> Lexer<'a> {
                                 self.advance(); // /
                                 break;
                             }
-                            if self.peek() == '\n' {
+                            // Track all line terminators: LF, CR, LS (U+2028), PS (U+2029)
+                            let ch = self.peek();
+                            if ch == '\n' || ch == '\u{2028}' || ch == '\u{2029}' {
                                 self.line += 1;
                                 self.column = 1;
+                            } else if ch == '\r' {
+                                self.line += 1;
+                                self.column = 1;
+                                // Handle CRLF as single line terminator
+                                self.advance();
+                                if !self.is_at_end() && self.peek() == '\n' {
+                                    self.advance();
+                                }
+                                continue;
                             }
                             self.advance();
                         }
@@ -778,12 +1169,171 @@ impl<'a> Lexer<'a> {
     }
 }
 
+/// Check if a character is a valid identifier start character.
+/// Per ECMAScript spec, this includes:
+/// - Unicode ID_Start (Unicode categories: Lu, Ll, Lt, Lm, Lo, Nl)
+/// - $ (dollar sign)
+/// - _ (underscore)
 fn is_id_start(ch: char) -> bool {
-    ch.is_ascii_alphabetic() || ch == '_' || ch == '$'
+    ch == '_' || ch == '$' || ch.is_alphabetic() || is_unicode_id_start(ch)
 }
 
+/// Check if a character is a valid identifier continue character.
+/// Per ECMAScript spec, this includes:
+/// - Unicode ID_Continue (ID_Start + Mn, Mc, Nd, Pc)
+/// - $ (dollar sign)
+/// - U+200C (Zero Width Non-Joiner)
+/// - U+200D (Zero Width Joiner)
 fn is_id_continue(ch: char) -> bool {
-    ch.is_ascii_alphanumeric() || ch == '_' || ch == '$'
+    ch == '_' || ch == '$' || ch.is_alphanumeric() || is_unicode_id_continue(ch)
+        || ch == '\u{200C}' || ch == '\u{200D}'
+}
+
+/// Check if character is in Unicode ID_Start
+fn is_unicode_id_start(ch: char) -> bool {
+    // Check common Unicode letter categories
+    matches!(unicode_category(ch),
+        UnicodeCategory::Lu | // Uppercase_Letter
+        UnicodeCategory::Ll | // Lowercase_Letter
+        UnicodeCategory::Lt | // Titlecase_Letter
+        UnicodeCategory::Lm | // Modifier_Letter
+        UnicodeCategory::Lo | // Other_Letter
+        UnicodeCategory::Nl   // Letter_Number
+    )
+}
+
+/// Check if character is in Unicode ID_Continue
+fn is_unicode_id_continue(ch: char) -> bool {
+    is_unicode_id_start(ch) || matches!(unicode_category(ch),
+        UnicodeCategory::Mn | // Nonspacing_Mark
+        UnicodeCategory::Mc | // Spacing_Combining_Mark
+        UnicodeCategory::Nd | // Decimal_Number
+        UnicodeCategory::Pc   // Connector_Punctuation
+    )
+}
+
+/// Unicode General Category (simplified)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum UnicodeCategory {
+    Lu, // Uppercase_Letter
+    Ll, // Lowercase_Letter
+    Lt, // Titlecase_Letter
+    Lm, // Modifier_Letter
+    Lo, // Other_Letter
+    Nl, // Letter_Number
+    Mn, // Nonspacing_Mark
+    Mc, // Spacing_Combining_Mark
+    Nd, // Decimal_Number
+    Pc, // Connector_Punctuation
+    Other,
+}
+
+/// Get the Unicode general category of a character
+fn unicode_category(ch: char) -> UnicodeCategory {
+    // Use Rust's built-in Unicode properties where possible
+    if ch.is_uppercase() {
+        UnicodeCategory::Lu
+    } else if ch.is_lowercase() {
+        UnicodeCategory::Ll
+    } else if ch.is_alphabetic() {
+        // Other alphabetic characters (Lo, Lm, Lt categories)
+        UnicodeCategory::Lo
+    } else if ch.is_numeric() && !ch.is_ascii_digit() {
+        // Non-ASCII numeric (could be Nl or Nd)
+        UnicodeCategory::Nd
+    } else if ch.is_ascii_digit() {
+        UnicodeCategory::Nd
+    } else if is_connector_punctuation(ch) {
+        UnicodeCategory::Pc
+    } else if is_combining_mark(ch) {
+        UnicodeCategory::Mn
+    } else {
+        UnicodeCategory::Other
+    }
+}
+
+/// Check if character is connector punctuation (Pc category)
+fn is_connector_punctuation(ch: char) -> bool {
+    matches!(ch,
+        '_' | // LOW LINE
+        '\u{203F}' | // UNDERTIE
+        '\u{2040}' | // CHARACTER TIE
+        '\u{2054}' | // INVERTED UNDERTIE
+        '\u{FE33}' | // PRESENTATION FORM FOR VERTICAL LOW LINE
+        '\u{FE34}' | // PRESENTATION FORM FOR VERTICAL WAVY LOW LINE
+        '\u{FE4D}' | // DASHED LOW LINE
+        '\u{FE4E}' | // CENTRELINE LOW LINE
+        '\u{FE4F}' | // WAVY LOW LINE
+        '\u{FF3F}'   // FULLWIDTH LOW LINE
+    )
+}
+
+/// Check if character is a combining mark (Mn or Mc categories)
+fn is_combining_mark(ch: char) -> bool {
+    let code = ch as u32;
+    // Common combining mark ranges
+    (0x0300..=0x036F).contains(&code) || // Combining Diacritical Marks
+    (0x0483..=0x0489).contains(&code) || // Cyrillic combining marks
+    (0x0591..=0x05BD).contains(&code) || // Hebrew combining marks
+    (0x05BF..=0x05BF).contains(&code) ||
+    (0x05C1..=0x05C2).contains(&code) ||
+    (0x05C4..=0x05C5).contains(&code) ||
+    (0x05C7..=0x05C7).contains(&code) ||
+    (0x0610..=0x061A).contains(&code) || // Arabic combining marks
+    (0x064B..=0x065F).contains(&code) ||
+    (0x0670..=0x0670).contains(&code) ||
+    (0x06D6..=0x06DC).contains(&code) ||
+    (0x06DF..=0x06E4).contains(&code) ||
+    (0x06E7..=0x06E8).contains(&code) ||
+    (0x06EA..=0x06ED).contains(&code) ||
+    (0x0711..=0x0711).contains(&code) || // Syriac
+    (0x0730..=0x074A).contains(&code) ||
+    (0x07A6..=0x07B0).contains(&code) || // Thaana
+    (0x07EB..=0x07F3).contains(&code) || // NKo
+    (0x0816..=0x0819).contains(&code) || // Samaritan
+    (0x081B..=0x0823).contains(&code) ||
+    (0x0825..=0x0827).contains(&code) ||
+    (0x0829..=0x082D).contains(&code) ||
+    (0x0859..=0x085B).contains(&code) || // Mandaic
+    (0x08D4..=0x08E1).contains(&code) || // Arabic Extended-A
+    (0x08E3..=0x0903).contains(&code) ||
+    (0x093A..=0x093C).contains(&code) || // Devanagari
+    (0x093E..=0x094F).contains(&code) ||
+    (0x0951..=0x0957).contains(&code) ||
+    (0x0962..=0x0963).contains(&code) ||
+    (0x0981..=0x0983).contains(&code) || // Bengali
+    (0x09BC..=0x09BC).contains(&code) ||
+    (0x09BE..=0x09C4).contains(&code) ||
+    (0x09C7..=0x09C8).contains(&code) ||
+    (0x09CB..=0x09CD).contains(&code) ||
+    (0x09D7..=0x09D7).contains(&code) ||
+    (0x09E2..=0x09E3).contains(&code) ||
+    (0x0A01..=0x0A03).contains(&code) || // Gurmukhi
+    (0x0A3C..=0x0A3C).contains(&code) ||
+    (0x0A3E..=0x0A42).contains(&code) ||
+    (0x0A47..=0x0A48).contains(&code) ||
+    (0x0A4B..=0x0A4D).contains(&code) ||
+    (0x0A51..=0x0A51).contains(&code) ||
+    (0x0A70..=0x0A71).contains(&code) ||
+    (0x0A75..=0x0A75).contains(&code) ||
+    (0x0A81..=0x0A83).contains(&code) || // Gujarati
+    (0x0ABC..=0x0ABC).contains(&code) ||
+    (0x0ABE..=0x0AC5).contains(&code) ||
+    (0x0AC7..=0x0AC9).contains(&code) ||
+    (0x0ACB..=0x0ACD).contains(&code) ||
+    (0x0AE2..=0x0AE3).contains(&code) ||
+    (0x0B01..=0x0B03).contains(&code) || // Oriya
+    (0x0B3C..=0x0B3C).contains(&code) ||
+    (0x0B3E..=0x0B44).contains(&code) ||
+    (0x0B47..=0x0B48).contains(&code) ||
+    (0x0B4B..=0x0B4D).contains(&code) ||
+    (0x0B56..=0x0B57).contains(&code) ||
+    (0x0B62..=0x0B63).contains(&code) ||
+    (0x0B82..=0x0B82).contains(&code) || // Tamil
+    (0x0BBE..=0x0BC2).contains(&code) ||
+    (0x0BC6..=0x0BC8).contains(&code) ||
+    (0x0BCA..=0x0BCD).contains(&code) ||
+    (0x0BD7..=0x0BD7).contains(&code)
 }
 
 #[cfg(test)]
@@ -800,7 +1350,7 @@ mod tests {
     fn test_lexer_identifier() {
         let mut lexer = Lexer::new("foo");
         let token = lexer.next_token().unwrap();
-        assert!(matches!(token, Token::Identifier(s) if s == "foo"));
+        assert!(matches!(token, Token::Identifier(s, false) if s == "foo"));
     }
 
     #[test]
@@ -892,11 +1442,11 @@ mod tests {
         let mut lexer = Lexer::new("// comment\nfoo /* block */ bar");
         assert!(matches!(
             lexer.next_token().unwrap(),
-            Token::Identifier(s) if s == "foo"
+            Token::Identifier(s, _) if s == "foo"
         ));
         assert!(matches!(
             lexer.next_token().unwrap(),
-            Token::Identifier(s) if s == "bar"
+            Token::Identifier(s, _) if s == "bar"
         ));
     }
 

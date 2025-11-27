@@ -509,6 +509,18 @@ impl Dispatcher {
                     let result = self.in_check(prop, obj);
                     self.stack.push(result);
                 }
+                Opcode::DeleteProperty(ref _prop_name) => {
+                    let _obj = self.stack.pop().unwrap_or(Value::Undefined);
+                    // Delete property from object - for now always return true
+                    // TODO: implement actual property deletion on HeapObject
+                    self.stack.push(Value::Boolean(true));
+                }
+                Opcode::DeleteGlobal(ref var_name) => {
+                    // Delete global variable - always return true for now
+                    // In strict mode this would throw, but we're lenient
+                    self.globals.remove(var_name);
+                    self.stack.push(Value::Boolean(true));
+                }
                 Opcode::Jump(target) => {
                     ctx.instruction_pointer = target;
                 }
@@ -800,7 +812,7 @@ impl Dispatcher {
                             if let Some(gc_obj) = borrowed.downcast_mut::<Box<dyn Any>>() {
                                 // Check if it's a GCObject wrapped in Box<dyn Any>
                                 if let Some(gc_object) = gc_obj.downcast_mut::<GCObject>() {
-                                    gc_object.set(name, value);
+                                    gc_object.set(name, value.clone());
                                 }
                             }
                             // For other NativeObjects, we just ignore the store (non-extensible)
@@ -811,7 +823,7 @@ impl Dispatcher {
                             // Handle Error constructor property assignment (e.g., Error.prototype = ...)
                             if name == "prototype" {
                                 let proto_key = format!("{}.prototype", fn_name);
-                                self.globals.insert(proto_key, value);
+                                self.globals.insert(proto_key, value.clone());
                             }
                             // Ignore other property stores on Error constructors
                         }
@@ -819,6 +831,8 @@ impl Dispatcher {
                             // Ignore stores to non-objects
                         }
                     }
+                    // Push the assigned value back - assignment expressions return the assigned value
+                    self.stack.push(value);
                 }
                 Opcode::GetIndex => {
                     // Get value at computed index: obj[index]
@@ -882,7 +896,7 @@ impl Dispatcher {
                             if let Some(gc_obj) = borrowed.downcast_mut::<Box<dyn Any>>() {
                                 if let Some(gc_object) = gc_obj.downcast_mut::<GCObject>() {
                                     let key = self.to_property_key(&index);
-                                    gc_object.set(key, value);
+                                    gc_object.set(key, value.clone());
                                 }
                             }
                         }
@@ -890,6 +904,8 @@ impl Dispatcher {
                             // Ignore index stores to non-objects
                         }
                     }
+                    // Push the assigned value back - assignment expressions return the assigned value
+                    self.stack.push(value);
                 }
                 Opcode::CreateArray(count) => {
                     // Create array with elements from stack
@@ -3868,13 +3884,29 @@ mod tests {
     #[test]
     fn test_dispatcher_new() {
         let dispatcher = Dispatcher::new();
-        // Globals contains console, Math, Promise, JSON, and Array by default
-        assert_eq!(dispatcher.globals.len(), 5);
+        // Globals contains standard JavaScript builtins
+        assert!(dispatcher.globals.len() >= 20, "Should have at least 20 standard globals");
+        // Core objects
         assert!(dispatcher.globals.contains_key("console"));
         assert!(dispatcher.globals.contains_key("Math"));
         assert!(dispatcher.globals.contains_key("Promise"));
         assert!(dispatcher.globals.contains_key("JSON"));
         assert!(dispatcher.globals.contains_key("Array"));
+        // Constructors
+        assert!(dispatcher.globals.contains_key("Object"));
+        assert!(dispatcher.globals.contains_key("Number"));
+        assert!(dispatcher.globals.contains_key("String"));
+        assert!(dispatcher.globals.contains_key("Boolean"));
+        // Error constructors
+        assert!(dispatcher.globals.contains_key("Error"));
+        assert!(dispatcher.globals.contains_key("TypeError"));
+        assert!(dispatcher.globals.contains_key("ReferenceError"));
+        // Global constants and functions
+        assert!(dispatcher.globals.contains_key("NaN"));
+        assert!(dispatcher.globals.contains_key("Infinity"));
+        assert!(dispatcher.globals.contains_key("undefined"));
+        assert!(dispatcher.globals.contains_key("isNaN"));
+        assert!(dispatcher.globals.contains_key("parseInt"));
         assert!(dispatcher.stack.is_empty());
         assert!(dispatcher.open_upvalues.is_empty());
         assert!(dispatcher.current_upvalues.is_empty());
@@ -3883,8 +3915,8 @@ mod tests {
     #[test]
     fn test_dispatcher_default() {
         let dispatcher = Dispatcher::default();
-        // Default has console, Math, Promise, JSON, and Array globals
-        assert_eq!(dispatcher.globals.len(), 5);
+        // Default has same globals as new()
+        assert!(dispatcher.globals.len() >= 20, "Should have at least 20 standard globals");
         assert!(dispatcher.globals.contains_key("console"));
         assert!(dispatcher.globals.contains_key("Math"));
         assert!(dispatcher.globals.contains_key("Promise"));

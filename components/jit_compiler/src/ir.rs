@@ -127,6 +127,10 @@ pub enum IROpcode {
     Instanceof,
     /// in operator - check if property exists in object
     In,
+    /// delete property from object
+    DeleteProperty(String),
+    /// delete global variable
+    DeleteGlobal(String),
     /// Deoptimize - fall back to interpreter
     Deoptimize,
 }
@@ -236,6 +240,8 @@ impl IRFunction {
                 Opcode::Void => IROpcode::Void,
                 Opcode::Instanceof => IROpcode::Instanceof,
                 Opcode::In => IROpcode::In,
+                Opcode::DeleteProperty(ref s) => IROpcode::DeleteProperty(s.clone()),
+                Opcode::DeleteGlobal(ref s) => IROpcode::DeleteGlobal(s.clone()),
             };
 
             ir_func.instructions.push(IRInstruction::new(ir_op, offset));
