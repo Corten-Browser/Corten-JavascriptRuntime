@@ -73,13 +73,27 @@ impl TestMetadata {
                 // Extract features
                 let mut in_features = false;
                 for line in yaml.lines() {
-                    if line.trim().starts_with("features:") {
-                        in_features = true;
+                    let trimmed = line.trim();
+                    if trimmed.starts_with("features:") {
+                        // Check for inline array syntax: features: [class, decorators]
+                        let rest = trimmed["features:".len()..].trim();
+                        if rest.starts_with('[') && rest.ends_with(']') {
+                            // Parse inline array
+                            let inner = &rest[1..rest.len()-1];
+                            for item in inner.split(',') {
+                                let feature = item.trim();
+                                if !feature.is_empty() {
+                                    features.push(feature.to_string());
+                                }
+                            }
+                        } else {
+                            in_features = true;
+                        }
                         continue;
                     }
                     if in_features {
-                        if line.trim().starts_with("- ") {
-                            features.push(line.trim()[2..].to_string());
+                        if trimmed.starts_with("- ") {
+                            features.push(trimmed[2..].to_string());
                         } else if !line.starts_with(' ') && !line.starts_with('\t') {
                             in_features = false;
                         }

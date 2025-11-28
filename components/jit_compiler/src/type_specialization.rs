@@ -443,7 +443,8 @@ impl TypeSpecializer {
             | IROpcode::Sub(None)
             | IROpcode::Mul(None)
             | IROpcode::Div(None)
-            | IROpcode::Mod(None) => {
+            | IROpcode::Mod(None)
+            | IROpcode::Exp(None) => {
                 self.decide_math_specialization(profile)
             }
             IROpcode::LoadProperty(_) | IROpcode::StoreProperty(_) => {
@@ -539,6 +540,7 @@ impl TypeSpecializer {
             IROpcode::Mul(_) => IROpcode::Mul(Some(TypeInfo::Number)),
             IROpcode::Div(_) => IROpcode::Div(Some(TypeInfo::Number)),
             IROpcode::Mod(_) => IROpcode::Mod(Some(TypeInfo::Number)),
+            IROpcode::Exp(_) => IROpcode::Exp(Some(TypeInfo::Number)),
             other => other.clone(),
         };
 
@@ -573,6 +575,7 @@ impl TypeSpecializer {
             IROpcode::Mul(_) => IROpcode::Mul(Some(TypeInfo::Number)),
             IROpcode::Div(_) => IROpcode::Div(Some(TypeInfo::Number)),
             IROpcode::Mod(_) => IROpcode::Mod(Some(TypeInfo::Number)),
+            IROpcode::Exp(_) => IROpcode::Exp(Some(TypeInfo::Number)),
             other => other.clone(),
         };
 

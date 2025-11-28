@@ -890,6 +890,7 @@ impl BytecodeGenerator {
                     BinaryOperator::Mul => Opcode::Mul,
                     BinaryOperator::Div => Opcode::Div,
                     BinaryOperator::Mod => Opcode::Mod,
+                    BinaryOperator::Exp => Opcode::Exp,
                     BinaryOperator::Eq => Opcode::Equal,
                     BinaryOperator::NotEq => Opcode::NotEqual,
                     BinaryOperator::StrictEq => Opcode::StrictEqual,

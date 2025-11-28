@@ -380,6 +380,9 @@ impl<'a> Lexer<'a> {
             '.' => {
                 if self.match_char('.') && self.match_char('.') {
                     Ok(Token::Punctuator(Punctuator::Spread))
+                } else if !self.is_at_end() && self.peek().is_ascii_digit() {
+                    // Number with leading decimal: .5, .123, etc.
+                    self.scan_leading_decimal_number()
                 } else {
                     Ok(Token::Punctuator(Punctuator::Dot))
                 }
@@ -848,6 +851,37 @@ impl<'a> Lexer<'a> {
         }
     }
 
+    /// Scan a number that starts with a decimal point: .5, .123, .1e5, etc.
+    fn scan_leading_decimal_number(&mut self) -> Result<Token, JsError> {
+        let mut num_str = String::from("0."); // Add leading 0 for parsing
+
+        // Scan digits after the decimal point
+        while !self.is_at_end() && self.peek().is_ascii_digit() {
+            num_str.push(self.advance());
+        }
+
+        // Handle exponent
+        if !self.is_at_end() && (self.peek() == 'e' || self.peek() == 'E') {
+            num_str.push(self.advance());
+            if !self.is_at_end() && (self.peek() == '+' || self.peek() == '-') {
+                num_str.push(self.advance());
+            }
+            while !self.is_at_end() && self.peek().is_ascii_digit() {
+                num_str.push(self.advance());
+            }
+        }
+
+        // Parse as float
+        let value = num_str.parse::<f64>().map_err(|_| JsError {
+            kind: ErrorKind::SyntaxError,
+            message: format!("Invalid number: {}", num_str),
+            stack: vec![],
+            source_position: Some(self.current_position()),
+        })?;
+
+        Ok(Token::Number(value))
+    }
+
     fn scan_identifier(&mut self, first: char) -> Result<Token, JsError> {
         let mut ident = first.to_string();
         let mut has_escape = false;
@@ -1265,21 +1299,47 @@ impl<'a> Lexer<'a> {
 /// Check if a character is a valid identifier start character.
 /// Per ECMAScript spec, this includes:
 /// - Unicode ID_Start (Unicode categories: Lu, Ll, Lt, Lm, Lo, Nl)
+/// - Other_ID_Start (special exceptions)
 /// - $ (dollar sign)
 /// - _ (underscore)
 fn is_id_start(ch: char) -> bool {
     ch == '_' || ch == '$' || ch.is_alphabetic() || is_unicode_id_start(ch)
+        || is_other_id_start(ch)
+}
+
+/// Characters with Other_ID_Start property (special exceptions)
+/// These are symbols that can legally start identifiers despite not being letters
+fn is_other_id_start(ch: char) -> bool {
+    matches!(ch,
+        '\u{2118}' |  // ℘ SCRIPT CAPITAL P (Weierstrass p)
+        '\u{212E}' |  // ℮ ESTIMATED SYMBOL
+        '\u{309B}' |  // ゛ KATAKANA-HIRAGANA VOICED SOUND MARK
+        '\u{309C}'    // ゜ KATAKANA-HIRAGANA SEMI-VOICED SOUND MARK
+    )
 }
 
 /// Check if a character is a valid identifier continue character.
 /// Per ECMAScript spec, this includes:
 /// - Unicode ID_Continue (ID_Start + Mn, Mc, Nd, Pc)
+/// - Other_ID_Start (also valid for continue)
+/// - Other_ID_Continue (special exceptions)
 /// - $ (dollar sign)
 /// - U+200C (Zero Width Non-Joiner)
 /// - U+200D (Zero Width Joiner)
 fn is_id_continue(ch: char) -> bool {
     ch == '_' || ch == '$' || ch.is_alphanumeric() || is_unicode_id_continue(ch)
+        || is_other_id_start(ch) || is_other_id_continue(ch)
         || ch == '\u{200C}' || ch == '\u{200D}'
+}
+
+/// Characters with Other_ID_Continue property (special exceptions)
+fn is_other_id_continue(ch: char) -> bool {
+    matches!(ch,
+        '\u{00B7}' |  // · MIDDLE DOT
+        '\u{0387}' |  // · GREEK ANO TELEIA
+        '\u{1369}'..='\u{1371}' | // Ethiopic digits 1-9
+        '\u{19DA}'    // ᧚ NEW TAI LUE THAM DIGIT ONE
+    )
 }
 
 /// Check if character is in Unicode ID_Start

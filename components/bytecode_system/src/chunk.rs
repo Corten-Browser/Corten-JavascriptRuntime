@@ -224,6 +224,7 @@ impl BytecodeChunk {
             Opcode::Mul => (11, vec![]),
             Opcode::Div => (12, vec![]),
             Opcode::Mod => (13, vec![]),
+            Opcode::Exp => (200, vec![]),
             Opcode::Neg => (14, vec![]),
             Opcode::Not => (44, vec![]),
             Opcode::Equal => (15, vec![]),
@@ -564,6 +565,7 @@ impl BytecodeChunk {
                 offset += len;
                 Opcode::DeleteGlobal(s)
             }
+            200 => Opcode::Exp,
             _ => return Err(format!("Unknown opcode tag: {}", tag)),
         };
 

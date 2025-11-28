@@ -812,10 +812,12 @@ impl<'a> Parser<'a> {
         self.expect_keyword(Keyword::Class)?;
 
         // Name is optional for class expressions
-        let name = if let Token::Identifier(_, _) = self.lexer.peek_token()? {
-            Some(self.expect_identifier()?)
-        } else {
-            None
+        // await/yield can be class names when not in async/generator context
+        let name = match self.lexer.peek_token()? {
+            Token::Identifier(_, _) => Some(self.expect_identifier()?),
+            Token::Keyword(Keyword::Await) if !self.in_async => Some(self.expect_identifier()?),
+            Token::Keyword(Keyword::Yield) if !self.in_generator => Some(self.expect_identifier()?),
+            _ => None,
         };
 
         let super_class = if self.check_keyword(Keyword::Extends)? {
@@ -1363,17 +1365,10 @@ impl<'a> Parser<'a> {
                 self.last_position.clone(),
             ));
         }
-        // Need to finish parsing the full init expression (may have comma operator)
-        let init_expr = if self.check_punctuator(Punctuator::Comma)? {
-            self.lexer.next_token()?;
-            let rest = self.parse_expression()?;
-            Expression::SequenceExpression {
-                expressions: vec![left_expr, rest],
-                position: None,
-            }
-        } else {
-            left_expr
-        };
+
+        // The left_expr may just be the LHS of an assignment expression
+        // We need to finish parsing the full expression
+        let init_expr = self.finish_expression_from_lhs(left_expr)?;
         self.parse_regular_for(Some(ForInit::Expression(init_expr)))
     }
 
@@ -1999,6 +1994,46 @@ impl<'a> Parser<'a> {
         Ok(expr)
     }
 
+    /// Given a left-hand-side expression, finish parsing the full expression.
+    /// This handles cases like `for (x = 1; ...)` where we've already parsed `x`
+    /// but need to continue parsing `= 1` and any subsequent parts.
+    fn finish_expression_from_lhs(&mut self, lhs: Expression) -> Result<Expression, JsError> {
+        // First, check if there's an assignment operator
+        let expr = if let Some(op) = self.check_assignment_operator()? {
+            self.lexer.next_token()?;
+            let right = Box::new(self.parse_assignment_expression()?);
+            let left = self.expression_to_assignment_target(lhs)?;
+            Expression::AssignmentExpression {
+                left,
+                operator: op,
+                right,
+                position: None,
+            }
+        } else {
+            lhs
+        };
+
+        // Then handle comma operator (sequence expression)
+        if self.check_punctuator(Punctuator::Comma)? {
+            self.lexer.next_token()?;
+            let rest = self.parse_expression()?;
+            // Flatten nested sequence expressions
+            let mut expressions = vec![expr];
+            match rest {
+                Expression::SequenceExpression { expressions: mut es, .. } => {
+                    expressions.append(&mut es);
+                }
+                e => expressions.push(e),
+            }
+            Ok(Expression::SequenceExpression {
+                expressions,
+                position: None,
+            })
+        } else {
+            Ok(expr)
+        }
+    }
+
     fn expression_to_assignment_target(
         &self,
         expr: Expression,
@@ -2329,7 +2364,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_multiplicative_expression(&mut self) -> Result<Expression, JsError> {
-        let mut left = self.parse_unary_expression()?;
+        let mut left = self.parse_exponentiation_expression()?;
 
         loop {
             let op = match self.lexer.peek_token()? {
@@ -2339,13 +2374,32 @@ impl<'a> Parser<'a> {
                 _ => break,
             };
             self.lexer.next_token()?;
-            let right = self.parse_unary_expression()?;
+            let right = self.parse_exponentiation_expression()?;
             left = Expression::BinaryExpression {
                 left: Box::new(left),
                 operator: op,
                 right: Box::new(right),
                 position: None,
             };
+        }
+
+        Ok(left)
+    }
+
+    /// Parse exponentiation expression (**) which is right-associative
+    fn parse_exponentiation_expression(&mut self) -> Result<Expression, JsError> {
+        let left = self.parse_unary_expression()?;
+
+        // Exponentiation is right-associative: a ** b ** c = a ** (b ** c)
+        if self.check_punctuator(Punctuator::StarStar)? {
+            self.lexer.next_token()?;
+            let right = self.parse_exponentiation_expression()?;
+            return Ok(Expression::BinaryExpression {
+                left: Box::new(left),
+                operator: BinaryOperator::Exp,
+                right: Box::new(right),
+                position: None,
+            });
         }
 
         Ok(left)
@@ -3863,13 +3917,22 @@ impl<'a> Parser<'a> {
     fn expect_identifier(&mut self) -> Result<String, JsError> {
         self.update_position()?;
         let token = self.lexer.next_token()?;
-        if let Token::Identifier(name, _has_escapes) = token {
-            // Validate the identifier is not a reserved word and is valid as a binding
-            // Per ES spec, even escaped reserved words are invalid as identifiers
-            self.validate_binding_identifier(&name)?;
-            Ok(name)
-        } else {
-            Err(unexpected_token(
+        match token {
+            Token::Identifier(name, _has_escapes) => {
+                // Validate the identifier is not a reserved word and is valid as a binding
+                // Per ES spec, even escaped reserved words are invalid as identifiers
+                self.validate_binding_identifier(&name)?;
+                Ok(name)
+            }
+            // 'await' is a keyword only in async contexts, otherwise it's a valid identifier
+            Token::Keyword(Keyword::Await) if !self.in_async => {
+                Ok("await".to_string())
+            }
+            // 'yield' is a keyword only in generator contexts, otherwise it's a valid identifier
+            Token::Keyword(Keyword::Yield) if !self.in_generator => {
+                Ok("yield".to_string())
+            }
+            _ => Err(unexpected_token(
                 "identifier",
                 &format!("{:?}", token),
                 self.last_position.clone(),

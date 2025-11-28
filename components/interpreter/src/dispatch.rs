@@ -428,6 +428,12 @@ impl Dispatcher {
                     let result = self.modulo(a, b)?;
                     self.stack.push(result);
                 }
+                Opcode::Exp => {
+                    let b = self.stack.pop().unwrap_or(Value::Undefined);
+                    let a = self.stack.pop().unwrap_or(Value::Undefined);
+                    let result = self.exponentiate(a, b)?;
+                    self.stack.push(result);
+                }
                 Opcode::Neg => {
                     let a = self.stack.pop().unwrap_or(Value::Undefined);
                     let result = self.neg(a)?;
@@ -3345,6 +3351,12 @@ impl Dispatcher {
                 Ok(Value::Double(a_num % b_num))
             }
         }
+    }
+
+    fn exponentiate(&self, a: Value, b: Value) -> Result<Value, JsError> {
+        let a_num = self.to_number(&a);
+        let b_num = self.to_number(&b);
+        Ok(Value::Double(a_num.powf(b_num)))
     }
 
     fn neg(&self, a: Value) -> Result<Value, JsError> {

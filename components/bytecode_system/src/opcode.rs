@@ -66,6 +66,8 @@ pub enum Opcode {
     Div,
     /// Modulo second-top by top
     Mod,
+    /// Exponentiation (second-top ** top)
+    Exp,
     /// Negate top value
     Neg,
     /// Logical NOT (invert truthiness)

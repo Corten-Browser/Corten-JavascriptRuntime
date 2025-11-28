@@ -33,6 +33,8 @@ pub enum IROpcode {
     Div(Option<TypeInfo>),
     /// Modulo operation
     Mod(Option<TypeInfo>),
+    /// Exponentiation operation
+    Exp(Option<TypeInfo>),
     /// Negate value
     Neg(Option<TypeInfo>),
     /// Logical NOT
@@ -197,6 +199,7 @@ impl IRFunction {
                 Opcode::Mul => IROpcode::Mul(None),
                 Opcode::Div => IROpcode::Div(None),
                 Opcode::Mod => IROpcode::Mod(None),
+                Opcode::Exp => IROpcode::Exp(None),
                 Opcode::Neg => IROpcode::Neg(None),
                 Opcode::Not => IROpcode::Not,
                 Opcode::Equal => IROpcode::Equal,
