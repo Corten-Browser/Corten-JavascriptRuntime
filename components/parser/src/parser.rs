@@ -619,6 +619,54 @@ impl<'a> Parser<'a> {
 
         // Check for line terminator after async (before the next token)
         if self.lexer.line_terminator_before_token {
+            // Check if this looks like an async arrow function with invalid line terminator
+            // The grammar says: async [no LineTerminator here] ArrowFormalParameters
+            if self.check_punctuator(Punctuator::LParen)? {
+                // Look ahead to see if `=>` follows the parenthesized expression
+                // Save the full lexer state including cached token
+                let start_pos = self.lexer.position;
+                let start_line = self.lexer.line;
+                let start_col = self.lexer.column;
+                let start_token = self.lexer.current_token.clone();
+
+                // Clear token cache so next_token actually scans
+                self.lexer.current_token = None;
+
+                // Scan `(` fresh
+                let _ = self.lexer.next_token()?;
+                let mut depth = 1;
+
+                // Find matching `)` by scanning tokens
+                while depth > 0 {
+                    let tok = self.lexer.next_token()?;
+                    match tok {
+                        Token::Punctuator(Punctuator::LParen) => depth += 1,
+                        Token::Punctuator(Punctuator::RParen) => depth -= 1,
+                        Token::EOF => break,
+                        _ => {}
+                    }
+                }
+
+                // Check if `=>` follows
+                let next = self.lexer.next_token()?;
+                let is_arrow = matches!(next, Token::Punctuator(Punctuator::Arrow));
+
+                // Restore lexer state
+                self.lexer.position = start_pos;
+                self.lexer.line = start_line;
+                self.lexer.column = start_col;
+                self.lexer.current_token = start_token;
+                self.lexer.line_terminator_before_token = true;
+
+                if is_arrow {
+                    // This is an async arrow function with an invalid line terminator
+                    return Err(syntax_error(
+                        "Line terminator not allowed between 'async' and arrow function parameters",
+                        self.last_position.clone(),
+                    ));
+                }
+            }
+
             // Line terminator after async - async is just an identifier
             self.consume_semicolon()?;
             return Ok(Statement::ExpressionStatement {
@@ -3621,8 +3669,59 @@ impl<'a> Parser<'a> {
         // Peek next token to update line_terminator_before_token
         self.lexer.peek_token()?;
 
-        // If there's a line terminator after async, treat it as an identifier
+        // If there's a line terminator after async, we need to be careful
+        // about the "async [no LineTerminator here] ArrowFormalParameters" restriction.
+        // If the next token is `(`, we need to check if this looks like an async arrow function.
         if self.lexer.line_terminator_before_token {
+            // Check if this could be an async arrow function with invalid line terminator
+            if self.check_punctuator(Punctuator::LParen)? {
+                // Look ahead to see if `=>` follows the parenthesized expression
+                // Save position for potential lookahead
+                // Save the full lexer state including cached token
+                let start_pos = self.lexer.position;
+                let start_line = self.lexer.line;
+                let start_col = self.lexer.column;
+                let start_token = self.lexer.current_token.clone();
+
+                // Clear token cache so next_token actually scans
+                self.lexer.current_token = None;
+
+                // Scan `(` fresh
+                let _ = self.lexer.next_token()?;
+                let mut depth = 1;
+
+                // Find matching `)` by scanning tokens
+                while depth > 0 {
+                    let tok = self.lexer.next_token()?;
+                    match tok {
+                        Token::Punctuator(Punctuator::LParen) => depth += 1,
+                        Token::Punctuator(Punctuator::RParen) => depth -= 1,
+                        Token::EOF => break,
+                        _ => {}
+                    }
+                }
+
+                // Check if `=>` follows
+                let next = self.lexer.next_token()?;
+                let is_arrow = matches!(next, Token::Punctuator(Punctuator::Arrow));
+
+                // Restore lexer state
+                self.lexer.position = start_pos;
+                self.lexer.line = start_line;
+                self.lexer.column = start_col;
+                self.lexer.current_token = start_token;
+                self.lexer.line_terminator_before_token = true;
+
+                if is_arrow {
+                    // This is an async arrow function with an invalid line terminator
+                    return Err(syntax_error(
+                        "Line terminator not allowed between 'async' and arrow function parameters",
+                        self.last_position.clone(),
+                    ));
+                }
+            }
+
+            // Not an async arrow function, treat `async` as an identifier
             return Ok(Expression::Identifier {
                 name: "async".to_string(),
                 position: None,
@@ -3644,13 +3743,20 @@ impl<'a> Parser<'a> {
                 None
             };
 
-            // Clear class context - async function expressions cannot use super
+            // Set up context for async function expression
+            let prev_async = self.in_async;
+            let prev_generator = self.in_generator;
             let prev_in_class_method = self.in_class_method;
             let prev_in_constructor = self.in_constructor;
+            self.in_async = true;
+            self.in_generator = is_generator;
             self.in_class_method = false;
             self.in_constructor = false;
 
             let params = self.parse_parameters()?;
+            // Validate for duplicate parameters - must reject duplicates in async functions
+            // and when there are non-simple parameters (defaults, destructuring, rest)
+            self.validate_parameters(&params)?;
             let body = self.parse_function_body_with_context(true, is_generator)?;
 
             // Validate use strict with non-simple parameters
@@ -3658,6 +3764,8 @@ impl<'a> Parser<'a> {
             // Validate parameter names don't conflict with lexical declarations in body
             self.validate_params_body_lexical(&params, &body)?;
 
+            self.in_async = prev_async;
+            self.in_generator = prev_generator;
             self.in_class_method = prev_in_class_method;
             self.in_constructor = prev_in_constructor;
 
@@ -5126,6 +5234,8 @@ impl<'a> Parser<'a> {
                     self.last_position.clone(),
                 ));
             }
+            // Also check for parameter/lexical declaration conflicts
+            self.validate_params_body_lexical(params, stmts)?;
         }
         Ok(())
     }
