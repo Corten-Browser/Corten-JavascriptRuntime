@@ -710,8 +710,15 @@ impl<'a> Lexer<'a> {
                             source_position: Some(start_pos),
                         });
                     }
-                    while !self.is_at_end() && self.peek().is_ascii_hexdigit() {
-                        num_str.push(self.advance());
+                    while !self.is_at_end() {
+                        let ch = self.peek();
+                        if ch.is_ascii_hexdigit() {
+                            num_str.push(self.advance());
+                        } else if ch == '_' {
+                            self.advance(); // consume but don't add
+                        } else {
+                            break;
+                        }
                     }
                     radix = Some(16);
                 }
@@ -727,8 +734,15 @@ impl<'a> Lexer<'a> {
                             source_position: Some(start_pos),
                         });
                     }
-                    while !self.is_at_end() && (self.peek() == '0' || self.peek() == '1') {
-                        num_str.push(self.advance());
+                    while !self.is_at_end() {
+                        let ch = self.peek();
+                        if ch == '0' || ch == '1' {
+                            num_str.push(self.advance());
+                        } else if ch == '_' {
+                            self.advance(); // consume but don't add
+                        } else {
+                            break;
+                        }
                     }
                     radix = Some(2);
                 }
@@ -744,8 +758,15 @@ impl<'a> Lexer<'a> {
                             source_position: Some(start_pos),
                         });
                     }
-                    while !self.is_at_end() && ('0'..='7').contains(&self.peek()) {
-                        num_str.push(self.advance());
+                    while !self.is_at_end() {
+                        let ch = self.peek();
+                        if ('0'..='7').contains(&ch) {
+                            num_str.push(self.advance());
+                        } else if ch == '_' {
+                            self.advance(); // consume but don't add
+                        } else {
+                            break;
+                        }
                     }
                     radix = Some(8);
                 }
@@ -806,9 +827,17 @@ impl<'a> Lexer<'a> {
     }
 
     fn scan_decimal_digits(&mut self, num_str: &mut String, is_float: &mut bool) {
-        // Scan integer part
-        while !self.is_at_end() && self.peek().is_ascii_digit() {
-            num_str.push(self.advance());
+        // Scan integer part (with optional numeric separators)
+        while !self.is_at_end() {
+            let ch = self.peek();
+            if ch.is_ascii_digit() {
+                num_str.push(self.advance());
+            } else if ch == '_' {
+                // Numeric separator - must be between digits
+                self.advance(); // consume underscore but don't add to num_str
+            } else {
+                break;
+            }
         }
 
         // Handle decimal point
@@ -817,12 +846,19 @@ impl<'a> Lexer<'a> {
         if !self.is_at_end() && self.peek() == '.' {
             // Look ahead to see what follows the dot
             if let Some(next) = self.peek_next() {
-                if next.is_ascii_digit() {
-                    // Definitely a decimal: 1.5
+                if next.is_ascii_digit() || next == '_' {
+                    // Definitely a decimal: 1.5 or 1.5_0
                     *is_float = true;
                     num_str.push(self.advance()); // consume '.'
-                    while !self.is_at_end() && self.peek().is_ascii_digit() {
-                        num_str.push(self.advance());
+                    while !self.is_at_end() {
+                        let ch = self.peek();
+                        if ch.is_ascii_digit() {
+                            num_str.push(self.advance());
+                        } else if ch == '_' {
+                            self.advance(); // consume but don't add
+                        } else {
+                            break;
+                        }
                     }
                 } else if !is_id_start(next) {
                     // Trailing decimal: 1. followed by non-identifier (like ; or whitespace)
@@ -845,8 +881,15 @@ impl<'a> Lexer<'a> {
             if !self.is_at_end() && (self.peek() == '+' || self.peek() == '-') {
                 num_str.push(self.advance());
             }
-            while !self.is_at_end() && self.peek().is_ascii_digit() {
-                num_str.push(self.advance());
+            while !self.is_at_end() {
+                let ch = self.peek();
+                if ch.is_ascii_digit() {
+                    num_str.push(self.advance());
+                } else if ch == '_' {
+                    self.advance(); // consume but don't add
+                } else {
+                    break;
+                }
             }
         }
     }
