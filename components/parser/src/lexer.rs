@@ -395,8 +395,19 @@ impl<'a> Lexer<'a> {
                     } else {
                         Ok(Token::Punctuator(Punctuator::NullishCoalesce))
                     }
-                } else if self.match_char('.') {
-                    Ok(Token::Punctuator(Punctuator::OptionalChain))
+                } else if !self.is_at_end() && self.chars[self.position] == '.' {
+                    // Check if followed by decimal digit - if so, this is NOT optional chaining
+                    // Per spec: OptionalChainingPunctuator :: ?.[lookahead ∉ DecimalDigit]
+                    let after_dot = self.position + 1;
+                    if after_dot < self.chars.len() && self.chars[after_dot].is_ascii_digit() {
+                        // This is `? .N` (ternary with decimal), not `?.` (optional chaining)
+                        Ok(Token::Punctuator(Punctuator::Question))
+                    } else {
+                        // Consume the dot and return optional chaining
+                        self.position += 1;
+                        self.column += 1;
+                        Ok(Token::Punctuator(Punctuator::OptionalChain))
+                    }
                 } else {
                     Ok(Token::Punctuator(Punctuator::Question))
                 }

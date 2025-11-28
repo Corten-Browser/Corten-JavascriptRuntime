@@ -3476,28 +3476,60 @@ impl<'a> Parser<'a> {
                 };
             } else if self.check_punctuator(Punctuator::OptionalChain)? {
                 self.lexer.next_token()?;
-                // Check for private identifier after optional chain
-                let property = if self.check_private_identifier()? {
+                // Check what follows the optional chain operator
+                if self.check_punctuator(Punctuator::LParen)? {
+                    // Optional call: obj?.(args)
+                    let arguments = self.parse_arguments()?;
+                    expr = Expression::CallExpression {
+                        callee: Box::new(expr),
+                        arguments,
+                        optional: true,
+                        position: None,
+                    };
+                } else if self.check_punctuator(Punctuator::LBracket)? {
+                    // Optional computed property: obj?.[expr]
+                    self.lexer.next_token()?;
+                    let prev_in_for_init = self.in_for_init;
+                    self.in_for_init = false;
+                    let property = Box::new(self.parse_expression()?);
+                    self.in_for_init = prev_in_for_init;
+                    self.expect_punctuator(Punctuator::RBracket)?;
+                    expr = Expression::MemberExpression {
+                        object: Box::new(expr),
+                        property,
+                        computed: true,
+                        optional: true,
+                        position: None,
+                    };
+                } else if self.check_private_identifier()? {
+                    // Optional private field: obj?.#prop
                     let name = self.expect_private_identifier()?;
-                    Expression::Identifier {
+                    let property = Expression::Identifier {
                         name: format!("#{}", name),
                         position: None,
-                    }
+                    };
+                    expr = Expression::MemberExpression {
+                        object: Box::new(expr),
+                        property: Box::new(property),
+                        computed: false,
+                        optional: true,
+                        position: None,
+                    };
                 } else {
-                    // Allow keywords as property names after optional chain
+                    // Optional member access: obj?.prop
                     let name = self.expect_property_name()?;
-                    Expression::Identifier {
+                    let property = Expression::Identifier {
                         name,
                         position: None,
-                    }
-                };
-                expr = Expression::MemberExpression {
-                    object: Box::new(expr),
-                    property: Box::new(property),
-                    computed: false,
-                    optional: true,
-                    position: None,
-                };
+                    };
+                    expr = Expression::MemberExpression {
+                        object: Box::new(expr),
+                        property: Box::new(property),
+                        computed: false,
+                        optional: true,
+                        position: None,
+                    };
+                }
             } else if self.check_punctuator(Punctuator::LBracket)? {
                 // Computed property access: obj[expr] - 'in' is always allowed
                 self.lexer.next_token()?;
@@ -5159,6 +5191,7 @@ impl<'a> Parser<'a> {
             Token::Keyword(k) => Ok(keyword_to_string(k)),
             Token::String(s) => Ok(s),
             Token::Number(n) => Ok(n.to_string()),
+            Token::BigIntLiteral(s) => Ok(s), // BigInt property names converted to string
             _ => Err(unexpected_token(
                 "property name",
                 &format!("{:?}", token),
@@ -5185,6 +5218,10 @@ impl<'a> Parser<'a> {
             Token::Identifier(name, _) => Ok(PropertyKey::Identifier(name)),
             Token::String(s) => Ok(PropertyKey::String(s)),
             Token::Number(n) => Ok(PropertyKey::Number(n)),
+            Token::BigIntLiteral(s) => {
+                // BigInt property names are converted to their string representation
+                Ok(PropertyKey::String(s))
+            }
             Token::Keyword(kw) => {
                 let name = self.keyword_to_string(kw);
                 Ok(PropertyKey::Identifier(name))
@@ -5207,6 +5244,7 @@ impl<'a> Parser<'a> {
                 | Token::Keyword(_)
                 | Token::String(_)
                 | Token::Number(_)
+                | Token::BigIntLiteral(_)
                 | Token::Punctuator(Punctuator::LBracket)
                 | Token::PrivateIdentifier(_)
         ))
