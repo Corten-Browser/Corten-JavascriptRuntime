@@ -301,6 +301,8 @@ impl<'a> Parser<'a> {
             Token::Keyword(Keyword::Yield) if !self.in_generator => true,
             Token::Keyword(Keyword::Await) if !self.in_async => true,
             Token::Keyword(Keyword::Static) if !self.strict_mode => true,
+            // 'async' can be used as an identifier
+            Token::Keyword(Keyword::Async) => true,
             _ => false,
         };
 
@@ -379,6 +381,13 @@ impl<'a> Parser<'a> {
                     ));
                 }
                 Ok(Pattern::Identifier("await".to_string()))
+            }
+            // 'async' can be used as identifier in non-strict mode
+            Token::Keyword(Keyword::Async) => {
+                self.lexer.next_token()?;
+                // In strict mode, 'async' is technically still allowed as an identifier
+                // but it's considered bad practice. For now, we allow it.
+                Ok(Pattern::Identifier("async".to_string()))
             }
             Token::Punctuator(Punctuator::LBrace) => self.parse_object_pattern(),
             Token::Punctuator(Punctuator::LBracket) => self.parse_array_pattern(),
@@ -3647,17 +3656,25 @@ impl<'a> Parser<'a> {
             })
         } else if let Token::Identifier(name, _) = self.lexer.peek_token()?.clone() {
             // Async arrow function without parens: async x => body
-            // Validate the parameter identifier (e.g., no 'arguments'/'eval' in strict mode)
-            self.validate_binding_identifier(&name)?;
-            self.lexer.next_token()?;
-            // Check for line terminator before =>
-            if self.check_punctuator(Punctuator::Arrow)? {
-                if self.lexer.line_terminator_before_token {
-                    return Err(syntax_error(
-                        "Line terminator not allowed before '=>'",
-                        self.last_position.clone(),
-                    ));
-                }
+            // But first, look ahead to see if there's actually an arrow after the identifier
+            // If not, 'async' is just a standalone identifier
+
+            // Save lexer state to look ahead
+            let saved_pos = self.lexer.position;
+            let saved_line = self.lexer.line;
+            let saved_column = self.lexer.column;
+            let saved_previous_line = self.lexer.previous_line;
+            let saved_line_term = self.lexer.line_terminator_before_token;
+            let saved_token = self.lexer.current_token.clone();
+
+            self.lexer.next_token()?; // consume identifier
+            let has_arrow = self.check_punctuator(Punctuator::Arrow)?;
+            let has_line_term = self.lexer.line_terminator_before_token;
+
+            if has_arrow && !has_line_term {
+                // This is an async arrow function: async x => body
+                // Validate the parameter identifier (e.g., no 'arguments'/'eval' in strict mode)
+                self.validate_binding_identifier(&name)?;
                 self.lexer.next_token()?; // consume =>
                 let body = self.parse_arrow_body_with_context(true)?;
 
@@ -3668,10 +3685,18 @@ impl<'a> Parser<'a> {
                     position: None,
                 })
             } else {
-                // No arrow - this is 'async' followed by identifier as separate expressions
-                // async has already been consumed, so we can't easily backtrack
-                // Return async as identifier (this case shouldn't happen with line_terminator check above)
-                Err(syntax_error("Expected '=>' after async arrow function parameter", None))
+                // No arrow - restore lexer state and treat 'async' as an identifier
+                self.lexer.position = saved_pos;
+                self.lexer.line = saved_line;
+                self.lexer.column = saved_column;
+                self.lexer.previous_line = saved_previous_line;
+                self.lexer.line_terminator_before_token = saved_line_term;
+                self.lexer.current_token = saved_token;
+
+                Ok(Expression::Identifier {
+                    name: "async".to_string(),
+                    position: None,
+                })
             }
         } else {
             // No function, no paren, no identifier after async
@@ -5630,5 +5655,33 @@ result = {[a]:b, ...rest} = vals;
         let mut parser = Parser::new(code2);
         let result = parser.parse();
         assert!(result.is_ok(), "Rest array pattern with default error: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_async_identifier_in_for_of() {
+        // async.x is a member expression where async is an identifier
+        let code = "var async = { x: 0 }; for (async.x of [1]) ;";
+        let mut parser = Parser::new(code);
+        let result = parser.parse();
+        assert!(result.is_ok(), "async.x for-of error: {:?}", result.err());
+
+        // for await (async of [7]) is valid inside async function
+        let code2 = "async function fn() { for await (async of [7]); }";
+        let mut parser2 = Parser::new(code2);
+        let result2 = parser2.parse();
+        assert!(result2.is_ok(), "for await async error: {:?}", result2.err());
+
+        // Full test262 test case: let async declared at top level, then used in for-await
+        // First check that 'let async;' by itself works
+        let code3a = "let async;";
+        let mut parser3a = Parser::new(code3a);
+        let result3a = parser3a.parse();
+        assert!(result3a.is_ok(), "let async; error: {:?}", result3a.err());
+
+        // Now the full case
+        let code3 = "let async; async function fn() { for await (async of [7]); }";
+        let mut parser3 = Parser::new(code3);
+        let result3 = parser3.parse();
+        assert!(result3.is_ok(), "full test262 case error: {:?}", result3.err());
     }
 }
