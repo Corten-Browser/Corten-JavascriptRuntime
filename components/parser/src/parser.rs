@@ -200,8 +200,18 @@ impl<'a> Parser<'a> {
     fn parse_statement(&mut self) -> Result<Statement, JsError> {
         let token = self.lexer.peek_token()?.clone();
 
+        // Handle 'let' specially - in non-strict mode it can be an identifier
+        if matches!(token, Token::Keyword(Keyword::Let)) && !self.strict_mode {
+            // Check if 'let' is used as keyword (followed by identifier, [, or {)
+            let is_let_declaration = self.is_let_declaration()?;
+            if !is_let_declaration {
+                // 'let' is an identifier, parse as expression statement
+                return self.parse_expression_statement();
+            }
+        }
+
         match token {
-            Token::Keyword(Keyword::Let)
+            Token::Keyword(Keyword::Let) // Only reached if strict mode or confirmed declaration
             | Token::Keyword(Keyword::Const)
             | Token::Keyword(Keyword::Var) => self.parse_variable_declaration(),
             Token::Keyword(Keyword::Function) => self.parse_function_declaration(),
@@ -262,6 +272,47 @@ impl<'a> Parser<'a> {
             declarations,
             position: None,
         })
+    }
+
+    /// Check if 'let' is being used as a keyword (declaration) or identifier
+    /// Returns true if 'let' is followed by: identifier, [, or {
+    /// Returns false if 'let' is followed by: =, ;, ,, ), or other operators
+    fn is_let_declaration(&mut self) -> Result<bool, JsError> {
+        // Save lexer state
+        let saved_pos = self.lexer.position;
+        let saved_line = self.lexer.line;
+        let saved_column = self.lexer.column;
+        let saved_previous_line = self.lexer.previous_line;
+        let saved_line_term = self.lexer.line_terminator_before_token;
+        let saved_token = self.lexer.current_token.clone();
+
+        self.lexer.next_token()?; // consume "let"
+        let next = self.lexer.peek_token()?;
+
+        // "let" is a keyword (declaration) if followed by:
+        // - identifier (but not 'in' or 'of' which could be for-in/for-of with let as LHS)
+        // - [ (array destructuring)
+        // - { (object destructuring)
+        let is_declaration = match next {
+            Token::Identifier(_, _) => true,
+            Token::Punctuator(Punctuator::LBracket) => true,
+            Token::Punctuator(Punctuator::LBrace) => true,
+            // Keywords that can be identifiers in certain contexts
+            Token::Keyword(Keyword::Yield) if !self.in_generator => true,
+            Token::Keyword(Keyword::Await) if !self.in_async => true,
+            Token::Keyword(Keyword::Static) if !self.strict_mode => true,
+            _ => false,
+        };
+
+        // Restore lexer state
+        self.lexer.position = saved_pos;
+        self.lexer.line = saved_line;
+        self.lexer.column = saved_column;
+        self.lexer.previous_line = saved_previous_line;
+        self.lexer.line_terminator_before_token = saved_line_term;
+        self.lexer.current_token = saved_token;
+
+        Ok(is_declaration)
     }
 
     fn parse_pattern(&mut self) -> Result<Pattern, JsError> {
@@ -1365,10 +1416,11 @@ impl<'a> Parser<'a> {
             return self.parse_regular_for(None);
         }
 
-        // Special case: for (let in ...) - "let" is an identifier, not a keyword
+        // Special case: for (let ...) - "let" can be an identifier or keyword
         // Per spec: for ( [lookahead ∉ { let [ }] LeftHandSideExpression in Expression )
-        // "let" is only a keyword if followed by [ or identifier, not by "in"
-        let is_let_as_keyword = if self.check_keyword(Keyword::Let)? {
+        // "let" is only a keyword if followed by: identifier (not 'in'/'of'), [, or {
+        // "let" is an identifier if followed by: ;, =, ,, in, of, ), or other operators
+        let is_let_as_keyword = if self.check_keyword(Keyword::Let)? && !self.strict_mode {
             // Peek ahead to see what follows "let"
             let saved_pos = self.lexer.position;
             let saved_line = self.lexer.line;
@@ -1379,7 +1431,13 @@ impl<'a> Parser<'a> {
 
             self.lexer.next_token()?; // consume "let"
             let next = self.lexer.peek_token()?;
-            let is_keyword = !matches!(next, Token::Keyword(Keyword::In));
+            // "let" is a keyword if followed by identifier (not in/of), [, or {
+            let is_keyword = matches!(
+                next,
+                Token::Identifier(_, _)
+                    | Token::Punctuator(Punctuator::LBracket)
+                    | Token::Punctuator(Punctuator::LBrace)
+            );
 
             // Restore lexer state
             self.lexer.position = saved_pos;
@@ -1390,6 +1448,9 @@ impl<'a> Parser<'a> {
             self.lexer.current_token = saved_token;
 
             is_keyword
+        } else if self.check_keyword(Keyword::Let)? && self.strict_mode {
+            // In strict mode, 'let' is always a keyword
+            true
         } else {
             false
         };
@@ -2186,12 +2247,51 @@ impl<'a> Parser<'a> {
     /// Given a left-hand-side expression, finish parsing the full expression.
     /// This handles cases like `for (x = 1; ...)` where we've already parsed `x`
     /// but need to continue parsing `= 1` and any subsequent parts.
+    /// Also handles binary operators and conditional expressions.
     fn finish_expression_from_lhs(&mut self, lhs: Expression) -> Result<Expression, JsError> {
-        // First, check if there's an assignment operator
+        // We're in for loop init, so set the flag to disallow 'in' as relational operator
+        let prev_in_for_init = self.in_for_init;
+        self.in_for_init = true;
+
+        // Continue parsing binary operators from the LHS
+        // Start from lowest precedence (exponentiation) and work up
+        let expr = self.continue_exponentiation_from_lhs(lhs)?;
+        let expr = self.continue_multiplicative_from_lhs(expr)?;
+        let expr = self.continue_additive_from_lhs(expr)?;
+        let expr = self.continue_shift_from_lhs(expr)?;
+        let expr = self.continue_relational_from_lhs(expr)?;
+        let expr = self.continue_equality_from_lhs(expr)?;
+        let expr = self.continue_bitwise_and_from_lhs(expr)?;
+        let expr = self.continue_bitwise_xor_from_lhs(expr)?;
+        let expr = self.continue_bitwise_or_from_lhs(expr)?;
+        let expr = self.continue_logical_and_from_lhs(expr)?;
+        let expr = self.continue_logical_or_from_lhs(expr)?;
+        let expr = self.continue_nullish_from_lhs(expr)?;
+
+        // Handle conditional expression
+        let expr = if self.check_punctuator(Punctuator::Question)? {
+            self.lexer.next_token()?;
+            // In conditional consequent, 'in' IS allowed
+            self.in_for_init = false;
+            let consequent = Box::new(self.parse_assignment_expression()?);
+            self.in_for_init = true;
+            self.expect_punctuator(Punctuator::Colon)?;
+            let alternate = Box::new(self.parse_assignment_expression()?);
+            Expression::ConditionalExpression {
+                test: Box::new(expr),
+                consequent,
+                alternate,
+                position: None,
+            }
+        } else {
+            expr
+        };
+
+        // Handle assignment operator
         let expr = if let Some(op) = self.check_assignment_operator()? {
             self.lexer.next_token()?;
             let right = Box::new(self.parse_assignment_expression()?);
-            let left = self.expression_to_assignment_target(lhs)?;
+            let left = self.expression_to_assignment_target(expr)?;
             Expression::AssignmentExpression {
                 left,
                 operator: op,
@@ -2199,8 +2299,10 @@ impl<'a> Parser<'a> {
                 position: None,
             }
         } else {
-            lhs
+            expr
         };
+
+        self.in_for_init = prev_in_for_init;
 
         // Then handle comma operator (sequence expression)
         if self.check_punctuator(Punctuator::Comma)? {
@@ -2221,6 +2323,211 @@ impl<'a> Parser<'a> {
         } else {
             Ok(expr)
         }
+    }
+
+    // Helper functions to continue parsing binary operators from an existing LHS
+
+    fn continue_exponentiation_from_lhs(&mut self, lhs: Expression) -> Result<Expression, JsError> {
+        if self.check_punctuator(Punctuator::StarStar)? {
+            self.lexer.next_token()?;
+            let right = self.parse_exponentiation_expression()?;
+            Ok(Expression::BinaryExpression {
+                left: Box::new(lhs),
+                operator: BinaryOperator::Exp,
+                right: Box::new(right),
+                position: None,
+            })
+        } else {
+            Ok(lhs)
+        }
+    }
+
+    fn continue_multiplicative_from_lhs(&mut self, mut left: Expression) -> Result<Expression, JsError> {
+        loop {
+            let op = match self.lexer.peek_token()? {
+                Token::Punctuator(Punctuator::Star) => BinaryOperator::Mul,
+                Token::Punctuator(Punctuator::Slash) => BinaryOperator::Div,
+                Token::Punctuator(Punctuator::Percent) => BinaryOperator::Mod,
+                _ => break,
+            };
+            self.lexer.next_token()?;
+            let right = self.parse_exponentiation_expression()?;
+            left = Expression::BinaryExpression {
+                left: Box::new(left),
+                operator: op,
+                right: Box::new(right),
+                position: None,
+            };
+        }
+        Ok(left)
+    }
+
+    fn continue_additive_from_lhs(&mut self, mut left: Expression) -> Result<Expression, JsError> {
+        loop {
+            let op = match self.lexer.peek_token()? {
+                Token::Punctuator(Punctuator::Plus) => BinaryOperator::Add,
+                Token::Punctuator(Punctuator::Minus) => BinaryOperator::Sub,
+                _ => break,
+            };
+            self.lexer.next_token()?;
+            let right = self.parse_multiplicative_expression()?;
+            left = Expression::BinaryExpression {
+                left: Box::new(left),
+                operator: op,
+                right: Box::new(right),
+                position: None,
+            };
+        }
+        Ok(left)
+    }
+
+    fn continue_shift_from_lhs(&mut self, mut left: Expression) -> Result<Expression, JsError> {
+        loop {
+            let op = match self.lexer.peek_token()? {
+                Token::Punctuator(Punctuator::LtLt) => BinaryOperator::LeftShift,
+                Token::Punctuator(Punctuator::GtGt) => BinaryOperator::RightShift,
+                Token::Punctuator(Punctuator::GtGtGt) => BinaryOperator::UnsignedRightShift,
+                _ => break,
+            };
+            self.lexer.next_token()?;
+            let right = self.parse_additive_expression()?;
+            left = Expression::BinaryExpression {
+                left: Box::new(left),
+                operator: op,
+                right: Box::new(right),
+                position: None,
+            };
+        }
+        Ok(left)
+    }
+
+    fn continue_relational_from_lhs(&mut self, mut left: Expression) -> Result<Expression, JsError> {
+        loop {
+            let op = match self.lexer.peek_token()? {
+                Token::Punctuator(Punctuator::Lt) => BinaryOperator::Lt,
+                Token::Punctuator(Punctuator::LtEq) => BinaryOperator::LtEq,
+                Token::Punctuator(Punctuator::Gt) => BinaryOperator::Gt,
+                Token::Punctuator(Punctuator::GtEq) => BinaryOperator::GtEq,
+                Token::Keyword(Keyword::Instanceof) => BinaryOperator::Instanceof,
+                // In for loop init context, 'in' is not allowed as relational operator
+                Token::Keyword(Keyword::In) if !self.in_for_init => BinaryOperator::In,
+                _ => break,
+            };
+            self.lexer.next_token()?;
+            let right = self.parse_shift_expression()?;
+            left = Expression::BinaryExpression {
+                left: Box::new(left),
+                operator: op,
+                right: Box::new(right),
+                position: None,
+            };
+        }
+        Ok(left)
+    }
+
+    fn continue_equality_from_lhs(&mut self, mut left: Expression) -> Result<Expression, JsError> {
+        loop {
+            let op = match self.lexer.peek_token()? {
+                Token::Punctuator(Punctuator::EqEq) => BinaryOperator::Eq,
+                Token::Punctuator(Punctuator::NotEq) => BinaryOperator::NotEq,
+                Token::Punctuator(Punctuator::EqEqEq) => BinaryOperator::StrictEq,
+                Token::Punctuator(Punctuator::NotEqEq) => BinaryOperator::StrictNotEq,
+                _ => break,
+            };
+            self.lexer.next_token()?;
+            let right = self.parse_relational_expression()?;
+            left = Expression::BinaryExpression {
+                left: Box::new(left),
+                operator: op,
+                right: Box::new(right),
+                position: None,
+            };
+        }
+        Ok(left)
+    }
+
+    fn continue_bitwise_and_from_lhs(&mut self, mut left: Expression) -> Result<Expression, JsError> {
+        while self.check_punctuator(Punctuator::And)? {
+            self.lexer.next_token()?;
+            let right = self.parse_equality_expression()?;
+            left = Expression::BinaryExpression {
+                left: Box::new(left),
+                operator: BinaryOperator::BitwiseAnd,
+                right: Box::new(right),
+                position: None,
+            };
+        }
+        Ok(left)
+    }
+
+    fn continue_bitwise_xor_from_lhs(&mut self, mut left: Expression) -> Result<Expression, JsError> {
+        while self.check_punctuator(Punctuator::Xor)? {
+            self.lexer.next_token()?;
+            let right = self.parse_bitwise_and_expression()?;
+            left = Expression::BinaryExpression {
+                left: Box::new(left),
+                operator: BinaryOperator::BitwiseXor,
+                right: Box::new(right),
+                position: None,
+            };
+        }
+        Ok(left)
+    }
+
+    fn continue_bitwise_or_from_lhs(&mut self, mut left: Expression) -> Result<Expression, JsError> {
+        while self.check_punctuator(Punctuator::Or)? {
+            self.lexer.next_token()?;
+            let right = self.parse_bitwise_xor_expression()?;
+            left = Expression::BinaryExpression {
+                left: Box::new(left),
+                operator: BinaryOperator::BitwiseOr,
+                right: Box::new(right),
+                position: None,
+            };
+        }
+        Ok(left)
+    }
+
+    fn continue_logical_and_from_lhs(&mut self, mut left: Expression) -> Result<Expression, JsError> {
+        while self.check_punctuator(Punctuator::AndAnd)? {
+            self.lexer.next_token()?;
+            let right = self.parse_bitwise_or_expression()?;
+            left = Expression::LogicalExpression {
+                left: Box::new(left),
+                operator: LogicalOperator::And,
+                right: Box::new(right),
+                position: None,
+            };
+        }
+        Ok(left)
+    }
+
+    fn continue_logical_or_from_lhs(&mut self, mut left: Expression) -> Result<Expression, JsError> {
+        while self.check_punctuator(Punctuator::OrOr)? {
+            self.lexer.next_token()?;
+            let right = self.parse_logical_and_expression()?;
+            left = Expression::LogicalExpression {
+                left: Box::new(left),
+                operator: LogicalOperator::Or,
+                right: Box::new(right),
+                position: None,
+            };
+        }
+        Ok(left)
+    }
+
+    fn continue_nullish_from_lhs(&mut self, mut left: Expression) -> Result<Expression, JsError> {
+        while self.check_punctuator(Punctuator::NullishCoalesce)? {
+            self.lexer.next_token()?;
+            let right = self.parse_logical_or_expression()?;
+            left = Expression::LogicalExpression {
+                left: Box::new(left),
+                operator: LogicalOperator::NullishCoalesce,
+                right: Box::new(right),
+                position: None,
+            };
+        }
+        Ok(left)
     }
 
     fn expression_to_assignment_target(
@@ -2340,7 +2647,11 @@ impl<'a> Parser<'a> {
 
         if self.check_punctuator(Punctuator::Question)? {
             self.lexer.next_token()?;
+            // Per ECMAScript grammar, consequent allows 'in' operator ([+In])
+            let prev_in_for_init = self.in_for_init;
+            self.in_for_init = false;
             let consequent = Box::new(self.parse_assignment_expression()?);
+            self.in_for_init = prev_in_for_init;
             self.expect_punctuator(Punctuator::Colon)?;
             let alternate = Box::new(self.parse_assignment_expression()?);
 
@@ -2491,7 +2802,8 @@ impl<'a> Parser<'a> {
                 Token::Punctuator(Punctuator::Gt) => BinaryOperator::Gt,
                 Token::Punctuator(Punctuator::GtEq) => BinaryOperator::GtEq,
                 Token::Keyword(Keyword::Instanceof) => BinaryOperator::Instanceof,
-                Token::Keyword(Keyword::In) => BinaryOperator::In,
+                // In for loop init context, 'in' is not allowed as relational operator
+                Token::Keyword(Keyword::In) if !self.in_for_init => BinaryOperator::In,
                 _ => break,
             };
             self.lexer.next_token()?;
