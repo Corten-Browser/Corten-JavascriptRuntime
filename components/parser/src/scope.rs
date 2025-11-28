@@ -539,7 +539,8 @@ impl ScopeAnalyzer {
 
             Expression::Literal { .. }
             | Expression::ThisExpression { .. }
-            | Expression::SuperExpression { .. } => {}
+            | Expression::SuperExpression { .. }
+            | Expression::PrivateIdentifier { .. } => {}
 
             Expression::ClassExpression {
                 body,

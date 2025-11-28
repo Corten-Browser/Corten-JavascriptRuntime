@@ -1433,6 +1433,13 @@ impl BytecodeGenerator {
                 self.chunk.emit(Opcode::LoadGlobal("super".to_string()));
             }
 
+            Expression::PrivateIdentifier { name, .. } => {
+                // Private identifiers used in `#field in obj` checks
+                // For bytecode, we load the private name as a string
+                let idx = self.chunk.add_constant(BytecodeValue::String(format!("#{}", name)));
+                self.chunk.emit(Opcode::LoadConstant(idx));
+            }
+
             Expression::AwaitExpression { argument, .. } => {
                 self.visit_expression(argument)?;
                 // Emit Await opcode to suspend execution until promise resolves

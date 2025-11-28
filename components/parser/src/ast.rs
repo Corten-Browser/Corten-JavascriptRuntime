@@ -441,6 +441,14 @@ pub enum Expression {
         position: Option<SourcePosition>,
     },
 
+    /// Private identifier (used in private field presence check: #field in obj)
+    PrivateIdentifier {
+        /// Private field name (without the # prefix)
+        name: String,
+        /// Source location
+        position: Option<SourcePosition>,
+    },
+
     /// Await expression
     AwaitExpression {
         /// Argument
