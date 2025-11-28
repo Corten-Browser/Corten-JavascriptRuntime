@@ -3147,10 +3147,35 @@ impl<'a> Parser<'a> {
             Token::Punctuator(Punctuator::LParen) => self.parse_parenthesized_or_arrow(),
             Token::Punctuator(Punctuator::LBracket) => self.parse_array_literal(),
             Token::Punctuator(Punctuator::LBrace) => self.parse_object_literal(),
-            // Dynamic import: import(specifier)
+            // Dynamic import: import(specifier), import.defer(specifier), import.source(specifier)
             Token::Keyword(Keyword::Import) => {
                 self.lexer.next_token()?; // consume 'import'
-                // Expect opening paren for import()
+
+                // Check for import.defer or import.source (import phases)
+                if self.check_punctuator(Punctuator::Dot)? {
+                    self.lexer.next_token()?; // consume '.'
+                    // Expect 'defer' or 'source' or 'meta'
+                    let phase = self.expect_identifier()?;
+                    if phase == "meta" {
+                        // import.meta - handled specially
+                        return Ok(Expression::MetaProperty {
+                            meta: "import".to_string(),
+                            property: "meta".to_string(),
+                            position: None,
+                        });
+                    }
+                    // For defer/source, continue to parse the call
+                    self.expect_punctuator(Punctuator::LParen)?;
+                    let source = self.parse_assignment_expression()?;
+                    self.expect_punctuator(Punctuator::RParen)?;
+                    // Return ImportExpression with phase marker (for now, same as regular import)
+                    return Ok(Expression::ImportExpression {
+                        source: Box::new(source),
+                        position: None,
+                    });
+                }
+
+                // Regular import() - expect opening paren
                 if !self.check_punctuator(Punctuator::LParen)? {
                     return Err(syntax_error(
                         "Expected '(' after 'import' for dynamic import",
