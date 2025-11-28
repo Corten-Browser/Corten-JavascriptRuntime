@@ -1900,8 +1900,9 @@ impl<'a> Parser<'a> {
 
         // Check for single-parameter arrow function: identifier => expr
         // After parsing an identifier, if next token is =>, this is an arrow function
+        // Note: Line terminator before => is not allowed
         if let Expression::Identifier { ref name, .. } = expr {
-            if self.check_punctuator(Punctuator::Arrow)? {
+            if self.check_punctuator(Punctuator::Arrow)? && !self.lexer.line_terminator_before_token {
                 // Validate the parameter identifier (e.g., no 'arguments'/'eval' in strict mode)
                 self.validate_binding_identifier(name)?;
                 self.lexer.next_token()?; // consume =>
@@ -2806,6 +2807,9 @@ impl<'a> Parser<'a> {
         } else if self.check_punctuator(Punctuator::LParen)? {
             // Async arrow function with parens: async (params) => body
             let params = self.parse_parameters()?;
+            // Validate arrow parameters (duplicates and yield expressions)
+            self.validate_arrow_parameters(&params)?;
+            self.validate_arrow_params_no_yield(&params)?;
             self.expect_punctuator(Punctuator::Arrow)?;
             let body = self.parse_arrow_body_with_context(true)?;
 
@@ -2841,6 +2845,13 @@ impl<'a> Parser<'a> {
         if self.check_punctuator(Punctuator::RParen)? {
             self.lexer.next_token()?;
             if self.check_punctuator(Punctuator::Arrow)? {
+                // Line terminator before => is not allowed
+                if self.lexer.line_terminator_before_token {
+                    return Err(syntax_error(
+                        "Line terminator not allowed before '=>'",
+                        self.last_position.clone(),
+                    ));
+                }
                 self.lexer.next_token()?;
                 let body = self.parse_arrow_body()?;
                 return Ok(Expression::ArrowFunctionExpression {
@@ -2859,6 +2870,13 @@ impl<'a> Parser<'a> {
             let rest_name = self.expect_identifier()?;
             self.expect_punctuator(Punctuator::RParen)?;
             if self.check_punctuator(Punctuator::Arrow)? {
+                // Line terminator before => is not allowed
+                if self.lexer.line_terminator_before_token {
+                    return Err(syntax_error(
+                        "Line terminator not allowed before '=>'",
+                        self.last_position.clone(),
+                    ));
+                }
                 self.lexer.next_token()?;
                 let body = self.parse_arrow_body()?;
                 return Ok(Expression::ArrowFunctionExpression {
@@ -2878,9 +2896,19 @@ impl<'a> Parser<'a> {
         if self.check_punctuator(Punctuator::RParen)? {
             self.lexer.next_token()?;
             if self.check_punctuator(Punctuator::Arrow)? {
+                // Line terminator before => is not allowed
+                if self.lexer.line_terminator_before_token {
+                    return Err(syntax_error(
+                        "Line terminator not allowed before '=>'",
+                        self.last_position.clone(),
+                    ));
+                }
                 self.lexer.next_token()?;
                 let param = self.expression_to_pattern(first)?;
                 let params = vec![param];
+                // Validate arrow parameters (duplicates and yield expressions)
+                self.validate_arrow_parameters(&params)?;
+                self.validate_arrow_params_no_yield(&params)?;
                 let body = self.parse_arrow_body()?;
                 // Validate "use strict" with non-simple parameters
                 self.validate_arrow_params_with_body(&params, &body)?;
@@ -2921,6 +2949,13 @@ impl<'a> Parser<'a> {
             self.expect_punctuator(Punctuator::RParen)?;
 
             if self.check_punctuator(Punctuator::Arrow)? {
+                // Line terminator before => is not allowed
+                if self.lexer.line_terminator_before_token {
+                    return Err(syntax_error(
+                        "Line terminator not allowed before '=>'",
+                        self.last_position.clone(),
+                    ));
+                }
                 self.lexer.next_token()?;
                 let mut params: Vec<Pattern> = exprs
                     .into_iter()
@@ -2929,8 +2964,9 @@ impl<'a> Parser<'a> {
                 if let Some(rest) = rest_param {
                     params.push(rest);
                 }
-                // Validate for duplicate parameters
-                self.validate_parameters(&params)?;
+                // Validate arrow parameters (duplicates always rejected, yield expressions checked)
+                self.validate_arrow_parameters(&params)?;
+                self.validate_arrow_params_no_yield(&params)?;
                 let body = self.parse_arrow_body()?;
                 // Validate "use strict" with non-simple parameters
                 self.validate_arrow_params_with_body(&params, &body)?;
@@ -3110,21 +3146,39 @@ impl<'a> Parser<'a> {
     fn parse_array_literal(&mut self) -> Result<Expression, JsError> {
         self.expect_punctuator(Punctuator::LBracket)?;
         let mut elements = Vec::new();
+        let mut last_was_spread = false;
 
         while !self.check_punctuator(Punctuator::RBracket)? {
             if self.check_punctuator(Punctuator::Comma)? {
                 elements.push(None);
+                last_was_spread = false;
             } else if self.check_punctuator(Punctuator::Spread)? {
                 self.lexer.next_token()?;
                 let expr = self.parse_assignment_expression()?;
                 elements.push(Some(ArrayElement::Spread(expr)));
+                last_was_spread = true;
             } else {
                 let expr = self.parse_assignment_expression()?;
                 elements.push(Some(ArrayElement::Expression(expr)));
+                last_was_spread = false;
             }
 
             if !self.check_punctuator(Punctuator::Comma)? {
                 break;
+            }
+            // If last element was a spread and we're about to see a trailing comma
+            // followed by ], add a None marker to indicate invalid rest position
+            if last_was_spread {
+                self.lexer.next_token()?; // consume comma
+                // Check if this is a trailing comma (followed by ])
+                if self.check_punctuator(Punctuator::RBracket)? {
+                    // Add a None to mark that there was a comma after spread
+                    // This will be detected during pattern conversion
+                    elements.push(None);
+                    break;
+                }
+                // Otherwise continue normally (next element will be added)
+                continue;
             }
             self.lexer.next_token()?;
         }
@@ -3994,6 +4048,125 @@ impl<'a> Parser<'a> {
             }
         }
 
+        Ok(())
+    }
+
+    /// Validate arrow function parameters - always rejects duplicates and yield expressions
+    fn validate_arrow_parameters(&self, params: &[Pattern]) -> Result<(), JsError> {
+        let mut names = Vec::new();
+        for param in params {
+            Self::collect_bound_names(param, &mut names);
+        }
+
+        // Arrow functions ALWAYS reject duplicate parameters (even in non-strict mode)
+        let mut seen = std::collections::HashSet::new();
+        for name in &names {
+            if !seen.insert(name.clone()) {
+                return Err(syntax_error(
+                    &format!("Duplicate parameter name '{}'", name),
+                    self.last_position.clone(),
+                ));
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Check if an expression contains a YieldExpression
+    fn expression_contains_yield(expr: &Expression) -> bool {
+        match expr {
+            Expression::YieldExpression { .. } => true,
+            Expression::BinaryExpression { left, right, .. } => {
+                Self::expression_contains_yield(left) || Self::expression_contains_yield(right)
+            }
+            Expression::AssignmentExpression { right, .. } => {
+                Self::expression_contains_yield(right)
+            }
+            Expression::ConditionalExpression { test, consequent, alternate, .. } => {
+                Self::expression_contains_yield(test)
+                    || Self::expression_contains_yield(consequent)
+                    || Self::expression_contains_yield(alternate)
+            }
+            Expression::UnaryExpression { argument, .. } => {
+                Self::expression_contains_yield(argument)
+            }
+            Expression::CallExpression { callee, arguments, .. } => {
+                Self::expression_contains_yield(callee)
+                    || arguments.iter().any(|arg| Self::expression_contains_yield(arg))
+            }
+            Expression::MemberExpression { object, property, .. } => {
+                Self::expression_contains_yield(object)
+                    || Self::expression_contains_yield(property)
+            }
+            Expression::ArrayExpression { elements, .. } => {
+                elements.iter().any(|elem| {
+                    if let Some(arr_elem) = elem {
+                        match arr_elem {
+                            crate::ast::ArrayElement::Expression(expr) => Self::expression_contains_yield(expr),
+                            crate::ast::ArrayElement::Spread(expr) => Self::expression_contains_yield(expr),
+                        }
+                    } else {
+                        false
+                    }
+                })
+            }
+            Expression::ObjectExpression { properties, .. } => {
+                properties.iter().any(|prop| {
+                    match prop {
+                        crate::ast::ObjectProperty::Property { value, key, .. } => {
+                            Self::expression_contains_yield(value)
+                                || match key {
+                                    crate::ast::PropertyKey::Computed(expr) => Self::expression_contains_yield(expr),
+                                    _ => false,
+                                }
+                        }
+                        crate::ast::ObjectProperty::SpreadElement(expr) => Self::expression_contains_yield(expr),
+                    }
+                })
+            }
+            Expression::SequenceExpression { expressions, .. } => {
+                expressions.iter().any(|e| Self::expression_contains_yield(e))
+            }
+            _ => false,
+        }
+    }
+
+    /// Check if a pattern contains a yield expression (in default values)
+    fn pattern_contains_yield(pattern: &Pattern) -> bool {
+        match pattern {
+            Pattern::Identifier(_) => false,
+            Pattern::ObjectPattern(properties) => {
+                properties.iter().any(|prop| Self::pattern_contains_yield(&prop.value))
+            }
+            Pattern::ArrayPattern(elements) => {
+                elements.iter().any(|elem| {
+                    if let Some(pat) = elem {
+                        Self::pattern_contains_yield(pat)
+                    } else {
+                        false
+                    }
+                })
+            }
+            Pattern::AssignmentPattern { left, right } => {
+                Self::pattern_contains_yield(left) || Self::expression_contains_yield(right)
+            }
+            Pattern::RestElement(inner) => Self::pattern_contains_yield(inner),
+            Pattern::MemberExpression(_) => false,
+        }
+    }
+
+    /// Validate that arrow parameters don't contain yield expressions (when in generator)
+    fn validate_arrow_params_no_yield(&self, params: &[Pattern]) -> Result<(), JsError> {
+        if self.in_generator {
+            for param in params {
+                if Self::pattern_contains_yield(param) {
+                    return Err(syntax_error(
+                        "Arrow parameters cannot contain yield expressions",
+                        self.last_position.clone(),
+                    ));
+                }
+            }
+        }
         Ok(())
     }
 
