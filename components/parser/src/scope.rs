@@ -552,6 +552,11 @@ impl ScopeAnalyzer {
                     }
                 }
             }
+
+            Expression::ParenthesizedExpression { expression, .. } => {
+                // Just visit the inner expression
+                self.visit_expression(expression)?;
+            }
         }
         Ok(())
     }

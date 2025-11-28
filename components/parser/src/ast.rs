@@ -257,6 +257,16 @@ pub enum Expression {
         position: Option<SourcePosition>,
     },
 
+    /// Parenthesized expression - tracks that an expression was wrapped in parentheses
+    /// This is important for distinguishing between `({x} = y)` (valid destructuring assignment)
+    /// and `({x}) = y` (invalid - parenthesized expression cannot be assignment target)
+    ParenthesizedExpression {
+        /// The inner expression
+        expression: Box<Expression>,
+        /// Source location
+        position: Option<SourcePosition>,
+    },
+
     /// Binary operation
     BinaryExpression {
         /// Left operand

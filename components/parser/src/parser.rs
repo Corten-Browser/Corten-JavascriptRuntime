@@ -335,9 +335,17 @@ impl<'a> Parser<'a> {
     fn parse_object_pattern(&mut self) -> Result<Pattern, JsError> {
         self.expect_punctuator(Punctuator::LBrace)?;
         let mut properties = Vec::new();
+        let mut has_rest = false;
 
         while !self.check_punctuator(Punctuator::RBrace)? {
             if self.check_punctuator(Punctuator::Spread)? {
+                // Rest element must be last - can't have multiple rest elements
+                if has_rest {
+                    return Err(syntax_error(
+                        "Rest element must be last in object pattern",
+                        self.last_position.clone(),
+                    ));
+                }
                 self.lexer.next_token()?;
                 let pattern = self.parse_pattern()?;
                 properties.push(ObjectPatternProperty {
@@ -345,7 +353,15 @@ impl<'a> Parser<'a> {
                     value: Pattern::RestElement(Box::new(pattern)),
                     shorthand: false,
                 });
+                has_rest = true;
             } else if self.check_punctuator(Punctuator::LBracket)? {
+                // Rest element must be last - can't have elements after it
+                if has_rest {
+                    return Err(syntax_error(
+                        "Rest element must be last in object pattern",
+                        self.last_position.clone(),
+                    ));
+                }
                 // Computed property key: { [expr]: pattern }
                 self.lexer.next_token()?;
                 let key_expr = self.parse_assignment_expression()?;
@@ -371,6 +387,13 @@ impl<'a> Parser<'a> {
                     shorthand: false,
                 });
             } else {
+                // Rest element must be last - can't have elements after it
+                if has_rest {
+                    return Err(syntax_error(
+                        "Rest element must be last in object pattern",
+                        self.last_position.clone(),
+                    ));
+                }
                 // Regular key: identifier, string, or number
                 let key = self.expect_property_name()?;
                 let (value, shorthand) = if self.check_punctuator(Punctuator::Colon)? {
@@ -1244,6 +1267,10 @@ impl<'a> Parser<'a> {
 
         // Check for in/of
         if self.check_keyword(Keyword::In)? {
+            // In strict mode, reject invalid assignment targets like call expressions
+            if self.strict_mode {
+                self.validate_for_in_of_left(&left_expr)?;
+            }
             self.lexer.next_token()?; // consume 'in'
             let right = self.parse_expression()?;
             self.expect_punctuator(Punctuator::RParen)?;
@@ -1265,6 +1292,10 @@ impl<'a> Parser<'a> {
         }
 
         if self.check_identifier("of")? {
+            // In strict mode, reject invalid assignment targets like call expressions
+            if self.strict_mode {
+                self.validate_for_in_of_left(&left_expr)?;
+            }
             self.lexer.next_token()?; // consume 'of'
             let right = self.parse_assignment_expression()?;
             self.expect_punctuator(Punctuator::RParen)?;
@@ -1938,7 +1969,16 @@ impl<'a> Parser<'a> {
                 }
                 Ok(AssignmentTarget::Identifier(name.clone()))
             }
-            Expression::MemberExpression { .. } => Ok(AssignmentTarget::Member(Box::new(expr))),
+            Expression::MemberExpression { optional, .. } => {
+                // Optional chaining expressions cannot be assignment targets
+                if optional {
+                    return Err(syntax_error(
+                        "Invalid left-hand side in assignment: optional chaining not allowed",
+                        self.last_position.clone(),
+                    ));
+                }
+                Ok(AssignmentTarget::Member(Box::new(expr)))
+            }
             Expression::CallExpression { .. } => {
                 // Call expressions are never valid assignment targets
                 Err(syntax_error("Call expression cannot be assigned", None))
@@ -1952,6 +1992,52 @@ impl<'a> Parser<'a> {
             Expression::ObjectExpression { .. } => {
                 let pattern = self.expression_to_pattern(expr)?;
                 Ok(AssignmentTarget::Pattern(pattern))
+            }
+            // Handle parenthesized expressions
+            // (x) = value is valid, but ({x}) = value and ([x]) = value are not
+            Expression::ParenthesizedExpression { expression, .. } => {
+                match *expression {
+                    // Parenthesized identifiers are valid: (x) = 1
+                    Expression::Identifier { ref name, .. } => {
+                        if self.strict_mode && (name == "arguments" || name == "eval") {
+                            return Err(syntax_error(
+                                &format!("'{}' cannot be assigned in strict mode", name),
+                                self.last_position.clone(),
+                            ));
+                        }
+                        Ok(AssignmentTarget::Identifier(name.clone()))
+                    }
+                    // Parenthesized member expressions are valid: (a.b) = 1
+                    // But not optional chaining: (a?.b) = 1 is invalid
+                    Expression::MemberExpression { optional, .. } => {
+                        if optional {
+                            return Err(syntax_error(
+                                "Invalid left-hand side in assignment: optional chaining not allowed",
+                                self.last_position.clone(),
+                            ));
+                        }
+                        Ok(AssignmentTarget::Member(expression))
+                    }
+                    // Parenthesized object/array literals cannot be destructuring targets
+                    // ({x}) = y and ([x]) = y are invalid
+                    Expression::ObjectExpression { .. } | Expression::ArrayExpression { .. } => {
+                        Err(syntax_error("Invalid left-hand side in assignment", None))
+                    }
+                    // Nested parentheses: recurse
+                    Expression::ParenthesizedExpression { .. } => {
+                        self.expression_to_assignment_target(*expression)
+                    }
+                    // Sequence expressions in parentheses can be valid if last is assignable
+                    Expression::SequenceExpression { expressions, .. } => {
+                        if let Some(last) = expressions.into_iter().last() {
+                            self.expression_to_assignment_target(last)
+                        } else {
+                            Err(syntax_error("Invalid assignment target", None))
+                        }
+                    }
+                    // All other parenthesized expressions are invalid
+                    _ => Err(syntax_error("Invalid left-hand side in assignment", None)),
+                }
             }
             _ => Err(syntax_error("Invalid assignment target", None)),
         }
@@ -2356,28 +2442,66 @@ impl<'a> Parser<'a> {
 
     /// Validate that an update expression target is valid
     /// - `this` is never a valid update target
+    /// - In strict mode, call expressions and other non-simple expressions are not valid
     /// - In strict mode, `arguments` and `eval` cannot be update targets
     fn validate_update_target(&self, expr: &Expression) -> Result<(), JsError> {
-        // `this` is never a valid assignment target
-        if let Expression::ThisExpression { .. } = expr {
-            return Err(syntax_error(
-                "Invalid update target: 'this' is not assignable",
-                self.last_position.clone(),
-            ));
-        }
-
-        // In strict mode, `arguments` and `eval` cannot be update targets
-        if self.strict_mode {
-            if let Expression::Identifier { name, .. } = expr {
-                if name == "arguments" || name == "eval" {
+        match expr {
+            // `this` is never a valid assignment target
+            Expression::ThisExpression { .. } => {
+                Err(syntax_error(
+                    "Invalid update target: 'this' is not assignable",
+                    self.last_position.clone(),
+                ))
+            }
+            // Identifiers are valid, but check for eval/arguments in strict mode
+            Expression::Identifier { name, .. } => {
+                if self.strict_mode && (name == "arguments" || name == "eval") {
                     return Err(syntax_error(
                         &format!("'{}' cannot be used as an update target in strict mode", name),
                         self.last_position.clone(),
                     ));
                 }
+                Ok(())
+            }
+            // Member expressions are valid, but not optional chaining
+            Expression::MemberExpression { optional, .. } => {
+                if *optional {
+                    Err(syntax_error(
+                        "Invalid left-hand side in prefix/postfix expression: optional chaining not allowed",
+                        self.last_position.clone(),
+                    ))
+                } else {
+                    Ok(())
+                }
+            }
+            // In strict mode, call expressions are not valid update targets
+            Expression::CallExpression { .. } => {
+                if self.strict_mode {
+                    Err(syntax_error(
+                        "Invalid left-hand side in prefix/postfix expression",
+                        self.last_position.clone(),
+                    ))
+                } else {
+                    // In non-strict mode, allow for web compatibility (runtime error)
+                    Ok(())
+                }
+            }
+            // Handle parenthesized expressions
+            Expression::ParenthesizedExpression { expression, .. } => {
+                self.validate_update_target(expression)
+            }
+            // All other expressions are invalid
+            _ => {
+                if self.strict_mode {
+                    Err(syntax_error(
+                        "Invalid left-hand side in prefix/postfix expression",
+                        self.last_position.clone(),
+                    ))
+                } else {
+                    Ok(())
+                }
             }
         }
-        Ok(())
     }
 
     fn parse_left_hand_side_expression(&mut self) -> Result<Expression, JsError> {
@@ -2921,7 +3045,12 @@ impl<'a> Parser<'a> {
                     position: None,
                 });
             }
-            return Ok(first);
+            // Single expression in parentheses - wrap in ParenthesizedExpression
+            // to track that it cannot be used as a destructuring assignment target
+            return Ok(Expression::ParenthesizedExpression {
+                expression: Box::new(first),
+                position: None,
+            });
         }
 
         // Multiple params or expressions
@@ -2984,15 +3113,22 @@ impl<'a> Parser<'a> {
                 return Err(syntax_error("Rest parameter or trailing comma must be in arrow function", None));
             }
 
-            // Sequence expression
-            return Ok(Expression::SequenceExpression {
-                expressions: exprs,
+            // Sequence expression in parentheses - wrap in ParenthesizedExpression
+            return Ok(Expression::ParenthesizedExpression {
+                expression: Box::new(Expression::SequenceExpression {
+                    expressions: exprs,
+                    position: None,
+                }),
                 position: None,
             });
         }
 
         self.expect_punctuator(Punctuator::RParen)?;
-        Ok(first)
+        // Single expression after comma check - wrap in ParenthesizedExpression
+        Ok(Expression::ParenthesizedExpression {
+            expression: Box::new(first),
+            position: None,
+        })
     }
 
     fn expression_to_pattern(&self, expr: Expression) -> Result<Pattern, JsError> {
@@ -3065,36 +3201,45 @@ impl<'a> Parser<'a> {
             }
             // Handle object destructuring
             Expression::ObjectExpression { properties, .. } => {
-                let patterns: Result<Vec<ObjectPatternProperty>, _> = properties
-                    .into_iter()
-                    .map(|prop| {
-                        match prop {
-                            ObjectProperty::Property { key, value, shorthand, .. } => {
-                                let value_pattern = self.expression_to_pattern(value)?;
-                                let pattern_key = match key {
-                                    PropertyKey::Identifier(s) => crate::ast::PatternKey::Literal(s),
-                                    PropertyKey::String(s) => crate::ast::PatternKey::Literal(s),
-                                    PropertyKey::Number(n) => crate::ast::PatternKey::Literal(n.to_string()),
-                                    PropertyKey::Computed(expr) => crate::ast::PatternKey::Computed(expr),
-                                };
-                                Ok(ObjectPatternProperty {
-                                    key: pattern_key,
-                                    value: value_pattern,
-                                    shorthand,
-                                })
-                            }
-                            ObjectProperty::SpreadElement(expr) => {
-                                let pattern = self.expression_to_pattern(expr)?;
-                                Ok(ObjectPatternProperty {
-                                    key: crate::ast::PatternKey::Literal(String::new()),
-                                    value: Pattern::RestElement(Box::new(pattern)),
-                                    shorthand: false,
-                                })
-                            }
+                let mut patterns: Vec<ObjectPatternProperty> = Vec::new();
+                let mut seen_rest = false;
+
+                for prop in properties.into_iter() {
+                    if seen_rest {
+                        // Rest element must be last
+                        return Err(syntax_error(
+                            "Rest element must be last in object pattern",
+                            self.last_position.clone(),
+                        ));
+                    }
+
+                    match prop {
+                        ObjectProperty::Property { key, value, shorthand, .. } => {
+                            let value_pattern = self.expression_to_pattern(value)?;
+                            let pattern_key = match key {
+                                PropertyKey::Identifier(s) => crate::ast::PatternKey::Literal(s),
+                                PropertyKey::String(s) => crate::ast::PatternKey::Literal(s),
+                                PropertyKey::Number(n) => crate::ast::PatternKey::Literal(n.to_string()),
+                                PropertyKey::Computed(expr) => crate::ast::PatternKey::Computed(expr),
+                            };
+                            patterns.push(ObjectPatternProperty {
+                                key: pattern_key,
+                                value: value_pattern,
+                                shorthand,
+                            });
                         }
-                    })
-                    .collect();
-                Ok(Pattern::ObjectPattern(patterns?))
+                        ObjectProperty::SpreadElement(expr) => {
+                            let pattern = self.expression_to_pattern(expr)?;
+                            patterns.push(ObjectPatternProperty {
+                                key: crate::ast::PatternKey::Literal(String::new()),
+                                value: Pattern::RestElement(Box::new(pattern)),
+                                shorthand: false,
+                            });
+                            seen_rest = true;
+                        }
+                    }
+                }
+                Ok(Pattern::ObjectPattern(patterns))
             }
             // Handle member expressions as destructuring targets
             // These are valid in destructuring assignment but not in function parameters
@@ -3932,6 +4077,83 @@ impl<'a> Parser<'a> {
             "implements" | "interface" | "let" | "package" | "private"
             | "protected" | "public" | "static" | "yield"
         )
+    }
+
+    /// Validate that a for-in/for-of left-hand side expression is a valid assignment target
+    /// In strict mode, call expressions and other non-simple expressions are not allowed
+    fn validate_for_in_of_left(&self, expr: &Expression) -> Result<(), JsError> {
+        match expr {
+            // Valid: identifiers
+            Expression::Identifier { name, .. } => {
+                // 'arguments' and 'eval' cannot be assigned in strict mode
+                if self.strict_mode && (name == "arguments" || name == "eval") {
+                    return Err(syntax_error(
+                        &format!("'{}' cannot be assigned in strict mode", name),
+                        self.last_position.clone(),
+                    ));
+                }
+                Ok(())
+            }
+            // Valid: member expressions, but not optional chaining
+            Expression::MemberExpression { optional, .. } => {
+                if *optional {
+                    Err(syntax_error(
+                        "Invalid left-hand side in for-in/for-of: optional chaining not allowed",
+                        self.last_position.clone(),
+                    ))
+                } else {
+                    Ok(())
+                }
+            }
+            // Valid: object/array destructuring patterns
+            Expression::ObjectExpression { .. } | Expression::ArrayExpression { .. } => Ok(()),
+            // Invalid: call expressions
+            Expression::CallExpression { .. } => {
+                Err(syntax_error(
+                    "Invalid left-hand side in for-in/for-of",
+                    self.last_position.clone(),
+                ))
+            }
+            // Invalid: parenthesized object/array (cannot be destructuring targets)
+            Expression::ParenthesizedExpression { expression, .. } => {
+                match &**expression {
+                    Expression::Identifier { name, .. } => {
+                        if self.strict_mode && (name == "arguments" || name == "eval") {
+                            return Err(syntax_error(
+                                &format!("'{}' cannot be assigned in strict mode", name),
+                                self.last_position.clone(),
+                            ));
+                        }
+                        Ok(())
+                    }
+                    Expression::MemberExpression { optional, .. } => {
+                        if *optional {
+                            Err(syntax_error(
+                                "Invalid left-hand side in for-in/for-of: optional chaining not allowed",
+                                self.last_position.clone(),
+                            ))
+                        } else {
+                            Ok(())
+                        }
+                    }
+                    Expression::ObjectExpression { .. } | Expression::ArrayExpression { .. } => {
+                        Err(syntax_error(
+                            "Invalid left-hand side in for-in/for-of",
+                            self.last_position.clone(),
+                        ))
+                    }
+                    _ => Err(syntax_error(
+                        "Invalid left-hand side in for-in/for-of",
+                        self.last_position.clone(),
+                    )),
+                }
+            }
+            // All other expressions are invalid
+            _ => Err(syntax_error(
+                "Invalid left-hand side in for-in/for-of",
+                self.last_position.clone(),
+            )),
+        }
     }
 
     /// Validate that an identifier is not a reserved word

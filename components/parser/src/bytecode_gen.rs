@@ -1487,6 +1487,11 @@ impl BytecodeGenerator {
                     }
                 }
             }
+
+            Expression::ParenthesizedExpression { expression, .. } => {
+                // Just visit the inner expression
+                self.visit_expression(expression)?;
+            }
         }
         Ok(())
     }
