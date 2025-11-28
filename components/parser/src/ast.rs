@@ -531,11 +531,20 @@ pub enum Pattern {
     MemberExpression(Box<Expression>),
 }
 
+/// Pattern key type - for object patterns
+#[derive(Debug, Clone, PartialEq)]
+pub enum PatternKey {
+    /// Literal key (identifier, string, or number)
+    Literal(String),
+    /// Computed key (expression in brackets: [expr])
+    Computed(Expression),
+}
+
 /// Object pattern property
 #[derive(Debug, Clone, PartialEq)]
 pub struct ObjectPatternProperty {
-    /// Key
-    pub key: String,
+    /// Key (can be literal or computed)
+    pub key: PatternKey,
     /// Value pattern
     pub value: Pattern,
     /// Is shorthand (e.g., { a } instead of { a: a })
@@ -650,18 +659,38 @@ pub enum LogicalOperator {
 /// Assignment operators
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum AssignmentOperator {
-    /// Simple assignment
+    /// Simple assignment (=)
     Assign,
-    /// Addition assignment
+    /// Addition assignment (+=)
     AddAssign,
-    /// Subtraction assignment
+    /// Subtraction assignment (-=)
     SubAssign,
-    /// Multiplication assignment
+    /// Multiplication assignment (*=)
     MulAssign,
-    /// Division assignment
+    /// Division assignment (/=)
     DivAssign,
-    /// Modulo assignment
+    /// Modulo assignment (%=)
     ModAssign,
+    /// Exponentiation assignment (**=)
+    ExpAssign,
+    /// Bitwise AND assignment (&=)
+    BitAndAssign,
+    /// Bitwise OR assignment (|=)
+    BitOrAssign,
+    /// Bitwise XOR assignment (^=)
+    BitXorAssign,
+    /// Left shift assignment (<<=)
+    LeftShiftAssign,
+    /// Right shift assignment (>>=)
+    RightShiftAssign,
+    /// Unsigned right shift assignment (>>>=)
+    UnsignedRightShiftAssign,
+    /// Logical AND assignment (&&=)
+    LogicalAndAssign,
+    /// Logical OR assignment (||=)
+    LogicalOrAssign,
+    /// Nullish coalescing assignment (??=)
+    NullishCoalesceAssign,
 }
 
 /// Assignment target

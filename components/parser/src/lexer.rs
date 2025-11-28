@@ -182,6 +182,26 @@ pub enum Punctuator {
     SlashEq,
     /// Modulo equals
     PercentEq,
+    /// Exponentiation equals
+    StarStarEq,
+    /// Bitwise AND equals
+    AndEq,
+    /// Bitwise OR equals
+    OrEq,
+    /// Bitwise XOR equals
+    XorEq,
+    /// Left shift equals
+    LtLtEq,
+    /// Right shift equals
+    GtGtEq,
+    /// Unsigned right shift equals
+    GtGtGtEq,
+    /// Logical AND equals
+    AndAndEq,
+    /// Logical OR equals
+    OrOrEq,
+    /// Nullish coalescing equals
+    NullishCoalesceEq,
     /// Increment
     PlusPlus,
     /// Decrement
@@ -367,7 +387,11 @@ impl<'a> Lexer<'a> {
 
             '?' => {
                 if self.match_char('?') {
-                    Ok(Token::Punctuator(Punctuator::NullishCoalesce))
+                    if self.match_char('=') {
+                        Ok(Token::Punctuator(Punctuator::NullishCoalesceEq))
+                    } else {
+                        Ok(Token::Punctuator(Punctuator::NullishCoalesce))
+                    }
                 } else if self.match_char('.') {
                     Ok(Token::Punctuator(Punctuator::OptionalChain))
                 } else {
@@ -411,7 +435,11 @@ impl<'a> Lexer<'a> {
 
             '*' => {
                 if self.match_char('*') {
-                    Ok(Token::Punctuator(Punctuator::StarStar))
+                    if self.match_char('=') {
+                        Ok(Token::Punctuator(Punctuator::StarStarEq))
+                    } else {
+                        Ok(Token::Punctuator(Punctuator::StarStar))
+                    }
                 } else if self.match_char('=') {
                     Ok(Token::Punctuator(Punctuator::StarEq))
                 } else {
@@ -449,7 +477,11 @@ impl<'a> Lexer<'a> {
 
             '<' => {
                 if self.match_char('<') {
-                    Ok(Token::Punctuator(Punctuator::LtLt))
+                    if self.match_char('=') {
+                        Ok(Token::Punctuator(Punctuator::LtLtEq))
+                    } else {
+                        Ok(Token::Punctuator(Punctuator::LtLt))
+                    }
                 } else if self.match_char('=') {
                     Ok(Token::Punctuator(Punctuator::LtEq))
                 } else {
@@ -460,7 +492,13 @@ impl<'a> Lexer<'a> {
             '>' => {
                 if self.match_char('>') {
                     if self.match_char('>') {
-                        Ok(Token::Punctuator(Punctuator::GtGtGt))
+                        if self.match_char('=') {
+                            Ok(Token::Punctuator(Punctuator::GtGtGtEq))
+                        } else {
+                            Ok(Token::Punctuator(Punctuator::GtGtGt))
+                        }
+                    } else if self.match_char('=') {
+                        Ok(Token::Punctuator(Punctuator::GtGtEq))
                     } else {
                         Ok(Token::Punctuator(Punctuator::GtGt))
                     }
@@ -473,7 +511,13 @@ impl<'a> Lexer<'a> {
 
             '&' => {
                 if self.match_char('&') {
-                    Ok(Token::Punctuator(Punctuator::AndAnd))
+                    if self.match_char('=') {
+                        Ok(Token::Punctuator(Punctuator::AndAndEq))
+                    } else {
+                        Ok(Token::Punctuator(Punctuator::AndAnd))
+                    }
+                } else if self.match_char('=') {
+                    Ok(Token::Punctuator(Punctuator::AndEq))
                 } else {
                     Ok(Token::Punctuator(Punctuator::And))
                 }
@@ -481,13 +525,25 @@ impl<'a> Lexer<'a> {
 
             '|' => {
                 if self.match_char('|') {
-                    Ok(Token::Punctuator(Punctuator::OrOr))
+                    if self.match_char('=') {
+                        Ok(Token::Punctuator(Punctuator::OrOrEq))
+                    } else {
+                        Ok(Token::Punctuator(Punctuator::OrOr))
+                    }
+                } else if self.match_char('=') {
+                    Ok(Token::Punctuator(Punctuator::OrEq))
                 } else {
                     Ok(Token::Punctuator(Punctuator::Or))
                 }
             }
 
-            '^' => Ok(Token::Punctuator(Punctuator::Xor)),
+            '^' => {
+                if self.match_char('=') {
+                    Ok(Token::Punctuator(Punctuator::XorEq))
+                } else {
+                    Ok(Token::Punctuator(Punctuator::Xor))
+                }
+            }
 
             '`' => self.scan_template_literal(),
 
@@ -753,16 +809,29 @@ impl<'a> Lexer<'a> {
         }
 
         // Handle decimal point
+        // JavaScript allows both "1.5" and "1." (trailing decimal)
+        // We need to distinguish from member access like "123.toString()"
         if !self.is_at_end() && self.peek() == '.' {
-            // Look ahead to ensure it's not a method call (e.g., 123.toString())
+            // Look ahead to see what follows the dot
             if let Some(next) = self.peek_next() {
                 if next.is_ascii_digit() {
+                    // Definitely a decimal: 1.5
                     *is_float = true;
                     num_str.push(self.advance()); // consume '.'
                     while !self.is_at_end() && self.peek().is_ascii_digit() {
                         num_str.push(self.advance());
                     }
+                } else if !is_id_start(next) {
+                    // Trailing decimal: 1. followed by non-identifier (like ; or whitespace)
+                    // This is valid: "1." equals 1.0
+                    *is_float = true;
+                    num_str.push(self.advance()); // consume '.'
                 }
+                // If next is an identifier start (like 'toString'), leave the dot for member access
+            } else {
+                // End of file after dot: 1.EOF is valid
+                *is_float = true;
+                num_str.push(self.advance()); // consume '.'
             }
         }
 

@@ -341,14 +341,14 @@ impl<'a> Parser<'a> {
                 self.lexer.next_token()?;
                 let pattern = self.parse_pattern()?;
                 properties.push(ObjectPatternProperty {
-                    key: String::new(),
+                    key: crate::ast::PatternKey::Literal(String::new()),
                     value: Pattern::RestElement(Box::new(pattern)),
                     shorthand: false,
                 });
             } else if self.check_punctuator(Punctuator::LBracket)? {
                 // Computed property key: { [expr]: pattern }
                 self.lexer.next_token()?;
-                let _key_expr = self.parse_assignment_expression()?;
+                let key_expr = self.parse_assignment_expression()?;
                 self.expect_punctuator(Punctuator::RBracket)?;
                 self.expect_punctuator(Punctuator::Colon)?;
                 let value = self.parse_pattern()?;
@@ -365,9 +365,8 @@ impl<'a> Parser<'a> {
                     value
                 };
 
-                // For computed keys, use special marker (could be improved)
                 properties.push(ObjectPatternProperty {
-                    key: "[computed]".to_string(),
+                    key: crate::ast::PatternKey::Computed(key_expr),
                     value: final_value,
                     shorthand: false,
                 });
@@ -395,7 +394,7 @@ impl<'a> Parser<'a> {
                 };
 
                 properties.push(ObjectPatternProperty {
-                    key,
+                    key: crate::ast::PatternKey::Literal(key),
                     value: final_value,
                     shorthand,
                 });
@@ -1966,6 +1965,16 @@ impl<'a> Parser<'a> {
             Token::Punctuator(Punctuator::StarEq) => Some(AssignmentOperator::MulAssign),
             Token::Punctuator(Punctuator::SlashEq) => Some(AssignmentOperator::DivAssign),
             Token::Punctuator(Punctuator::PercentEq) => Some(AssignmentOperator::ModAssign),
+            Token::Punctuator(Punctuator::StarStarEq) => Some(AssignmentOperator::ExpAssign),
+            Token::Punctuator(Punctuator::AndEq) => Some(AssignmentOperator::BitAndAssign),
+            Token::Punctuator(Punctuator::OrEq) => Some(AssignmentOperator::BitOrAssign),
+            Token::Punctuator(Punctuator::XorEq) => Some(AssignmentOperator::BitXorAssign),
+            Token::Punctuator(Punctuator::LtLtEq) => Some(AssignmentOperator::LeftShiftAssign),
+            Token::Punctuator(Punctuator::GtGtEq) => Some(AssignmentOperator::RightShiftAssign),
+            Token::Punctuator(Punctuator::GtGtGtEq) => Some(AssignmentOperator::UnsignedRightShiftAssign),
+            Token::Punctuator(Punctuator::AndAndEq) => Some(AssignmentOperator::LogicalAndAssign),
+            Token::Punctuator(Punctuator::OrOrEq) => Some(AssignmentOperator::LogicalOrAssign),
+            Token::Punctuator(Punctuator::NullishCoalesceEq) => Some(AssignmentOperator::NullishCoalesceAssign),
             _ => None,
         };
         Ok(op)
@@ -3062,16 +3071,14 @@ impl<'a> Parser<'a> {
                         match prop {
                             ObjectProperty::Property { key, value, shorthand, .. } => {
                                 let value_pattern = self.expression_to_pattern(value)?;
-                                let key_str = match key {
-                                    PropertyKey::Identifier(s) => s,
-                                    PropertyKey::String(s) => s,
-                                    PropertyKey::Number(n) => n.to_string(),
-                                    PropertyKey::Computed(_) => {
-                                        return Err(syntax_error("Computed keys not supported in pattern", None));
-                                    }
+                                let pattern_key = match key {
+                                    PropertyKey::Identifier(s) => crate::ast::PatternKey::Literal(s),
+                                    PropertyKey::String(s) => crate::ast::PatternKey::Literal(s),
+                                    PropertyKey::Number(n) => crate::ast::PatternKey::Literal(n.to_string()),
+                                    PropertyKey::Computed(expr) => crate::ast::PatternKey::Computed(expr),
                                 };
                                 Ok(ObjectPatternProperty {
-                                    key: key_str,
+                                    key: pattern_key,
                                     value: value_pattern,
                                     shorthand,
                                 })
@@ -3079,7 +3086,7 @@ impl<'a> Parser<'a> {
                             ObjectProperty::SpreadElement(expr) => {
                                 let pattern = self.expression_to_pattern(expr)?;
                                 Ok(ObjectPatternProperty {
-                                    key: String::new(),
+                                    key: crate::ast::PatternKey::Literal(String::new()),
                                     value: Pattern::RestElement(Box::new(pattern)),
                                     shorthand: false,
                                 })
@@ -3101,7 +3108,12 @@ impl<'a> Parser<'a> {
     /// Convert an AssignmentTarget to a Pattern
     fn assignment_target_to_pattern(&self, target: crate::ast::AssignmentTarget) -> Result<Pattern, JsError> {
         match target {
-            crate::ast::AssignmentTarget::Identifier(name) => Ok(Pattern::Identifier(name)),
+            crate::ast::AssignmentTarget::Identifier(name) => {
+                // Validate that the identifier can be used as a binding
+                // (e.g., eval/arguments are forbidden in strict mode)
+                self.validate_binding_identifier(&name)?;
+                Ok(Pattern::Identifier(name))
+            }
             crate::ast::AssignmentTarget::Member(_expr) => {
                 Err(syntax_error("Member expressions not supported as parameters", None))
             }
@@ -4583,5 +4595,61 @@ assert.sameValue = function(actual, expected, message) {
         let mut parser = Parser::new(code);
         let result = parser.parse();
         assert!(result.is_ok(), "Parse error: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_compound_assignment_operators() {
+        // Test all compound assignment operators
+        let operators = vec![
+            "x |= 1;",
+            "x &= 1;",
+            "x ^= 1;",
+            "x <<= 1;",
+            "x >>= 1;",
+            "x >>>= 1;",
+            "x **= 2;",
+            "x ||= 1;",
+            "x &&= 1;",
+            "x ??= 1;",
+        ];
+        for code in operators {
+            let mut parser = Parser::new(code);
+            let result = parser.parse();
+            assert!(result.is_ok(), "Failed to parse '{}': {:?}", code, result.err());
+        }
+    }
+
+    #[test]
+    fn test_computed_property_with_assignment() {
+        // Test computed property in object literal with compound assignment
+        let code = r#"let x = 0; let o = { [x |= 1]: 5 };"#;
+        let mut parser = Parser::new(code);
+        let result = parser.parse();
+        assert!(result.is_ok(), "Object computed error: {:?}", result.err());
+
+        // Test computed property getter in class
+        let code2 = r#"let x = 0; class C { get [x |= 1]() { return 2; } }"#;
+        let mut parser = Parser::new(code2);
+        let result = parser.parse();
+        assert!(result.is_ok(), "Class getter computed error: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_computed_destructuring_assignment() {
+        // First test: numbers with trailing decimal
+        let code0 = r#"var a = 1.;"#;
+        let mut parser = Parser::new(code0);
+        let result = parser.parse();
+        assert!(result.is_ok(), "Trailing decimal number error: {:?}", result.err());
+
+        let code = r#"
+var a = 1;
+var b, rest;
+var vals = {[a]: 1, bar: 2 };
+result = {[a]:b, ...rest} = vals;
+"#;
+        let mut parser = Parser::new(code);
+        let result = parser.parse();
+        assert!(result.is_ok(), "Computed destructuring error: {:?}", result.err());
     }
 }
