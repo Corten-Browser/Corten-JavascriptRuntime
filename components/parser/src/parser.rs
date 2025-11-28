@@ -1249,7 +1249,12 @@ impl<'a> Parser<'a> {
                 }
                 let value = if self.check_punctuator(Punctuator::Assign)? {
                     self.lexer.next_token()?;
+                    // Class field initializers allow super.property access (like methods)
+                    // Arrow functions in field initializers inherit this super binding
+                    let prev_in_method = self.in_method;
+                    self.in_method = true;
                     let init_expr = self.parse_assignment_expression()?;
+                    self.in_method = prev_in_method;
                     // Early error: ContainsArguments of Initializer is true
                     // This checks that `arguments` is not used in the field initializer
                     // (except inside regular functions, which have their own arguments binding)
@@ -4585,8 +4590,12 @@ impl<'a> Parser<'a> {
 
                 if self.check_punctuator(Punctuator::LParen)? {
                     // Computed method: [expr]() {}
+                    // Set method context for super access in parameter defaults
+                    let prev_method = self.in_method;
+                    self.in_method = true;
                     let params = self.parse_parameters()?;
                     let body = self.parse_method_body()?;
+                    self.in_method = prev_method;
 
                     let func = Expression::FunctionExpression {
                         name: None,
@@ -4646,8 +4655,12 @@ impl<'a> Parser<'a> {
                     }
                 } else if self.check_punctuator(Punctuator::LParen)? {
                     // Method shorthand: { get() {} } - "get" is the method name
+                    // Set method context for super access in parameter defaults
+                    let prev_method = self.in_method;
+                    self.in_method = true;
                     let params = self.parse_parameters()?;
                     let body = self.parse_method_body()?;
+                    self.in_method = prev_method;
 
                     let func = Expression::FunctionExpression {
                         name: Some("get".to_string()),
@@ -4735,8 +4748,12 @@ impl<'a> Parser<'a> {
                     }
                 } else if self.check_punctuator(Punctuator::LParen)? {
                     // Method shorthand: { set(v) {} } - "set" is the method name
+                    // Set method context for super access in parameter defaults
+                    let prev_method = self.in_method;
+                    self.in_method = true;
                     let params = self.parse_parameters()?;
                     let body = self.parse_method_body()?;
+                    self.in_method = prev_method;
 
                     let func = Expression::FunctionExpression {
                         name: Some("set".to_string()),
@@ -4769,8 +4786,12 @@ impl<'a> Parser<'a> {
                         let key = self.expect_property_name()?;
                         (PropertyKey::Identifier(key), false)
                     };
+                    // Set method context for super access in parameter defaults
+                    let prev_method = self.in_method;
+                    self.in_method = true;
                     let params = self.parse_parameters()?;
                     let body = self.parse_method_body()?;
+                    self.in_method = prev_method;
 
                     let func_name = match &key {
                         PropertyKey::Identifier(s) => Some(s.clone()),
@@ -4912,8 +4933,12 @@ impl<'a> Parser<'a> {
 
                 if self.check_punctuator(Punctuator::LParen)? {
                     // Method shorthand: name() {}
+                    // Set method context for super access in parameter defaults
+                    let prev_method = self.in_method;
+                    self.in_method = true;
                     let params = self.parse_parameters()?;
                     let body = self.parse_method_body()?;
+                    self.in_method = prev_method;
 
                     let func = Expression::FunctionExpression {
                         name: Some(key.clone()),
