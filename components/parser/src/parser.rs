@@ -586,6 +586,10 @@ impl<'a> Parser<'a> {
         let params = self.parse_parameters()?;
         // Validate for duplicate parameters
         self.validate_parameters(&params)?;
+        // Validate no yield expressions in formal parameters (early error for generators)
+        if is_generator {
+            self.validate_params_no_yield(&params)?;
+        }
         let body = self.parse_function_body()?;
         // Validate "use strict" with non-simple params
         self.validate_params_with_body(&params, &body)?;
@@ -801,6 +805,10 @@ impl<'a> Parser<'a> {
             self.validate_parameters(&params)?;
             // Validate no await expressions in formal parameters (early error for async functions)
             self.validate_params_no_await(&params)?;
+            // Validate no yield expressions in formal parameters (early error for generators)
+            if is_generator {
+                self.validate_params_no_yield(&params)?;
+            }
             let body = self.parse_function_body()?;
             // Validate "use strict" with non-simple params
             self.validate_params_with_body(&params, &body)?;
@@ -827,6 +835,11 @@ impl<'a> Parser<'a> {
 
     fn parse_class_declaration(&mut self) -> Result<Statement, JsError> {
         self.expect_keyword(Keyword::Class)?;
+
+        // All parts of a class are strict mode code, including the class name
+        let prev_strict = self.strict_mode;
+        self.strict_mode = true;
+
         let name = self.expect_identifier()?;
 
         let super_class = if self.check_keyword(Keyword::Extends)? {
@@ -837,6 +850,8 @@ impl<'a> Parser<'a> {
         };
 
         let body = self.parse_class_body()?;
+
+        self.strict_mode = prev_strict;
 
         Ok(Statement::ClassDeclaration {
             name,
@@ -1075,18 +1090,37 @@ impl<'a> Parser<'a> {
                 let prev_in_class_method = self.in_class_method;
                 let prev_in_constructor = self.in_constructor;
                 let prev_static_block = self.in_static_block;
+                let prev_in_async = self.in_async;
+                let prev_in_generator = self.in_generator;
                 self.in_class_method = true;
                 self.in_constructor = kind == MethodKind::Constructor;
                 // Reset static block context - method parameters and body have their own scope
                 // 'await' should be allowed as identifier in non-async methods
                 self.in_static_block = false;
+                // Set async/generator context for parameter parsing
+                self.in_async = is_async;
+                self.in_generator = is_generator;
 
                 let params = self.parse_parameters()?;
+                // Validate for duplicate parameters in non-simple params
+                self.validate_parameters(&params)?;
+                // Validate no await expressions in formal parameters (early error for async methods)
+                if is_async {
+                    self.validate_params_no_await(&params)?;
+                }
+                // Validate no yield expressions in formal parameters (early error for generator methods)
+                if is_generator {
+                    self.validate_params_no_yield(&params)?;
+                }
                 let body = self.parse_function_body_with_context(is_async, is_generator)?;
+                // Validate use strict with non-simple parameters
+                self.validate_params_with_body(&params, &body)?;
 
                 self.in_class_method = prev_in_class_method;
                 self.in_constructor = prev_in_constructor;
                 self.in_static_block = prev_static_block;
+                self.in_async = prev_in_async;
+                self.in_generator = prev_in_generator;
 
                 elements.push(ClassElement::MethodDefinition {
                     key,
@@ -1129,6 +1163,10 @@ impl<'a> Parser<'a> {
     fn parse_class_expression(&mut self) -> Result<Expression, JsError> {
         self.expect_keyword(Keyword::Class)?;
 
+        // All parts of a class are strict mode code, including the class name
+        let prev_strict = self.strict_mode;
+        self.strict_mode = true;
+
         // Name is optional for class expressions
         // await/yield can be class names when not in async/generator/static block context
         let name = match self.lexer.peek_token()? {
@@ -1146,6 +1184,8 @@ impl<'a> Parser<'a> {
         };
 
         let body = self.parse_class_body()?;
+
+        self.strict_mode = prev_strict;
 
         Ok(Expression::ClassExpression {
             name,
@@ -2318,6 +2358,12 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_assignment_expression(&mut self) -> Result<Expression, JsError> {
+        // YieldExpression is at AssignmentExpression level, NOT at UnaryExpression level
+        // This ensures `void yield` fails (yield cannot be identifier in generator)
+        if self.in_generator && self.check_keyword(Keyword::Yield)? {
+            return self.parse_yield_expression();
+        }
+
         let expr = self.parse_conditional_expression()?;
 
         // Check for single-parameter arrow function: identifier => expr
@@ -2351,6 +2397,48 @@ impl<'a> Parser<'a> {
         }
 
         Ok(expr)
+    }
+
+    /// Parse a YieldExpression
+    /// This is at AssignmentExpression level, NOT UnaryExpression level
+    fn parse_yield_expression(&mut self) -> Result<Expression, JsError> {
+        self.expect_keyword(Keyword::Yield)?;
+
+        // Check for yield* (delegate)
+        // The grammar is: yield [no LineTerminator here] * AssignmentExpression
+        // So if there's a line terminator before *, it's NOT yield*
+        let delegate = if self.check_punctuator(Punctuator::Star)?
+            && !self.lexer.line_terminator_before_token
+        {
+            self.lexer.next_token()?;
+            true
+        } else {
+            false
+        };
+
+        // Check if there's an argument (yield can be used without argument)
+        // If there's a line terminator or the next token can't start an expression, no argument
+        let argument = if delegate {
+            // yield* requires an argument
+            Some(Box::new(self.parse_assignment_expression()?))
+        } else if self.lexer.line_terminator_before_token
+            || self.check_punctuator(Punctuator::Semicolon)?
+            || self.check_punctuator(Punctuator::RBrace)?
+            || self.check_punctuator(Punctuator::RParen)?
+            || self.check_punctuator(Punctuator::RBracket)?
+            || self.check_punctuator(Punctuator::Comma)?
+            || self.is_at_end()?
+        {
+            None
+        } else {
+            Some(Box::new(self.parse_assignment_expression()?))
+        };
+
+        Ok(Expression::YieldExpression {
+            argument,
+            delegate,
+            position: None,
+        })
     }
 
     /// Given a left-hand-side expression, finish parsing the full expression.
@@ -3062,47 +3150,8 @@ impl<'a> Parser<'a> {
             });
         }
 
-        // yield is only a YieldExpression when inside a generator function
-        // Otherwise it should be treated as an identifier
-        if self.in_generator && self.check_keyword(Keyword::Yield)? {
-            self.lexer.next_token()?;
-
-            // Check for yield* (delegate)
-            // The grammar is: yield [no LineTerminator here] * AssignmentExpression
-            // So if there's a line terminator before *, it's NOT yield*
-            let delegate = if self.check_punctuator(Punctuator::Star)?
-                && !self.lexer.line_terminator_before_token
-            {
-                self.lexer.next_token()?;
-                true
-            } else {
-                false
-            };
-
-            // Check if there's an argument (yield can be used without argument)
-            // If there's a line terminator or the next token can't start an expression, no argument
-            let argument = if delegate {
-                // yield* requires an argument
-                Some(Box::new(self.parse_assignment_expression()?))
-            } else if self.lexer.line_terminator_before_token
-                || self.check_punctuator(Punctuator::Semicolon)?
-                || self.check_punctuator(Punctuator::RBrace)?
-                || self.check_punctuator(Punctuator::RParen)?
-                || self.check_punctuator(Punctuator::RBracket)?
-                || self.check_punctuator(Punctuator::Comma)?
-                || self.is_at_end()?
-            {
-                None
-            } else {
-                Some(Box::new(self.parse_assignment_expression()?))
-            };
-
-            return Ok(Expression::YieldExpression {
-                argument,
-                delegate,
-                position: None,
-            });
-        }
+        // Note: YieldExpression is NOT parsed here - it's at AssignmentExpression level
+        // This ensures `void yield` fails in generators (yield cannot be identifier)
 
         self.parse_update_expression()
     }
@@ -3532,13 +3581,20 @@ impl<'a> Parser<'a> {
             Token::Keyword(Keyword::Function) => self.parse_function_expression(),
             Token::Keyword(Keyword::Async) => self.parse_async_function_expression(),
             Token::Keyword(Keyword::Class) => self.parse_class_expression(),
-            // yield and let are valid identifiers in non-strict mode (outside generators)
+            // yield is valid as identifier only in non-strict mode AND outside generators
             Token::Keyword(Keyword::Yield) => {
                 self.lexer.next_token()?;
                 // In strict mode, 'yield' is a reserved word
                 if self.strict_mode {
                     return Err(syntax_error(
                         "'yield' is a reserved word in strict mode",
+                        self.last_position.clone(),
+                    ));
+                }
+                // In generator context, 'yield' is reserved (cannot be identifier reference)
+                if self.in_generator {
+                    return Err(syntax_error(
+                        "'yield' is a reserved word in generator functions",
                         self.last_position.clone(),
                     ));
                 }
@@ -3655,13 +3711,25 @@ impl<'a> Parser<'a> {
             None
         };
 
-        // Clear class context - function expressions cannot use super
+        // Save context and set up for this function
         let prev_in_class_method = self.in_class_method;
         let prev_in_constructor = self.in_constructor;
+        let prev_in_generator = self.in_generator;
+        let prev_in_async = self.in_async;
+        // Clear class context - function expressions cannot use super
         self.in_class_method = false;
         self.in_constructor = false;
+        // Set generator context for parameter parsing
+        self.in_generator = is_generator;
+        self.in_async = false;
 
         let params = self.parse_parameters()?;
+        // Validate for duplicate parameters
+        self.validate_parameters(&params)?;
+        // Validate no yield expressions in formal parameters (early error for generators)
+        if is_generator {
+            self.validate_params_no_yield(&params)?;
+        }
         let body = self.parse_function_body_with_context(false, is_generator)?;
 
         // Validate use strict with non-simple parameters
@@ -3671,6 +3739,8 @@ impl<'a> Parser<'a> {
 
         self.in_class_method = prev_in_class_method;
         self.in_constructor = prev_in_constructor;
+        self.in_generator = prev_in_generator;
+        self.in_async = prev_in_async;
 
         Ok(Expression::FunctionExpression {
             name,
@@ -3778,6 +3848,10 @@ impl<'a> Parser<'a> {
             self.validate_parameters(&params)?;
             // Validate no await expressions in formal parameters (early error for async functions)
             self.validate_params_no_await(&params)?;
+            // Validate no yield expressions in formal parameters (early error for generators)
+            if is_generator {
+                self.validate_params_no_yield(&params)?;
+            }
             let body = self.parse_function_body_with_context(true, is_generator)?;
 
             // Validate use strict with non-simple parameters
@@ -4770,11 +4844,19 @@ impl<'a> Parser<'a> {
                 Ok(name)
             }
             // 'await' is a keyword only in async contexts or static blocks, otherwise it's a valid identifier
+            // But 'await' cannot be an identifier in module code (handled elsewhere)
             Token::Keyword(Keyword::Await) if !self.in_async && !self.in_static_block => {
                 Ok("await".to_string())
             }
             // 'yield' is a keyword only in generator contexts, otherwise it's a valid identifier
+            // But 'yield' is a strict-mode reserved word, so reject in strict mode
             Token::Keyword(Keyword::Yield) if !self.in_generator => {
+                if self.strict_mode {
+                    return Err(syntax_error(
+                        "'yield' is a reserved word in strict mode",
+                        self.last_position.clone(),
+                    ));
+                }
                 Ok("yield".to_string())
             }
             _ => Err(unexpected_token(
@@ -5538,6 +5620,20 @@ impl<'a> Parser<'a> {
             if Self::pattern_contains_await(param) {
                 return Err(syntax_error(
                     "Formal parameters cannot contain await expressions",
+                    self.last_position.clone(),
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// Validate that formal parameters don't contain yield expressions
+    /// This is an early error for generator functions and async generator functions
+    fn validate_params_no_yield(&self, params: &[Pattern]) -> Result<(), JsError> {
+        for param in params {
+            if Self::pattern_contains_yield(param) {
+                return Err(syntax_error(
+                    "Formal parameters cannot contain yield expressions",
                     self.last_position.clone(),
                 ));
             }
