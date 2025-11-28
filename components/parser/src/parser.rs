@@ -52,6 +52,8 @@ pub struct Parser<'a> {
     iteration_labels: std::collections::HashSet<String>,
     /// Track if we're in for loop init (disallows 'in' as relational operator)
     in_for_init: bool,
+    /// Track if we're inside a class static block (await and arguments are reserved)
+    in_static_block: bool,
 }
 
 impl<'a> Parser<'a> {
@@ -72,6 +74,7 @@ impl<'a> Parser<'a> {
             active_labels: std::collections::HashSet::new(),
             iteration_labels: std::collections::HashSet::new(),
             in_for_init: false,
+            in_static_block: false,
         }
     }
 
@@ -299,7 +302,7 @@ impl<'a> Parser<'a> {
             Token::Punctuator(Punctuator::LBrace) => true,
             // Keywords that can be identifiers in certain contexts
             Token::Keyword(Keyword::Yield) if !self.in_generator => true,
-            Token::Keyword(Keyword::Await) if !self.in_async => true,
+            Token::Keyword(Keyword::Await) if !self.in_async && !self.in_static_block => true,
             Token::Keyword(Keyword::Static) if !self.strict_mode => true,
             // 'async' can be used as an identifier
             Token::Keyword(Keyword::Async) => true,
@@ -652,6 +655,10 @@ impl<'a> Parser<'a> {
     fn parse_async_expression_after_async(&mut self) -> Result<Expression, JsError> {
         if self.check_punctuator(Punctuator::LParen)? {
             // Async arrow function with parens: async (params) => body
+            // Set async context for parameter parsing - 'await' should be reserved
+            // in default parameter expressions of async functions
+            let prev_async = self.in_async;
+            self.in_async = true;
             let params = self.parse_parameters()?;
             // Validate arrow parameters (duplicates and yield expressions)
             self.validate_arrow_parameters(&params)?;
@@ -659,6 +666,7 @@ impl<'a> Parser<'a> {
             // Check for line terminator before =>
             if self.check_punctuator(Punctuator::Arrow)? {
                 if self.lexer.line_terminator_before_token {
+                    self.in_async = prev_async;
                     return Err(syntax_error(
                         "Line terminator not allowed before '=>'",
                         self.last_position.clone(),
@@ -667,6 +675,7 @@ impl<'a> Parser<'a> {
             }
             self.expect_punctuator(Punctuator::Arrow)?;
             let body = self.parse_arrow_body_with_context(true)?;
+            self.in_async = prev_async;
 
             Ok(Expression::ArrowFunctionExpression {
                 params,
@@ -817,10 +826,20 @@ impl<'a> Parser<'a> {
                 if matches!(next, Token::Punctuator(Punctuator::LBrace)) {
                     // Parse static block
                     self.lexer.next_token()?; // consume {
+
+                    // Save context and set static block context
+                    // In static blocks, 'await' and 'arguments' are reserved
+                    let prev_in_static_block = self.in_static_block;
+                    self.in_static_block = true;
+
                     let mut body = Vec::new();
                     while !self.check_punctuator(Punctuator::RBrace)? {
                         body.push(self.parse_statement()?);
                     }
+
+                    // Restore context
+                    self.in_static_block = prev_in_static_block;
+
                     self.expect_punctuator(Punctuator::RBrace)?;
                     elements.push(ClassElement::StaticBlock { body });
                     continue;
@@ -1003,14 +1022,19 @@ impl<'a> Parser<'a> {
                 // Method - set class context for super validation
                 let prev_in_class_method = self.in_class_method;
                 let prev_in_constructor = self.in_constructor;
+                let prev_static_block = self.in_static_block;
                 self.in_class_method = true;
                 self.in_constructor = kind == MethodKind::Constructor;
+                // Reset static block context - method parameters and body have their own scope
+                // 'await' should be allowed as identifier in non-async methods
+                self.in_static_block = false;
 
                 let params = self.parse_parameters()?;
                 let body = self.parse_function_body_with_context(is_async, is_generator)?;
 
                 self.in_class_method = prev_in_class_method;
                 self.in_constructor = prev_in_constructor;
+                self.in_static_block = prev_static_block;
 
                 elements.push(ClassElement::MethodDefinition {
                     key,
@@ -1054,10 +1078,10 @@ impl<'a> Parser<'a> {
         self.expect_keyword(Keyword::Class)?;
 
         // Name is optional for class expressions
-        // await/yield can be class names when not in async/generator context
+        // await/yield can be class names when not in async/generator/static block context
         let name = match self.lexer.peek_token()? {
             Token::Identifier(_, _) => Some(self.expect_identifier()?),
-            Token::Keyword(Keyword::Await) if !self.in_async => Some(self.expect_identifier()?),
+            Token::Keyword(Keyword::Await) if !self.in_async && !self.in_static_block => Some(self.expect_identifier()?),
             Token::Keyword(Keyword::Yield) if !self.in_generator => Some(self.expect_identifier()?),
             _ => None,
         };
@@ -1213,14 +1237,19 @@ impl<'a> Parser<'a> {
     ) -> Result<Vec<Statement>, JsError> {
         let prev_async = self.in_async;
         let prev_generator = self.in_generator;
+        let prev_static_block = self.in_static_block;
 
         self.in_async = is_async;
         self.in_generator = is_generator;
+        // Reset static block context - nested functions have their own scope
+        // and 'await' should be allowed as identifier in non-async nested functions
+        self.in_static_block = false;
 
         let body = self.parse_function_body()?;
 
         self.in_async = prev_async;
         self.in_generator = prev_generator;
+        self.in_static_block = prev_static_block;
 
         Ok(body)
     }
@@ -1228,11 +1257,15 @@ impl<'a> Parser<'a> {
     /// Parse method body (sets in_method flag for super access)
     fn parse_method_body(&mut self) -> Result<Vec<Statement>, JsError> {
         let prev_method = self.in_method;
+        let prev_static_block = self.in_static_block;
         self.in_method = true;
+        // Reset static block context - nested methods have their own scope
+        self.in_static_block = false;
 
         let body = self.parse_function_body()?;
 
         self.in_method = prev_method;
+        self.in_static_block = prev_static_block;
         Ok(body)
     }
 
@@ -1245,16 +1278,20 @@ impl<'a> Parser<'a> {
         let prev_async = self.in_async;
         let prev_generator = self.in_generator;
         let prev_method = self.in_method;
+        let prev_static_block = self.in_static_block;
 
         self.in_async = is_async;
         self.in_generator = is_generator;
         self.in_method = true;
+        // Reset static block context - nested methods have their own scope
+        self.in_static_block = false;
 
         let body = self.parse_function_body()?;
 
         self.in_async = prev_async;
         self.in_generator = prev_generator;
         self.in_method = prev_method;
+        self.in_static_block = prev_static_block;
 
         Ok(body)
     }
@@ -3469,8 +3506,8 @@ impl<'a> Parser<'a> {
                     position: None,
                 })
             }
-            // 'await' is an identifier outside async functions
-            Token::Keyword(Keyword::Await) if !self.in_async => {
+            // 'await' is an identifier outside async functions and static blocks
+            Token::Keyword(Keyword::Await) if !self.in_async && !self.in_static_block => {
                 self.lexer.next_token()?;
                 Ok(Expression::Identifier {
                     name: "await".to_string(),
@@ -3632,6 +3669,10 @@ impl<'a> Parser<'a> {
             })
         } else if self.check_punctuator(Punctuator::LParen)? {
             // Async arrow function with parens: async (params) => body
+            // Set async context for parameter parsing - 'await' should be reserved
+            // in default parameter expressions of async functions
+            let prev_async = self.in_async;
+            self.in_async = true;
             let params = self.parse_parameters()?;
             // Validate arrow parameters (duplicates and yield expressions)
             self.validate_arrow_parameters(&params)?;
@@ -3639,6 +3680,7 @@ impl<'a> Parser<'a> {
             // Check for line terminator before =>
             if self.check_punctuator(Punctuator::Arrow)? {
                 if self.lexer.line_terminator_before_token {
+                    self.in_async = prev_async;
                     return Err(syntax_error(
                         "Line terminator not allowed before '=>'",
                         self.last_position.clone(),
@@ -3647,6 +3689,8 @@ impl<'a> Parser<'a> {
             }
             self.expect_punctuator(Punctuator::Arrow)?;
             let body = self.parse_arrow_body_with_context(true)?;
+            // Restore async context (though parse_arrow_body_with_context already handles this)
+            self.in_async = prev_async;
             // Validate "use strict" with non-simple parameters
             self.validate_arrow_params_with_body(&params, &body)?;
 
@@ -4013,19 +4057,29 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_arrow_body(&mut self) -> Result<ArrowFunctionBody, JsError> {
-        if self.check_punctuator(Punctuator::LBrace)? {
+        // Reset static block context - arrow function bodies have their own scope
+        let prev_static_block = self.in_static_block;
+        self.in_static_block = false;
+
+        let result = if self.check_punctuator(Punctuator::LBrace)? {
             let body = self.parse_function_body()?;
             Ok(ArrowFunctionBody::Block(body))
         } else {
             let expr = self.parse_assignment_expression()?;
             Ok(ArrowFunctionBody::Expression(Box::new(expr)))
-        }
+        };
+
+        self.in_static_block = prev_static_block;
+        result
     }
 
     /// Parse arrow function body with async context tracking
     fn parse_arrow_body_with_context(&mut self, is_async: bool) -> Result<ArrowFunctionBody, JsError> {
         let prev_async = self.in_async;
+        let prev_static_block = self.in_static_block;
         self.in_async = is_async;
+        // Reset static block context - arrow function bodies have their own scope
+        self.in_static_block = false;
 
         let result = if self.check_punctuator(Punctuator::LBrace)? {
             let body = self.parse_function_body()?;
@@ -4036,6 +4090,7 @@ impl<'a> Parser<'a> {
         };
 
         self.in_async = prev_async;
+        self.in_static_block = prev_static_block;
         result
     }
 
@@ -4583,8 +4638,8 @@ impl<'a> Parser<'a> {
                 self.validate_binding_identifier(&name)?;
                 Ok(name)
             }
-            // 'await' is a keyword only in async contexts, otherwise it's a valid identifier
-            Token::Keyword(Keyword::Await) if !self.in_async => {
+            // 'await' is a keyword only in async contexts or static blocks, otherwise it's a valid identifier
+            Token::Keyword(Keyword::Await) if !self.in_async && !self.in_static_block => {
                 Ok("await".to_string())
             }
             // 'yield' is a keyword only in generator contexts, otherwise it's a valid identifier
@@ -4957,6 +5012,22 @@ impl<'a> Parser<'a> {
                 "'yield' is not allowed as an identifier in generator functions",
                 self.last_position.clone(),
             ));
+        }
+
+        // In class static blocks, 'await' and 'arguments' are reserved
+        if self.in_static_block {
+            if name == "await" {
+                return Err(syntax_error(
+                    "'await' is not allowed as an identifier in class static blocks",
+                    self.last_position.clone(),
+                ));
+            }
+            if name == "arguments" {
+                return Err(syntax_error(
+                    "'arguments' is not allowed as an identifier in class static blocks",
+                    self.last_position.clone(),
+                ));
+            }
         }
 
         Ok(())
