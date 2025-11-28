@@ -844,7 +844,16 @@ impl<'a> Parser<'a> {
 
         let super_class = if self.check_keyword(Keyword::Extends)? {
             self.lexer.next_token()?;
-            Some(Box::new(self.parse_left_hand_side_expression()?))
+            let heritage = self.parse_left_hand_side_expression()?;
+            // ArrowFunctionExpression is not a valid LeftHandSideExpression
+            // It's an AssignmentExpression, so reject it here
+            if matches!(heritage, Expression::ArrowFunctionExpression { .. }) {
+                return Err(syntax_error(
+                    "Arrow function is not allowed as class heritage",
+                    self.last_position.clone(),
+                ));
+            }
+            Some(Box::new(heritage))
         } else {
             None
         };
@@ -1211,7 +1220,16 @@ impl<'a> Parser<'a> {
 
         let super_class = if self.check_keyword(Keyword::Extends)? {
             self.lexer.next_token()?;
-            Some(Box::new(self.parse_left_hand_side_expression()?))
+            let heritage = self.parse_left_hand_side_expression()?;
+            // ArrowFunctionExpression is not a valid LeftHandSideExpression
+            // It's an AssignmentExpression, so reject it here
+            if matches!(heritage, Expression::ArrowFunctionExpression { .. }) {
+                return Err(syntax_error(
+                    "Arrow function is not allowed as class heritage",
+                    self.last_position.clone(),
+                ));
+            }
+            Some(Box::new(heritage))
         } else {
             None
         };
