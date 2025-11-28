@@ -3647,6 +3647,8 @@ impl<'a> Parser<'a> {
             }
             self.expect_punctuator(Punctuator::Arrow)?;
             let body = self.parse_arrow_body_with_context(true)?;
+            // Validate "use strict" with non-simple parameters
+            self.validate_arrow_params_with_body(&params, &body)?;
 
             Ok(Expression::ArrowFunctionExpression {
                 params,
