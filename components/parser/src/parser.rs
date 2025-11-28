@@ -671,9 +671,8 @@ impl<'a> Parser<'a> {
                 let saved_token = self.lexer.current_token.clone();
 
                 self.lexer.next_token()?;
-                let next = self.lexer.peek_token()?;
-                if matches!(next, Token::Identifier(_, _)) || matches!(next, Token::Keyword(_))
-                    || matches!(next, Token::Punctuator(Punctuator::LBracket)) {
+                // Check if followed by a valid property name
+                if self.is_property_name()? {
                     kind = MethodKind::Get;
                     // Now parse the actual key
                     if self.check_punctuator(Punctuator::LBracket)? {
@@ -682,8 +681,7 @@ impl<'a> Parser<'a> {
                         self.expect_punctuator(Punctuator::RBracket)?;
                         (PropertyKey::Computed(key_expr), true)
                     } else {
-                        let name = self.expect_identifier_or_keyword()?;
-                        (PropertyKey::Identifier(name), false)
+                        (self.parse_property_name()?, false)
                     }
                 } else {
                     // It's a method named "get"
@@ -693,8 +691,7 @@ impl<'a> Parser<'a> {
                     self.lexer.previous_line = saved_previous_line;
                     self.lexer.line_terminator_before_token = saved_line_term;
                     self.lexer.current_token = saved_token;
-                    let name = self.expect_identifier_or_keyword()?;
-                    (PropertyKey::Identifier(name), false)
+                    (self.parse_property_name()?, false)
                 }
             } else if !is_generator && self.check_identifier("set")? {
                 let saved_pos = self.lexer.position;
@@ -705,9 +702,8 @@ impl<'a> Parser<'a> {
                 let saved_token = self.lexer.current_token.clone();
 
                 self.lexer.next_token()?;
-                let next = self.lexer.peek_token()?;
-                if matches!(next, Token::Identifier(_, _)) || matches!(next, Token::Keyword(_))
-                    || matches!(next, Token::Punctuator(Punctuator::LBracket)) {
+                // Check if followed by a valid property name
+                if self.is_property_name()? {
                     kind = MethodKind::Set;
                     // Now parse the actual key
                     if self.check_punctuator(Punctuator::LBracket)? {
@@ -716,8 +712,7 @@ impl<'a> Parser<'a> {
                         self.expect_punctuator(Punctuator::RBracket)?;
                         (PropertyKey::Computed(key_expr), true)
                     } else {
-                        let name = self.expect_identifier_or_keyword()?;
-                        (PropertyKey::Identifier(name), false)
+                        (self.parse_property_name()?, false)
                     }
                 } else {
                     // It's a method named "set"
@@ -727,12 +722,10 @@ impl<'a> Parser<'a> {
                     self.lexer.previous_line = saved_previous_line;
                     self.lexer.line_terminator_before_token = saved_line_term;
                     self.lexer.current_token = saved_token;
-                    let name = self.expect_identifier_or_keyword()?;
-                    (PropertyKey::Identifier(name), false)
+                    (self.parse_property_name()?, false)
                 }
             } else {
-                let name = self.expect_identifier_or_keyword()?;
-                (PropertyKey::Identifier(name), false)
+                (self.parse_property_name()?, false)
             };
 
             // Check for constructor
@@ -3709,6 +3702,84 @@ impl<'a> Parser<'a> {
             offset: 0,
         });
         Ok(())
+    }
+
+    /// Parse a property key (identifier, keyword, string, or number)
+    fn parse_property_name(&mut self) -> Result<PropertyKey, JsError> {
+        let token = self.lexer.next_token()?;
+        match token {
+            Token::Identifier(name, _) => Ok(PropertyKey::Identifier(name)),
+            Token::String(s) => Ok(PropertyKey::String(s)),
+            Token::Number(n) => Ok(PropertyKey::Number(n)),
+            Token::Keyword(kw) => {
+                let name = self.keyword_to_string(kw);
+                Ok(PropertyKey::Identifier(name))
+            }
+            _ => Err(unexpected_token(
+                "property name",
+                &format!("{:?}", token),
+                None,
+            )),
+        }
+    }
+
+    /// Check if next token is a valid property name
+    fn is_property_name(&mut self) -> Result<bool, JsError> {
+        let token = self.lexer.peek_token()?;
+        Ok(matches!(
+            token,
+            Token::Identifier(_, _)
+                | Token::Keyword(_)
+                | Token::String(_)
+                | Token::Number(_)
+                | Token::Punctuator(Punctuator::LBracket)
+        ))
+    }
+
+    /// Convert keyword to string
+    fn keyword_to_string(&self, kw: Keyword) -> String {
+        match kw {
+            Keyword::Let => "let".to_string(),
+            Keyword::Const => "const".to_string(),
+            Keyword::Var => "var".to_string(),
+            Keyword::Function => "function".to_string(),
+            Keyword::Return => "return".to_string(),
+            Keyword::If => "if".to_string(),
+            Keyword::Else => "else".to_string(),
+            Keyword::While => "while".to_string(),
+            Keyword::For => "for".to_string(),
+            Keyword::Break => "break".to_string(),
+            Keyword::Continue => "continue".to_string(),
+            Keyword::Class => "class".to_string(),
+            Keyword::Extends => "extends".to_string(),
+            Keyword::New => "new".to_string(),
+            Keyword::This => "this".to_string(),
+            Keyword::Super => "super".to_string(),
+            Keyword::Async => "async".to_string(),
+            Keyword::Await => "await".to_string(),
+            Keyword::True => "true".to_string(),
+            Keyword::False => "false".to_string(),
+            Keyword::Null => "null".to_string(),
+            Keyword::Typeof => "typeof".to_string(),
+            Keyword::Void => "void".to_string(),
+            Keyword::Instanceof => "instanceof".to_string(),
+            Keyword::In => "in".to_string(),
+            Keyword::Try => "try".to_string(),
+            Keyword::Catch => "catch".to_string(),
+            Keyword::Finally => "finally".to_string(),
+            Keyword::Throw => "throw".to_string(),
+            Keyword::Yield => "yield".to_string(),
+            Keyword::Import => "import".to_string(),
+            Keyword::Export => "export".to_string(),
+            Keyword::Default => "default".to_string(),
+            Keyword::Delete => "delete".to_string(),
+            Keyword::With => "with".to_string(),
+            Keyword::Switch => "switch".to_string(),
+            Keyword::Case => "case".to_string(),
+            Keyword::Do => "do".to_string(),
+            Keyword::Debugger => "debugger".to_string(),
+            Keyword::Static => "static".to_string(),
+        }
     }
 
     fn expect_identifier_or_keyword(&mut self) -> Result<String, JsError> {
