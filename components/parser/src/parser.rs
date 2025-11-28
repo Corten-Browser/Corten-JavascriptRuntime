@@ -2866,10 +2866,10 @@ impl<'a> Parser<'a> {
             return Err(syntax_error("Unexpected )", None));
         }
 
-        // Check for rest parameter as first param: (...args)
+        // Check for rest parameter as first param: (...args) or (...[x])
         if self.check_punctuator(Punctuator::Spread)? {
             self.lexer.next_token()?;
-            let rest_name = self.expect_identifier()?;
+            let rest_pattern = self.parse_pattern()?;
             self.expect_punctuator(Punctuator::RParen)?;
             if self.check_punctuator(Punctuator::Arrow)? {
                 // Line terminator before => is not allowed
@@ -2882,7 +2882,7 @@ impl<'a> Parser<'a> {
                 self.lexer.next_token()?;
                 let body = self.parse_arrow_body()?;
                 return Ok(Expression::ArrowFunctionExpression {
-                    params: vec![Pattern::RestElement(Box::new(Pattern::Identifier(rest_name)))],
+                    params: vec![Pattern::RestElement(Box::new(rest_pattern))],
                     body,
                     is_async: false,
                     position: None,
@@ -2938,12 +2938,12 @@ impl<'a> Parser<'a> {
                     has_trailing_comma = true;
                     break;
                 }
-                // Check for rest parameter: (a, b, ...c)
+                // Check for rest parameter: (a, b, ...c) or (a, b, ...[c])
                 if self.check_punctuator(Punctuator::Spread)? {
                     self.lexer.next_token()?;
-                    let rest_name = self.expect_identifier()?;
+                    let rest_pattern = self.parse_pattern()?;
                     has_rest = true;
-                    rest_param = Some(Pattern::RestElement(Box::new(Pattern::Identifier(rest_name))));
+                    rest_param = Some(Pattern::RestElement(Box::new(rest_pattern)));
                     break; // Rest must be last
                 }
                 exprs.push(self.parse_assignment_expression()?);
@@ -4651,5 +4651,20 @@ result = {[a]:b, ...rest} = vals;
         let mut parser = Parser::new(code);
         let result = parser.parse();
         assert!(result.is_ok(), "Computed destructuring error: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_rest_array_destructuring() {
+        // Test rest with array destructuring
+        let code = r#"((...[x]) => {})();"#;
+        let mut parser = Parser::new(code);
+        let result = parser.parse();
+        assert!(result.is_ok(), "Rest array pattern error: {:?}", result.err());
+
+        // Test rest with array destructuring and default
+        let code2 = r#"((...[x = 1]) => {})();"#;
+        let mut parser = Parser::new(code2);
+        let result = parser.parse();
+        assert!(result.is_ok(), "Rest array pattern with default error: {:?}", result.err());
     }
 }
