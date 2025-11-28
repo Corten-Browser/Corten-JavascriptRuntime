@@ -266,6 +266,13 @@ enum TestResult {
 }
 
 fn run_single_test(path: &Path, execute: bool) -> TestResult {
+    // Skip fixture files - they are helper files for other tests, not standalone tests
+    if let Some(file_name) = path.file_name().and_then(|n| n.to_str()) {
+        if file_name.ends_with("_FIXTURE.js") {
+            return TestResult::Skip("Fixture file".to_string());
+        }
+    }
+
     // Read test file
     let source = match fs::read_to_string(path) {
         Ok(s) => s,
