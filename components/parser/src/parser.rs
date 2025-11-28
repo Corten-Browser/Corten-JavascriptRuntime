@@ -1163,10 +1163,31 @@ impl<'a> Parser<'a> {
 
     fn parse_for_statement(&mut self) -> Result<Statement, JsError> {
         self.expect_keyword(Keyword::For)?;
+
+        // Check for for-await-of: for await (... of ...)
+        let is_await = if self.check_keyword(Keyword::Await)? {
+            if !self.in_async {
+                return Err(syntax_error(
+                    "for await can only be used in async functions",
+                    self.last_position.clone(),
+                ));
+            }
+            self.lexer.next_token()?; // consume await
+            true
+        } else {
+            false
+        };
+
         self.expect_punctuator(Punctuator::LParen)?;
 
         // Check for for-in/for-of first
         if self.check_punctuator(Punctuator::Semicolon)? {
+            if is_await {
+                return Err(syntax_error(
+                    "for await must be used with for-of, not regular for loop",
+                    self.last_position.clone(),
+                ));
+            }
             // Empty init - regular for loop
             return self.parse_regular_for(None);
         }
@@ -1215,6 +1236,12 @@ impl<'a> Parser<'a> {
 
             // Check for in/of (for-in/for-of) vs semicolon (regular for)
             if self.check_keyword(Keyword::In)? {
+                if is_await {
+                    return Err(syntax_error(
+                        "for await must be used with for-of, not for-in",
+                        self.last_position.clone(),
+                    ));
+                }
                 self.lexer.next_token()?; // consume 'in'
                 let right = self.parse_expression()?;
                 self.expect_punctuator(Punctuator::RParen)?;
@@ -1240,12 +1267,18 @@ impl<'a> Parser<'a> {
                     left: ForInOfLeft::VariableDeclaration { kind, id },
                     right,
                     body,
-                    r#await: false,
+                    r#await: is_await,
                     position: None,
                 });
             }
 
             // Regular for loop with variable declaration
+            if is_await {
+                return Err(syntax_error(
+                    "for await must be used with for-of, not regular for loop",
+                    self.last_position.clone(),
+                ));
+            }
             let init_expr = if self.check_punctuator(Punctuator::Assign)? {
                 self.lexer.next_token()?;
                 Some(self.parse_assignment_expression()?)
@@ -1267,6 +1300,12 @@ impl<'a> Parser<'a> {
 
         // Check for in/of
         if self.check_keyword(Keyword::In)? {
+            if is_await {
+                return Err(syntax_error(
+                    "for await must be used with for-of, not for-in",
+                    self.last_position.clone(),
+                ));
+            }
             // In strict mode, reject invalid assignment targets like call expressions
             if self.strict_mode {
                 self.validate_for_in_of_left(&left_expr)?;
@@ -1312,12 +1351,18 @@ impl<'a> Parser<'a> {
                 left,
                 right,
                 body,
-                r#await: false,
+                r#await: is_await,
                 position: None,
             });
         }
 
         // Regular for loop with expression init
+        if is_await {
+            return Err(syntax_error(
+                "for await must be used with for-of, not regular for loop",
+                self.last_position.clone(),
+            ));
+        }
         // Need to finish parsing the full init expression (may have comma operator)
         let init_expr = if self.check_punctuator(Punctuator::Comma)? {
             self.lexer.next_token()?;
