@@ -2550,6 +2550,7 @@ impl<'a> Parser<'a> {
 
         // Check if there's an argument (yield can be used without argument)
         // If there's a line terminator or the next token can't start an expression, no argument
+        // Note: Colon is added for conditional expressions: `a ? yield : b` where yield has no argument
         let argument = if delegate {
             // yield* requires an argument
             Some(Box::new(self.parse_assignment_expression()?))
@@ -2559,6 +2560,7 @@ impl<'a> Parser<'a> {
             || self.check_punctuator(Punctuator::RParen)?
             || self.check_punctuator(Punctuator::RBracket)?
             || self.check_punctuator(Punctuator::Comma)?
+            || self.check_punctuator(Punctuator::Colon)?
             || self.is_at_end()?
         {
             None
