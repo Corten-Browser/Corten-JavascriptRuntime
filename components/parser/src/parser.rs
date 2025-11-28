@@ -893,9 +893,12 @@ impl<'a> Parser<'a> {
                 let name = self.expect_private_identifier()?;
                 (PropertyKey::Identifier(name), false)
             } else if self.check_punctuator(Punctuator::LBracket)? {
-                // Computed property name: [expr]
+                // Computed property name: [expr] - 'in' is always allowed inside
                 self.lexer.next_token()?;
+                let prev_in_for_init = self.in_for_init;
+                self.in_for_init = false;
                 let key_expr = self.parse_assignment_expression()?;
+                self.in_for_init = prev_in_for_init;
                 self.expect_punctuator(Punctuator::RBracket)?;
                 (PropertyKey::Computed(key_expr), true)
             } else if !is_generator && self.check_identifier("get")? {
@@ -912,8 +915,12 @@ impl<'a> Parser<'a> {
                     kind = MethodKind::Get;
                     // Now parse the actual key - check for private identifier
                     if self.check_punctuator(Punctuator::LBracket)? {
+                        // Computed property name - 'in' is always allowed
                         self.lexer.next_token()?;
+                        let prev_in_for_init = self.in_for_init;
+                        self.in_for_init = false;
                         let key_expr = self.parse_assignment_expression()?;
+                        self.in_for_init = prev_in_for_init;
                         self.expect_punctuator(Punctuator::RBracket)?;
                         (PropertyKey::Computed(key_expr), true)
                     } else if self.check_private_identifier()? {
@@ -947,8 +954,12 @@ impl<'a> Parser<'a> {
                     kind = MethodKind::Set;
                     // Now parse the actual key - check for private identifier
                     if self.check_punctuator(Punctuator::LBracket)? {
+                        // Computed property name - 'in' is always allowed
                         self.lexer.next_token()?;
+                        let prev_in_for_init = self.in_for_init;
+                        self.in_for_init = false;
                         let key_expr = self.parse_assignment_expression()?;
+                        self.in_for_init = prev_in_for_init;
                         self.expect_punctuator(Punctuator::RBracket)?;
                         (PropertyKey::Computed(key_expr), true)
                     } else if self.check_private_identifier()? {
@@ -3161,8 +3172,12 @@ impl<'a> Parser<'a> {
                     position: None,
                 };
             } else if self.check_punctuator(Punctuator::LBracket)? {
+                // Computed property access: obj[expr] - 'in' is always allowed
                 self.lexer.next_token()?;
+                let prev_in_for_init = self.in_for_init;
+                self.in_for_init = false;
                 let property = Box::new(self.parse_expression()?);
+                self.in_for_init = prev_in_for_init;
                 self.expect_punctuator(Punctuator::RBracket)?;
                 expr = Expression::MemberExpression {
                     object: Box::new(expr),
@@ -3272,8 +3287,12 @@ impl<'a> Parser<'a> {
                     position: None,
                 };
             } else if self.check_punctuator(Punctuator::LBracket)? {
+                // Computed property access: obj[expr] - 'in' is always allowed
                 self.lexer.next_token()?;
+                let prev_in_for_init = self.in_for_init;
+                self.in_for_init = false;
                 let property = Box::new(self.parse_expression()?);
+                self.in_for_init = prev_in_for_init;
                 self.expect_punctuator(Punctuator::RBracket)?;
                 expr = Expression::MemberExpression {
                     object: Box::new(expr),
@@ -4056,9 +4075,12 @@ impl<'a> Parser<'a> {
                 self.lexer.next_token()?;
 
                 let (key, computed) = if self.check_punctuator(Punctuator::LBracket)? {
-                    // Computed generator method: *[expr]() {}
+                    // Computed generator method: *[expr]() {} - 'in' allowed
                     self.lexer.next_token()?;
+                    let prev_in_for_init = self.in_for_init;
+                    self.in_for_init = false;
                     let key_expr = self.parse_assignment_expression()?;
+                    self.in_for_init = prev_in_for_init;
                     self.expect_punctuator(Punctuator::RBracket)?;
                     (PropertyKey::Computed(key_expr), true)
                 } else {
@@ -4090,9 +4112,12 @@ impl<'a> Parser<'a> {
                     computed,
                 });
             } else if self.check_punctuator(Punctuator::LBracket)? {
-                // Computed property: [expr]: value or [expr]() {}
+                // Computed property: [expr]: value or [expr]() {} - 'in' allowed
                 self.lexer.next_token()?;
+                let prev_in_for_init = self.in_for_init;
+                self.in_for_init = false;
                 let key_expr = self.parse_assignment_expression()?;
+                self.in_for_init = prev_in_for_init;
                 self.expect_punctuator(Punctuator::RBracket)?;
 
                 if self.check_punctuator(Punctuator::LParen)? {
@@ -4179,9 +4204,12 @@ impl<'a> Parser<'a> {
                 } else {
                     // Getter accessor: get prop() {} or get [expr]() {}
                     let (key, computed) = if self.check_punctuator(Punctuator::LBracket)? {
-                        // Computed property name: get [expr]() {}
+                        // Computed property name: get [expr]() {} - 'in' allowed
                         self.lexer.next_token()?;
+                        let prev_in_for_init = self.in_for_init;
+                        self.in_for_init = false;
                         let key_expr = self.parse_assignment_expression()?;
+                        self.in_for_init = prev_in_for_init;
                         self.expect_punctuator(Punctuator::RBracket)?;
                         (PropertyKey::Computed(key_expr), true)
                     } else {
@@ -4265,9 +4293,12 @@ impl<'a> Parser<'a> {
                 } else {
                     // Setter accessor: set prop(v) {} or set [expr](v) {}
                     let (key, computed) = if self.check_punctuator(Punctuator::LBracket)? {
-                        // Computed property name: set [expr](v) {}
+                        // Computed property name: set [expr](v) {} - 'in' allowed
                         self.lexer.next_token()?;
+                        let prev_in_for_init = self.in_for_init;
+                        self.in_for_init = false;
                         let key_expr = self.parse_assignment_expression()?;
+                        self.in_for_init = prev_in_for_init;
                         self.expect_punctuator(Punctuator::RBracket)?;
                         (PropertyKey::Computed(key_expr), true)
                     } else {
