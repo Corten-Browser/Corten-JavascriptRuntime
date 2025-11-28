@@ -504,6 +504,16 @@ pub enum Expression {
         /// Source location
         position: Option<SourcePosition>,
     },
+
+    /// Tagged template expression: tag`template`
+    TaggedTemplateExpression {
+        /// Tag function
+        tag: Box<Expression>,
+        /// Template quasi (containing quasis and expressions)
+        quasi: Box<Expression>,
+        /// Source location
+        position: Option<SourcePosition>,
+    },
 }
 
 /// Variable declaration kind

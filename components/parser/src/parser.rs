@@ -2867,6 +2867,24 @@ impl<'a> Parser<'a> {
                     optional: false,
                     position: None,
                 };
+            } else if matches!(self.lexer.peek_token()?, Token::TemplateLiteral(_)) {
+                // Tagged template literal: tag`template`
+                if let Token::TemplateLiteral(s) = self.lexer.next_token()? {
+                    let quasi = Expression::TemplateLiteral {
+                        quasis: vec![TemplateElement {
+                            raw: s.clone(),
+                            cooked: s,
+                            tail: true,
+                        }],
+                        expressions: vec![],
+                        position: None,
+                    };
+                    expr = Expression::TaggedTemplateExpression {
+                        tag: Box::new(expr),
+                        quasi: Box::new(quasi),
+                        position: None,
+                    };
+                }
             } else {
                 break;
             }

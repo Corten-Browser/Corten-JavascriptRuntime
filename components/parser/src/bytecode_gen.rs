@@ -1498,6 +1498,13 @@ impl BytecodeGenerator {
                 // Visit the source expression (module specifier)
                 self.visit_expression(source)?;
             }
+
+            Expression::TaggedTemplateExpression { tag, quasi, .. } => {
+                // Visit the tag and quasi expressions
+                self.visit_expression(tag)?;
+                self.visit_expression(quasi)?;
+                // TODO: Emit proper tagged template call bytecode
+            }
         }
         Ok(())
     }

@@ -567,6 +567,11 @@ impl ScopeAnalyzer {
                 // Visit the source expression (module specifier)
                 self.visit_expression(source)?;
             }
+
+            Expression::TaggedTemplateExpression { tag, quasi, .. } => {
+                self.visit_expression(tag)?;
+                self.visit_expression(quasi)?;
+            }
         }
         Ok(())
     }
