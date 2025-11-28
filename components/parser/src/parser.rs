@@ -293,23 +293,31 @@ impl<'a> Parser<'a> {
         let saved_token = self.lexer.current_token.clone();
 
         self.lexer.next_token()?; // consume "let"
-        let next = self.lexer.peek_token()?;
+        let next = self.lexer.peek_token()?.clone();
+        // Check for line terminator after peek so the flag is updated
+        let has_line_terminator = self.lexer.line_terminator_before_token;
 
-        // "let" is a keyword (declaration) if followed by:
+        // "let" is a keyword (declaration) if followed by (without line terminator):
         // - identifier (but not 'in' or 'of' which could be for-in/for-of with let as LHS)
         // - [ (array destructuring)
         // - { (object destructuring)
-        let is_declaration = match next {
-            Token::Identifier(_, _) => true,
-            Token::Punctuator(Punctuator::LBracket) => true,
-            Token::Punctuator(Punctuator::LBrace) => true,
-            // Keywords that can be identifiers in certain contexts
-            Token::Keyword(Keyword::Yield) if !self.in_generator => true,
-            Token::Keyword(Keyword::Await) if !self.in_async && !self.in_static_block => true,
-            Token::Keyword(Keyword::Static) if !self.strict_mode => true,
-            // 'async' can be used as an identifier
-            Token::Keyword(Keyword::Async) => true,
-            _ => false,
+        // If there's a line terminator, `let` is an identifier expression with ASI after it
+        let is_declaration = if has_line_terminator {
+            // Line terminator after 'let' means it's an identifier, not a declaration
+            false
+        } else {
+            match next {
+                Token::Identifier(_, _) => true,
+                Token::Punctuator(Punctuator::LBracket) => true,
+                Token::Punctuator(Punctuator::LBrace) => true,
+                // Keywords that can be identifiers in certain contexts
+                Token::Keyword(Keyword::Yield) if !self.in_generator => true,
+                Token::Keyword(Keyword::Await) if !self.in_async && !self.in_static_block => true,
+                Token::Keyword(Keyword::Static) if !self.strict_mode => true,
+                // 'async' can be used as an identifier
+                Token::Keyword(Keyword::Async) => true,
+                _ => false,
+            }
         };
 
         // Restore lexer state
@@ -3876,6 +3884,14 @@ impl<'a> Parser<'a> {
 
         let name = if let Token::Identifier(_, _) = self.lexer.peek_token()? {
             Some(self.expect_identifier()?)
+        } else if !is_generator
+            && !self.strict_mode
+            && matches!(self.lexer.peek_token()?, Token::Keyword(Keyword::Yield))
+        {
+            // For non-generator function expressions, 'yield' can be used as a binding identifier
+            // (in non-strict mode) even when we're inside an outer generator context
+            self.lexer.next_token()?;
+            Some("yield".to_string())
         } else {
             None
         };
@@ -3885,12 +3901,16 @@ impl<'a> Parser<'a> {
         let prev_in_constructor = self.in_constructor;
         let prev_in_generator = self.in_generator;
         let prev_in_async = self.in_async;
+        let prev_in_static_block = self.in_static_block;
         // Clear class context - function expressions cannot use super
         self.in_class_method = false;
         self.in_constructor = false;
         // Set generator context for parameter parsing
         self.in_generator = is_generator;
         self.in_async = false;
+        // Function expressions have their own 'arguments' binding, so clear static block context
+        // This allows 'arguments' to be used inside function expressions in static blocks
+        self.in_static_block = false;
 
         let params = self.parse_parameters()?;
         // Validate for duplicate parameters
@@ -3910,6 +3930,7 @@ impl<'a> Parser<'a> {
         self.in_constructor = prev_in_constructor;
         self.in_generator = prev_in_generator;
         self.in_async = prev_in_async;
+        self.in_static_block = prev_in_static_block;
 
         Ok(Expression::FunctionExpression {
             name,
@@ -3997,6 +4018,14 @@ impl<'a> Parser<'a> {
 
             let name = if let Token::Identifier(_, _) = self.lexer.peek_token()? {
                 Some(self.expect_identifier()?)
+            } else if !is_generator
+                && !self.strict_mode
+                && matches!(self.lexer.peek_token()?, Token::Keyword(Keyword::Yield))
+            {
+                // For non-generator async function expressions, 'yield' can be used as a binding identifier
+                // (in non-strict mode) even when we're inside an outer generator context
+                self.lexer.next_token()?;
+                Some("yield".to_string())
             } else {
                 None
             };
@@ -4006,10 +4035,13 @@ impl<'a> Parser<'a> {
             let prev_generator = self.in_generator;
             let prev_in_class_method = self.in_class_method;
             let prev_in_constructor = self.in_constructor;
+            let prev_in_static_block = self.in_static_block;
             self.in_async = true;
             self.in_generator = is_generator;
             self.in_class_method = false;
             self.in_constructor = false;
+            // Function expressions have their own 'arguments' binding, so clear static block context
+            self.in_static_block = false;
 
             let params = self.parse_parameters()?;
             // Validate for duplicate parameters - must reject duplicates in async functions
@@ -4032,6 +4064,7 @@ impl<'a> Parser<'a> {
             self.in_generator = prev_generator;
             self.in_class_method = prev_in_class_method;
             self.in_constructor = prev_in_constructor;
+            self.in_static_block = prev_in_static_block;
 
             Ok(Expression::FunctionExpression {
                 name,
@@ -6167,11 +6200,78 @@ impl<'a> Parser<'a> {
         let token = self.lexer.peek_token()?.clone();
 
         // Lexical declarations (let, const) are not allowed in statement positions
-        if matches!(token, Token::Keyword(Keyword::Let) | Token::Keyword(Keyword::Const)) {
+        // But in sloppy mode, `let` can be an identifier if not followed by identifier or [
+        if matches!(token, Token::Keyword(Keyword::Const)) {
             return Err(syntax_error(
                 "Lexical declaration cannot appear in a single-statement context",
                 self.last_position.clone(),
             ));
+        }
+        if matches!(token, Token::Keyword(Keyword::Let)) {
+            // In strict mode, `let` is always a keyword
+            if self.strict_mode {
+                return Err(syntax_error(
+                    "Lexical declaration cannot appear in a single-statement context",
+                    self.last_position.clone(),
+                ));
+            }
+            // In sloppy mode, peek ahead to see if this looks like a lexical declaration
+            // `let` followed by identifier, `[`, or `{` (without line terminator) is a declaration
+            // `let` followed by a line terminator is an identifier expression
+            self.lexer.next_token()?; // consume 'let'
+            // First peek the next token so that line_terminator_before_token is updated
+            let next_token = self.lexer.peek_token()?.clone();
+            let is_declaration = !self.lexer.line_terminator_before_token
+                && matches!(
+                    next_token,
+                    Token::Identifier(_, _) | Token::Punctuator(Punctuator::LBracket) | Token::Punctuator(Punctuator::LBrace)
+                );
+
+            if is_declaration {
+                return Err(syntax_error(
+                    "Lexical declaration cannot appear in a single-statement context",
+                    self.last_position.clone(),
+                ));
+            }
+
+            // It's an expression statement with `let` as identifier
+            // Parse the rest of the expression (if any) and create an ExpressionStatement
+            let let_expr = Expression::Identifier {
+                name: "let".to_string(),
+                position: None,
+            };
+
+            // Check if there's more to the expression (e.g., let.foo or let())
+            let expr = if self.lexer.line_terminator_before_token
+                || self.check_punctuator(Punctuator::Semicolon)?
+                || self.is_at_end()?
+            {
+                let_expr
+            } else {
+                // There's more - continue parsing as member/call expression
+                // For now, just return the identifier and let ASI handle the rest
+                let_expr
+            };
+
+            // Handle ASI
+            if !self.check_punctuator(Punctuator::Semicolon)?
+                && !self.lexer.line_terminator_before_token
+                && !self.is_at_end()?
+                && !self.check_punctuator(Punctuator::RBrace)?
+            {
+                return Err(syntax_error(
+                    "Missing semicolon after expression statement",
+                    self.last_position.clone(),
+                ));
+            }
+            if self.check_punctuator(Punctuator::Semicolon)? {
+                self.lexer.next_token()?;
+            }
+
+            return Ok(Statement::ExpressionStatement {
+                expression: expr,
+                position: None,
+            });
         }
 
         // Class declarations are not allowed in statement positions
