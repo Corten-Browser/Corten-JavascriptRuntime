@@ -3141,7 +3141,34 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_relational_expression(&mut self) -> Result<Expression, JsError> {
-        let mut left = self.parse_shift_expression()?;
+        // Handle private field presence check: #field in expr
+        // This is a special case where the left side is just a PrivateIdentifier
+        let mut left = if self.check_private_identifier()? && !self.in_for_init {
+            // Peek ahead to see if this is "#name in"
+            let priv_name = self.expect_private_identifier()?;
+            if self.check_keyword(Keyword::In)? {
+                // This is private field presence check: #name in expr
+                self.lexer.next_token()?; // consume 'in'
+                let right = self.parse_shift_expression()?;
+                return Ok(Expression::BinaryExpression {
+                    left: Box::new(Expression::PrivateIdentifier {
+                        name: priv_name,
+                        position: None,
+                    }),
+                    operator: BinaryOperator::In,
+                    right: Box::new(right),
+                    position: None,
+                });
+            } else {
+                // Not followed by 'in', create private identifier expression
+                Expression::PrivateIdentifier {
+                    name: priv_name,
+                    position: None,
+                }
+            }
+        } else {
+            self.parse_shift_expression()?
+        };
 
         loop {
             let op = match self.lexer.peek_token()? {
@@ -4623,8 +4650,10 @@ impl<'a> Parser<'a> {
                 // Set generator context before parsing params
                 let prev_generator = self.in_generator;
                 let prev_method = self.in_method;
+                let prev_in_static_block = self.in_static_block;
                 self.in_generator = true;
                 self.in_method = true;
+                self.in_static_block = false; // Methods have their own scope
 
                 let params = self.parse_parameters()?;
                 // Validate parameters
@@ -4636,6 +4665,7 @@ impl<'a> Parser<'a> {
 
                 self.in_generator = prev_generator;
                 self.in_method = prev_method;
+                self.in_static_block = prev_in_static_block;
 
                 let func_name = match &key {
                     PropertyKey::Identifier(s) => Some(s.clone()),
@@ -4668,11 +4698,15 @@ impl<'a> Parser<'a> {
                 if self.check_punctuator(Punctuator::LParen)? {
                     // Computed method: [expr]() {}
                     // Set method context for super access in parameter defaults
+                    // Clear static block context - methods have their own scope
                     let prev_method = self.in_method;
+                    let prev_in_static_block = self.in_static_block;
                     self.in_method = true;
+                    self.in_static_block = false;
                     let params = self.parse_parameters()?;
                     let body = self.parse_method_body()?;
                     self.in_method = prev_method;
+                    self.in_static_block = prev_in_static_block;
 
                     let func = Expression::FunctionExpression {
                         name: None,
@@ -4734,10 +4768,13 @@ impl<'a> Parser<'a> {
                     // Method shorthand: { get() {} } - "get" is the method name
                     // Set method context for super access in parameter defaults
                     let prev_method = self.in_method;
+                    let prev_in_static_block = self.in_static_block;
                     self.in_method = true;
+                    self.in_static_block = false; // Methods have their own scope
                     let params = self.parse_parameters()?;
                     let body = self.parse_method_body()?;
                     self.in_method = prev_method;
+                    self.in_static_block = prev_in_static_block;
 
                     let func = Expression::FunctionExpression {
                         name: Some("get".to_string()),
@@ -4827,10 +4864,13 @@ impl<'a> Parser<'a> {
                     // Method shorthand: { set(v) {} } - "set" is the method name
                     // Set method context for super access in parameter defaults
                     let prev_method = self.in_method;
+                    let prev_in_static_block = self.in_static_block;
                     self.in_method = true;
+                    self.in_static_block = false; // Methods have their own scope
                     let params = self.parse_parameters()?;
                     let body = self.parse_method_body()?;
                     self.in_method = prev_method;
+                    self.in_static_block = prev_in_static_block;
 
                     let func = Expression::FunctionExpression {
                         name: Some("set".to_string()),
@@ -4865,10 +4905,13 @@ impl<'a> Parser<'a> {
                     };
                     // Set method context for super access in parameter defaults
                     let prev_method = self.in_method;
+                    let prev_in_static_block = self.in_static_block;
                     self.in_method = true;
+                    self.in_static_block = false; // Methods have their own scope
                     let params = self.parse_parameters()?;
                     let body = self.parse_method_body()?;
                     self.in_method = prev_method;
+                    self.in_static_block = prev_in_static_block;
 
                     let func_name = match &key {
                         PropertyKey::Identifier(s) => Some(s.clone()),
@@ -4931,9 +4974,11 @@ impl<'a> Parser<'a> {
                     let prev_async = self.in_async;
                     let prev_generator = self.in_generator;
                     let prev_method = self.in_method;
+                    let prev_in_static_block = self.in_static_block;
                     self.in_async = true;
                     self.in_generator = is_generator;
                     self.in_method = true;
+                    self.in_static_block = false; // Methods have their own scope
 
                     let params = self.parse_parameters()?;
                     // Validate parameters
@@ -4949,6 +4994,7 @@ impl<'a> Parser<'a> {
                     self.in_async = prev_async;
                     self.in_generator = prev_generator;
                     self.in_method = prev_method;
+                    self.in_static_block = prev_in_static_block;
 
                     let func = Expression::FunctionExpression {
                         name: Some(key.clone()),
@@ -4974,8 +5020,10 @@ impl<'a> Parser<'a> {
                 // Set generator context before parsing params
                 let prev_generator = self.in_generator;
                 let prev_method = self.in_method;
+                let prev_in_static_block = self.in_static_block;
                 self.in_generator = true;
                 self.in_method = true;
+                self.in_static_block = false; // Methods have their own scope
 
                 let params = self.parse_parameters()?;
                 // Validate parameters
@@ -4987,6 +5035,7 @@ impl<'a> Parser<'a> {
 
                 self.in_generator = prev_generator;
                 self.in_method = prev_method;
+                self.in_static_block = prev_in_static_block;
 
                 let func = Expression::FunctionExpression {
                     name: Some(key.clone()),
@@ -5011,11 +5060,15 @@ impl<'a> Parser<'a> {
                 if self.check_punctuator(Punctuator::LParen)? {
                     // Method shorthand: name() {}
                     // Set method context for super access in parameter defaults
+                    // Clear static block context - methods have their own scope
                     let prev_method = self.in_method;
+                    let prev_in_static_block = self.in_static_block;
                     self.in_method = true;
+                    self.in_static_block = false;
                     let params = self.parse_parameters()?;
                     let body = self.parse_method_body()?;
                     self.in_method = prev_method;
+                    self.in_static_block = prev_in_static_block;
 
                     let func = Expression::FunctionExpression {
                         name: Some(key.clone()),
