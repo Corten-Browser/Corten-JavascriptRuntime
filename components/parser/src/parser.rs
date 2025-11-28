@@ -4376,8 +4376,22 @@ impl<'a> Parser<'a> {
                     (PropertyKey::Identifier(key), false)
                 };
 
+                // Set generator context before parsing params
+                let prev_generator = self.in_generator;
+                let prev_method = self.in_method;
+                self.in_generator = true;
+                self.in_method = true;
+
                 let params = self.parse_parameters()?;
+                // Validate parameters
+                self.validate_parameters(&params)?;
+                self.validate_params_no_yield(&params)?;
                 let body = self.parse_method_body_with_context(false, true)?;
+                // Validate use strict with non-simple parameters
+                self.validate_params_with_body(&params, &body)?;
+
+                self.in_generator = prev_generator;
+                self.in_method = prev_method;
 
                 let func_name = match &key {
                     PropertyKey::Identifier(s) => Some(s.clone()),
@@ -4652,8 +4666,29 @@ impl<'a> Parser<'a> {
                     }
 
                     let key = self.expect_identifier()?;
+
+                    // Set async/generator context before parsing params
+                    let prev_async = self.in_async;
+                    let prev_generator = self.in_generator;
+                    let prev_method = self.in_method;
+                    self.in_async = true;
+                    self.in_generator = is_generator;
+                    self.in_method = true;
+
                     let params = self.parse_parameters()?;
+                    // Validate parameters
+                    self.validate_parameters(&params)?;
+                    self.validate_params_no_await(&params)?;
+                    if is_generator {
+                        self.validate_params_no_yield(&params)?;
+                    }
                     let body = self.parse_method_body_with_context(true, is_generator)?;
+                    // Validate use strict with non-simple parameters
+                    self.validate_params_with_body(&params, &body)?;
+
+                    self.in_async = prev_async;
+                    self.in_generator = prev_generator;
+                    self.in_method = prev_method;
 
                     let func = Expression::FunctionExpression {
                         name: Some(key.clone()),
@@ -4675,8 +4710,23 @@ impl<'a> Parser<'a> {
                 // Generator method: *name() {}
                 self.lexer.next_token()?;
                 let key = self.expect_identifier()?;
+
+                // Set generator context before parsing params
+                let prev_generator = self.in_generator;
+                let prev_method = self.in_method;
+                self.in_generator = true;
+                self.in_method = true;
+
                 let params = self.parse_parameters()?;
+                // Validate parameters
+                self.validate_parameters(&params)?;
+                self.validate_params_no_yield(&params)?;
                 let body = self.parse_method_body_with_context(false, true)?;
+                // Validate use strict with non-simple parameters
+                self.validate_params_with_body(&params, &body)?;
+
+                self.in_generator = prev_generator;
+                self.in_method = prev_method;
 
                 let func = Expression::FunctionExpression {
                     name: Some(key.clone()),
