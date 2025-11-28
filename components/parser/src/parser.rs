@@ -3182,6 +3182,18 @@ impl<'a> Parser<'a> {
         if let Some(operator) = op {
             self.lexer.next_token()?;
             let argument = Box::new(self.parse_unary_expression()?);
+
+            // Early error: In strict mode, delete on private name is forbidden
+            // Also check the covered form (parenthesized expression)
+            if matches!(operator, UnaryOperator::Delete) && self.strict_mode {
+                if Self::expression_has_private_name_access(&argument) {
+                    return Err(syntax_error(
+                        "Deleting a private field is a syntax error",
+                        self.last_position.clone(),
+                    ));
+                }
+            }
+
             return Ok(Expression::UnaryExpression {
                 operator,
                 argument,
@@ -5973,6 +5985,35 @@ impl<'a> Parser<'a> {
             crate::ast::ForInOfLeft::Pattern(p) => Self::pattern_contains_arguments(p),
             crate::ast::ForInOfLeft::VariableDeclaration { id, .. } => Self::pattern_contains_arguments(id),
             crate::ast::ForInOfLeft::Expression(e) => Self::expression_contains_arguments(e),
+        }
+    }
+
+    /// Check if an expression is a private name member access (for delete validation)
+    /// This handles:
+    /// - MemberExpression.PrivateName (e.g., obj.#prop)
+    /// - CallExpression.PrivateName (e.g., fn().#prop)
+    /// - Covered/parenthesized forms (e.g., (obj.#prop))
+    fn expression_has_private_name_access(expr: &Expression) -> bool {
+        match expr {
+            // Direct member expression with private name
+            Expression::MemberExpression { property, computed: false, .. } => {
+                // Check if property is a private identifier (starts with #)
+                if let Expression::Identifier { name, .. } = property.as_ref() {
+                    name.starts_with('#')
+                } else {
+                    false
+                }
+            }
+            // Parenthesized expression - unwrap and recurse
+            Expression::ParenthesizedExpression { expression, .. } => {
+                Self::expression_has_private_name_access(expression)
+            }
+            // Sequence expression with single item (fallback for some cases)
+            Expression::SequenceExpression { expressions, .. } if expressions.len() == 1 => {
+                Self::expression_has_private_name_access(&expressions[0])
+            }
+            // Handle other cases that might wrap the private name access
+            _ => false,
         }
     }
 
