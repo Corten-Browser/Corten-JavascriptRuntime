@@ -799,6 +799,8 @@ impl<'a> Parser<'a> {
             let params = self.parse_parameters()?;
             // Validate for duplicate parameters
             self.validate_parameters(&params)?;
+            // Validate no await expressions in formal parameters (early error for async functions)
+            self.validate_params_no_await(&params)?;
             let body = self.parse_function_body()?;
             // Validate "use strict" with non-simple params
             self.validate_params_with_body(&params, &body)?;
@@ -2975,6 +2977,19 @@ impl<'a> Parser<'a> {
         let mut left = self.parse_exponentiation_expression()?;
 
         loop {
+            // Check for line terminator before operator
+            // This is needed for restricted productions like yield:
+            // yield
+            // * 1   <-- * should not be a binary operator here (ASI terminates yield)
+            if self.lexer.line_terminator_before_token {
+                // After yield/await with no argument (due to line terminator),
+                // a * on the next line is NOT a multiplication operator
+                // It would be an invalid statement start
+                if matches!(&left, Expression::YieldExpression { argument: None, .. }) {
+                    break;
+                }
+            }
+
             let op = match self.lexer.peek_token()? {
                 Token::Punctuator(Punctuator::Star) => BinaryOperator::Mul,
                 Token::Punctuator(Punctuator::Slash) => BinaryOperator::Div,
@@ -3053,7 +3068,11 @@ impl<'a> Parser<'a> {
             self.lexer.next_token()?;
 
             // Check for yield* (delegate)
-            let delegate = if self.check_punctuator(Punctuator::Star)? {
+            // The grammar is: yield [no LineTerminator here] * AssignmentExpression
+            // So if there's a line terminator before *, it's NOT yield*
+            let delegate = if self.check_punctuator(Punctuator::Star)?
+                && !self.lexer.line_terminator_before_token
+            {
                 self.lexer.next_token()?;
                 true
             } else {
@@ -3757,6 +3776,8 @@ impl<'a> Parser<'a> {
             // Validate for duplicate parameters - must reject duplicates in async functions
             // and when there are non-simple parameters (defaults, destructuring, rest)
             self.validate_parameters(&params)?;
+            // Validate no await expressions in formal parameters (early error for async functions)
+            self.validate_params_no_await(&params)?;
             let body = self.parse_function_body_with_context(true, is_generator)?;
 
             // Validate use strict with non-simple parameters
@@ -5422,6 +5443,103 @@ impl<'a> Parser<'a> {
                         self.last_position.clone(),
                     ));
                 }
+            }
+        }
+        Ok(())
+    }
+
+    /// Check if an expression contains an AwaitExpression
+    fn expression_contains_await(expr: &Expression) -> bool {
+        match expr {
+            Expression::AwaitExpression { .. } => true,
+            Expression::BinaryExpression { left, right, .. } => {
+                Self::expression_contains_await(left) || Self::expression_contains_await(right)
+            }
+            Expression::AssignmentExpression { right, .. } => {
+                Self::expression_contains_await(right)
+            }
+            Expression::ConditionalExpression { test, consequent, alternate, .. } => {
+                Self::expression_contains_await(test)
+                    || Self::expression_contains_await(consequent)
+                    || Self::expression_contains_await(alternate)
+            }
+            Expression::UnaryExpression { argument, .. } => {
+                Self::expression_contains_await(argument)
+            }
+            Expression::CallExpression { callee, arguments, .. } => {
+                Self::expression_contains_await(callee)
+                    || arguments.iter().any(|arg| Self::expression_contains_await(arg))
+            }
+            Expression::MemberExpression { object, property, .. } => {
+                Self::expression_contains_await(object)
+                    || Self::expression_contains_await(property)
+            }
+            Expression::ArrayExpression { elements, .. } => {
+                elements.iter().any(|elem| {
+                    if let Some(arr_elem) = elem {
+                        match arr_elem {
+                            crate::ast::ArrayElement::Expression(expr) => Self::expression_contains_await(expr),
+                            crate::ast::ArrayElement::Spread(expr) => Self::expression_contains_await(expr),
+                        }
+                    } else {
+                        false
+                    }
+                })
+            }
+            Expression::ObjectExpression { properties, .. } => {
+                properties.iter().any(|prop| {
+                    match prop {
+                        crate::ast::ObjectProperty::Property { value, key, .. } => {
+                            Self::expression_contains_await(value)
+                                || match key {
+                                    crate::ast::PropertyKey::Computed(expr) => Self::expression_contains_await(expr),
+                                    _ => false,
+                                }
+                        }
+                        crate::ast::ObjectProperty::SpreadElement(expr) => Self::expression_contains_await(expr),
+                    }
+                })
+            }
+            Expression::SequenceExpression { expressions, .. } => {
+                expressions.iter().any(|e| Self::expression_contains_await(e))
+            }
+            _ => false,
+        }
+    }
+
+    /// Check if a pattern contains an await expression (in default values)
+    fn pattern_contains_await(pattern: &Pattern) -> bool {
+        match pattern {
+            Pattern::Identifier(_) => false,
+            Pattern::ObjectPattern(properties) => {
+                properties.iter().any(|prop| Self::pattern_contains_await(&prop.value))
+            }
+            Pattern::ArrayPattern(elements) => {
+                elements.iter().any(|elem| {
+                    if let Some(pat) = elem {
+                        Self::pattern_contains_await(pat)
+                    } else {
+                        false
+                    }
+                })
+            }
+            Pattern::AssignmentPattern { left, right } => {
+                Self::pattern_contains_await(left) || Self::expression_contains_await(right)
+            }
+            Pattern::RestElement(inner) => Self::pattern_contains_await(inner),
+            Pattern::MemberExpression(_) => false,
+        }
+    }
+
+    /// Validate that formal parameters don't contain await expressions
+    /// This is an early error for async functions and async generators
+    fn validate_params_no_await(&self, params: &[Pattern]) -> Result<(), JsError> {
+        for param in params {
+            if Self::pattern_contains_await(param) {
+                return Err(syntax_error(
+                    "Formal parameters cannot contain await expressions",
+                    self.last_position.clone(),
+                ));
             }
         }
         Ok(())
