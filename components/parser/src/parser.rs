@@ -1138,10 +1138,43 @@ impl<'a> Parser<'a> {
                     computed,
                 });
             } else {
-                // Property
+                // Property (class field)
+                // Early error: Field named "constructor" is forbidden
+                // Static field named "prototype" or "constructor" is forbidden
+                if !computed {
+                    let field_name = match &key {
+                        PropertyKey::Identifier(name) => Some(name.as_str()),
+                        PropertyKey::String(s) => Some(s.as_str()),
+                        _ => None,
+                    };
+                    if let Some(name) = field_name {
+                        if name == "constructor" {
+                            return Err(syntax_error(
+                                "Class fields cannot be named 'constructor'",
+                                self.last_position.clone(),
+                            ));
+                        }
+                        if is_static && name == "prototype" {
+                            return Err(syntax_error(
+                                "Static class fields cannot be named 'prototype'",
+                                self.last_position.clone(),
+                            ));
+                        }
+                    }
+                }
                 let value = if self.check_punctuator(Punctuator::Assign)? {
                     self.lexer.next_token()?;
-                    Some(self.parse_assignment_expression()?)
+                    let init_expr = self.parse_assignment_expression()?;
+                    // Early error: ContainsArguments of Initializer is true
+                    // This checks that `arguments` is not used in the field initializer
+                    // (except inside regular functions, which have their own arguments binding)
+                    if Self::expression_contains_arguments(&init_expr) {
+                        return Err(syntax_error(
+                            "'arguments' is not allowed in class field initializer",
+                            self.last_position.clone(),
+                        ));
+                    }
+                    Some(init_expr)
                 } else {
                     None
                 };
@@ -5696,6 +5729,233 @@ impl<'a> Parser<'a> {
             }
         }
         Ok(())
+    }
+
+    /// Check if an expression contains an `arguments` identifier reference
+    /// This implements the ContainsArguments static semantics
+    /// - Returns true if `arguments` identifier is found
+    /// - Recurses into arrow functions (they don't have their own `arguments` binding)
+    /// - Does NOT recurse into regular function expressions (they have their own `arguments`)
+    fn expression_contains_arguments(expr: &Expression) -> bool {
+        match expr {
+            // Check for `arguments` identifier
+            Expression::Identifier { name, .. } if name == "arguments" => true,
+
+            // Binary and assignment expressions
+            Expression::BinaryExpression { left, right, .. } => {
+                Self::expression_contains_arguments(left) || Self::expression_contains_arguments(right)
+            }
+            Expression::AssignmentExpression { left, right, .. } => {
+                Self::assignment_target_contains_arguments(left) || Self::expression_contains_arguments(right)
+            }
+            Expression::ConditionalExpression { test, consequent, alternate, .. } => {
+                Self::expression_contains_arguments(test)
+                    || Self::expression_contains_arguments(consequent)
+                    || Self::expression_contains_arguments(alternate)
+            }
+            Expression::UnaryExpression { argument, .. } => {
+                Self::expression_contains_arguments(argument)
+            }
+            Expression::UpdateExpression { argument, .. } => {
+                Self::expression_contains_arguments(argument)
+            }
+            Expression::CallExpression { callee, arguments, .. } => {
+                Self::expression_contains_arguments(callee)
+                    || arguments.iter().any(|arg| Self::expression_contains_arguments(arg))
+            }
+            Expression::NewExpression { callee, arguments, .. } => {
+                Self::expression_contains_arguments(callee)
+                    || arguments.iter().any(|arg| Self::expression_contains_arguments(arg))
+            }
+            Expression::MemberExpression { object, property, computed, .. } => {
+                Self::expression_contains_arguments(object)
+                    || (*computed && Self::expression_contains_arguments(property))
+            }
+            Expression::ArrayExpression { elements, .. } => {
+                elements.iter().any(|elem| {
+                    if let Some(arr_elem) = elem {
+                        match arr_elem {
+                            crate::ast::ArrayElement::Expression(expr) => Self::expression_contains_arguments(expr),
+                            crate::ast::ArrayElement::Spread(expr) => Self::expression_contains_arguments(expr),
+                        }
+                    } else {
+                        false
+                    }
+                })
+            }
+            Expression::ObjectExpression { properties, .. } => {
+                properties.iter().any(|prop| {
+                    match prop {
+                        crate::ast::ObjectProperty::Property { value, key, .. } => {
+                            Self::expression_contains_arguments(value)
+                                || match key {
+                                    crate::ast::PropertyKey::Computed(expr) => Self::expression_contains_arguments(expr),
+                                    _ => false,
+                                }
+                        }
+                        crate::ast::ObjectProperty::SpreadElement(expr) => Self::expression_contains_arguments(expr),
+                    }
+                })
+            }
+            Expression::SequenceExpression { expressions, .. } => {
+                expressions.iter().any(|e| Self::expression_contains_arguments(e))
+            }
+            Expression::TemplateLiteral { expressions, .. } => {
+                expressions.iter().any(|e| Self::expression_contains_arguments(e))
+            }
+            Expression::TaggedTemplateExpression { tag, quasi, .. } => {
+                Self::expression_contains_arguments(tag)
+                    || Self::expression_contains_arguments(quasi)
+            }
+
+            // Arrow functions: RECURSE - they don't have their own `arguments` binding
+            Expression::ArrowFunctionExpression { params, body, .. } => {
+                // Check parameters for arguments in default values
+                params.iter().any(|p| Self::pattern_contains_arguments(p))
+                    || match body {
+                        crate::ast::ArrowFunctionBody::Expression(expr) => Self::expression_contains_arguments(expr),
+                        crate::ast::ArrowFunctionBody::Block(stmts) => Self::statements_contain_arguments(stmts),
+                    }
+            }
+
+            // Regular function expressions: DO NOT recurse - they have their own `arguments`
+            Expression::FunctionExpression { .. } => false,
+
+            // Class expressions: DO NOT recurse - field initializers are checked separately
+            Expression::ClassExpression { .. } => false,
+
+            // Other expressions that don't contain arguments
+            _ => false,
+        }
+    }
+
+    /// Check if an assignment target contains `arguments`
+    fn assignment_target_contains_arguments(target: &crate::ast::AssignmentTarget) -> bool {
+        match target {
+            crate::ast::AssignmentTarget::Identifier(name) => name == "arguments",
+            crate::ast::AssignmentTarget::Member(expr) => Self::expression_contains_arguments(expr),
+            crate::ast::AssignmentTarget::Pattern(pattern) => Self::pattern_contains_arguments(pattern),
+        }
+    }
+
+    /// Check if a pattern contains `arguments` identifier (in default values)
+    fn pattern_contains_arguments(pattern: &Pattern) -> bool {
+        match pattern {
+            Pattern::Identifier(name) => name == "arguments",
+            Pattern::ObjectPattern(properties) => {
+                properties.iter().any(|prop| {
+                    Self::pattern_contains_arguments(&prop.value)
+                        || match &prop.key {
+                            crate::ast::PatternKey::Computed(expr) => Self::expression_contains_arguments(expr),
+                            _ => false,
+                        }
+                })
+            }
+            Pattern::ArrayPattern(elements) => {
+                elements.iter().any(|elem| {
+                    if let Some(pat) = elem {
+                        Self::pattern_contains_arguments(pat)
+                    } else {
+                        false
+                    }
+                })
+            }
+            Pattern::AssignmentPattern { left, right } => {
+                Self::pattern_contains_arguments(left) || Self::expression_contains_arguments(right)
+            }
+            Pattern::RestElement(inner) => Self::pattern_contains_arguments(inner),
+            Pattern::MemberExpression(expr) => Self::expression_contains_arguments(expr),
+        }
+    }
+
+    /// Check if a list of statements contains `arguments` (for arrow function bodies)
+    fn statements_contain_arguments(stmts: &[Statement]) -> bool {
+        stmts.iter().any(|stmt| Self::statement_contains_arguments(stmt))
+    }
+
+    /// Check if a single statement contains `arguments`
+    fn statement_contains_arguments(stmt: &Statement) -> bool {
+        match stmt {
+            Statement::ExpressionStatement { expression, .. } => Self::expression_contains_arguments(expression),
+            Statement::ReturnStatement { argument, .. } => {
+                argument.as_ref().map_or(false, |e| Self::expression_contains_arguments(e))
+            }
+            Statement::ThrowStatement { argument, .. } => Self::expression_contains_arguments(argument),
+            Statement::IfStatement { test, consequent, alternate, .. } => {
+                Self::expression_contains_arguments(test)
+                    || Self::statement_contains_arguments(consequent)
+                    || alternate.as_ref().map_or(false, |s| Self::statement_contains_arguments(s))
+            }
+            Statement::WhileStatement { test, body, .. } => {
+                Self::expression_contains_arguments(test) || Self::statement_contains_arguments(body)
+            }
+            Statement::DoWhileStatement { test, body, .. } => {
+                Self::expression_contains_arguments(test) || Self::statement_contains_arguments(body)
+            }
+            Statement::ForStatement { init, test, update, body, .. } => {
+                init.as_ref().map_or(false, |i| match i {
+                    crate::ast::ForInit::Expression(e) => Self::expression_contains_arguments(e),
+                    crate::ast::ForInit::VariableDeclaration { declarations, .. } => {
+                        declarations.iter().any(|d| {
+                            Self::pattern_contains_arguments(&d.id)
+                                || d.init.as_ref().map_or(false, |e| Self::expression_contains_arguments(e))
+                        })
+                    }
+                })
+                || test.as_ref().map_or(false, |e| Self::expression_contains_arguments(e))
+                || update.as_ref().map_or(false, |e| Self::expression_contains_arguments(e))
+                || Self::statement_contains_arguments(body)
+            }
+            Statement::ForInStatement { left, right, body, .. } => {
+                Self::forin_left_contains_arguments(left)
+                || Self::expression_contains_arguments(right)
+                || Self::statement_contains_arguments(body)
+            }
+            Statement::ForOfStatement { left, right, body, .. } => {
+                Self::forin_left_contains_arguments(left)
+                || Self::expression_contains_arguments(right)
+                || Self::statement_contains_arguments(body)
+            }
+            Statement::SwitchStatement { discriminant, cases, .. } => {
+                Self::expression_contains_arguments(discriminant)
+                    || cases.iter().any(|case| {
+                        case.test.as_ref().map_or(false, |e| Self::expression_contains_arguments(e))
+                            || Self::statements_contain_arguments(&case.consequent)
+                    })
+            }
+            Statement::TryStatement { block, handler, finalizer, .. } => {
+                Self::statements_contain_arguments(block)
+                    || handler.as_ref().map_or(false, |h| {
+                        h.param.as_ref().map_or(false, |p| Self::pattern_contains_arguments(p))
+                            || Self::statements_contain_arguments(&h.body)
+                    })
+                    || finalizer.as_ref().map_or(false, |f| Self::statements_contain_arguments(f))
+            }
+            Statement::BlockStatement { body, .. } => Self::statements_contain_arguments(body),
+            Statement::VariableDeclaration { declarations, .. } => {
+                declarations.iter().any(|d| {
+                    Self::pattern_contains_arguments(&d.id)
+                        || d.init.as_ref().map_or(false, |e| Self::expression_contains_arguments(e))
+                })
+            }
+            Statement::LabeledStatement { body, .. } => Self::statement_contains_arguments(body),
+            Statement::WithStatement { object, body, .. } => {
+                Self::expression_contains_arguments(object) || Self::statement_contains_arguments(body)
+            }
+            // Function/class declarations don't propagate arguments
+            Statement::FunctionDeclaration { .. } => false,
+            Statement::ClassDeclaration { .. } => false,
+            _ => false,
+        }
+    }
+
+    /// Check if a for-in/for-of left side contains `arguments`
+    fn forin_left_contains_arguments(left: &crate::ast::ForInOfLeft) -> bool {
+        match left {
+            crate::ast::ForInOfLeft::Pattern(p) => Self::pattern_contains_arguments(p),
+            crate::ast::ForInOfLeft::VariableDeclaration { id, .. } => Self::pattern_contains_arguments(id),
+            crate::ast::ForInOfLeft::Expression(e) => Self::expression_contains_arguments(e),
+        }
     }
 
     /// Parse a statement in a context where lexical declarations are not allowed
