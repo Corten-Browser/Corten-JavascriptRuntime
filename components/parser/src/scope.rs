@@ -152,6 +152,11 @@ impl ScopeAnalyzer {
                                 self.visit_expression(expr)?;
                             }
                         }
+                        ClassElement::StaticBlock { body } => {
+                            for stmt in body {
+                                self.visit_statement(stmt)?;
+                            }
+                        }
                     }
                 }
             }

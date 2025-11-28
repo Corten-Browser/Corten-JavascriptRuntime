@@ -792,6 +792,11 @@ pub enum ClassElement {
         /// Is computed (e.g., [expr])
         computed: bool,
     },
+    /// Static initialization block
+    StaticBlock {
+        /// Block body (list of statements)
+        body: Vec<Statement>,
+    },
 }
 
 /// Method kind

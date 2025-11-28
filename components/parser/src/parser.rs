@@ -50,6 +50,8 @@ pub struct Parser<'a> {
     active_labels: std::collections::HashSet<String>,
     /// Track labels that are iteration statements (for continue validation)
     iteration_labels: std::collections::HashSet<String>,
+    /// Track if we're in for loop init (disallows 'in' as relational operator)
+    in_for_init: bool,
 }
 
 impl<'a> Parser<'a> {
@@ -69,6 +71,7 @@ impl<'a> Parser<'a> {
             in_method: false,
             active_labels: std::collections::HashSet::new(),
             iteration_labels: std::collections::HashSet::new(),
+            in_for_init: false,
         }
     }
 
@@ -727,10 +730,63 @@ impl<'a> Parser<'a> {
         let mut elements = Vec::new();
 
         while !self.check_punctuator(Punctuator::RBrace)? {
-            // Check for static
-            let is_static = if self.check_keyword(Keyword::Static)? {
+            // Skip extra semicolons (allowed in class bodies)
+            while self.check_punctuator(Punctuator::Semicolon)? {
                 self.lexer.next_token()?;
-                true
+            }
+            // Check if we hit the closing brace after skipping semicolons
+            if self.check_punctuator(Punctuator::RBrace)? {
+                break;
+            }
+
+            // Check for static
+            // Note: "static" can be a field name if followed by = ; , or }
+            // Note: "static {" is a static initialization block
+            let is_static = if self.check_keyword(Keyword::Static)? {
+                // Peek ahead to see if this is the static keyword or a field named "static"
+                let saved_pos = self.lexer.position;
+                let saved_line = self.lexer.line;
+                let saved_column = self.lexer.column;
+                let saved_line_term = self.lexer.line_terminator_before_token;
+                let saved_token = self.lexer.current_token.clone();
+
+                self.lexer.next_token()?;
+                let next = self.lexer.peek_token()?;
+
+                // Check for static initialization block: static { ... }
+                if matches!(next, Token::Punctuator(Punctuator::LBrace)) {
+                    // Parse static block
+                    self.lexer.next_token()?; // consume {
+                    let mut body = Vec::new();
+                    while !self.check_punctuator(Punctuator::RBrace)? {
+                        body.push(self.parse_statement()?);
+                    }
+                    self.expect_punctuator(Punctuator::RBrace)?;
+                    elements.push(ClassElement::StaticBlock { body });
+                    continue;
+                }
+
+                // If followed by = ; , or } then "static" is a field name, not keyword
+                let is_field_name = matches!(
+                    next,
+                    Token::Punctuator(Punctuator::Assign)
+                        | Token::Punctuator(Punctuator::Semicolon)
+                        | Token::Punctuator(Punctuator::Comma)
+                        | Token::Punctuator(Punctuator::RBrace)
+                );
+
+                if is_field_name {
+                    // Restore - treat "static" as field name
+                    self.lexer.position = saved_pos;
+                    self.lexer.line = saved_line;
+                    self.lexer.column = saved_column;
+                    self.lexer.line_terminator_before_token = saved_line_term;
+                    self.lexer.current_token = saved_token;
+                    false
+                } else {
+                    // It's the static keyword
+                    true
+                }
             } else {
                 false
             };
@@ -749,7 +805,8 @@ impl<'a> Parser<'a> {
                 let is_method = matches!(next, Token::Punctuator(Punctuator::Star))
                     || matches!(next, Token::Identifier(_, _))
                     || matches!(next, Token::Keyword(_))
-                    || matches!(next, Token::Punctuator(Punctuator::LBracket));
+                    || matches!(next, Token::Punctuator(Punctuator::LBracket))
+                    || matches!(next, Token::PrivateIdentifier(_));
 
                 if is_method && !self.lexer.line_terminator_before_token {
                     // It's an async method
@@ -776,7 +833,7 @@ impl<'a> Parser<'a> {
             };
 
             // Check for private identifier
-            let is_private = self.check_private_identifier()?;
+            let mut is_private = self.check_private_identifier()?;
 
             // Check for get/set and parse key
             let mut kind = MethodKind::Method;
@@ -802,12 +859,16 @@ impl<'a> Parser<'a> {
                 // Check if followed by a valid property name
                 if self.is_property_name()? {
                     kind = MethodKind::Get;
-                    // Now parse the actual key
+                    // Now parse the actual key - check for private identifier
                     if self.check_punctuator(Punctuator::LBracket)? {
                         self.lexer.next_token()?;
                         let key_expr = self.parse_assignment_expression()?;
                         self.expect_punctuator(Punctuator::RBracket)?;
                         (PropertyKey::Computed(key_expr), true)
+                    } else if self.check_private_identifier()? {
+                        is_private = true;
+                        let name = self.expect_private_identifier()?;
+                        (PropertyKey::Identifier(name), false)
                     } else {
                         (self.parse_property_name()?, false)
                     }
@@ -833,12 +894,16 @@ impl<'a> Parser<'a> {
                 // Check if followed by a valid property name
                 if self.is_property_name()? {
                     kind = MethodKind::Set;
-                    // Now parse the actual key
+                    // Now parse the actual key - check for private identifier
                     if self.check_punctuator(Punctuator::LBracket)? {
                         self.lexer.next_token()?;
                         let key_expr = self.parse_assignment_expression()?;
                         self.expect_punctuator(Punctuator::RBracket)?;
                         (PropertyKey::Computed(key_expr), true)
+                    } else if self.check_private_identifier()? {
+                        is_private = true;
+                        let name = self.expect_private_identifier()?;
+                        (PropertyKey::Identifier(name), false)
                     } else {
                         (self.parse_property_name()?, false)
                     }
@@ -1387,19 +1452,37 @@ impl<'a> Parser<'a> {
                     self.last_position.clone(),
                 ));
             }
+            // Parse all declarators (there may be multiple: var i = 0, j = 1)
+            let mut declarations = Vec::new();
+
+            // Set flag to disallow 'in' as relational operator in for loop init
+            let prev_in_for_init = self.in_for_init;
+            self.in_for_init = true;
+
             let init_expr = if self.check_punctuator(Punctuator::Assign)? {
                 self.lexer.next_token()?;
                 Some(self.parse_assignment_expression()?)
             } else {
                 None
             };
-            let init = Some(ForInit::VariableDeclaration {
-                kind,
-                declarations: vec![VariableDeclarator {
-                    id,
-                    init: init_expr,
-                }],
-            });
+            declarations.push(VariableDeclarator { id, init: init_expr });
+
+            // Parse additional declarators
+            while self.check_punctuator(Punctuator::Comma)? {
+                self.lexer.next_token()?;
+                let id = self.parse_pattern()?;
+                let init_expr = if self.check_punctuator(Punctuator::Assign)? {
+                    self.lexer.next_token()?;
+                    Some(self.parse_assignment_expression()?)
+                } else {
+                    None
+                };
+                declarations.push(VariableDeclarator { id, init: init_expr });
+            }
+
+            self.in_for_init = prev_in_for_init;
+
+            let init = Some(ForInit::VariableDeclaration { kind, declarations });
             return self.parse_regular_for(init);
         }
 
@@ -4143,6 +4226,7 @@ impl<'a> Parser<'a> {
                 let name = self.keyword_to_string(kw);
                 Ok(PropertyKey::Identifier(name))
             }
+            Token::PrivateIdentifier(name) => Ok(PropertyKey::Identifier(name)),
             _ => Err(unexpected_token(
                 "property name",
                 &format!("{:?}", token),
@@ -4161,6 +4245,7 @@ impl<'a> Parser<'a> {
                 | Token::String(_)
                 | Token::Number(_)
                 | Token::Punctuator(Punctuator::LBracket)
+                | Token::PrivateIdentifier(_)
         ))
     }
 
