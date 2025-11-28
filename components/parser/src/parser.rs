@@ -44,6 +44,8 @@ pub struct Parser<'a> {
     in_class_method: bool,
     /// Track if we're inside a class constructor (allows super())
     in_constructor: bool,
+    /// Track if the current class has heritage (extends clause) - super() requires heritage
+    has_class_heritage: bool,
     /// Track if we're inside any method (class or object literal - allows super.property)
     in_method: bool,
     /// Track active labels for break/continue validation
@@ -70,6 +72,7 @@ impl<'a> Parser<'a> {
             in_async: false,
             in_class_method: false,
             in_constructor: false,
+            has_class_heritage: false,
             in_method: false,
             active_labels: std::collections::HashSet::new(),
             iteration_labels: std::collections::HashSet::new(),
@@ -858,8 +861,13 @@ impl<'a> Parser<'a> {
             None
         };
 
+        // Set heritage flag for super() validation in constructor
+        let prev_has_heritage = self.has_class_heritage;
+        self.has_class_heritage = super_class.is_some();
+
         let body = self.parse_class_body()?;
 
+        self.has_class_heritage = prev_has_heritage;
         self.strict_mode = prev_strict;
 
         Ok(Statement::ClassDeclaration {
@@ -873,6 +881,13 @@ impl<'a> Parser<'a> {
     fn parse_class_body(&mut self) -> Result<Vec<ClassElement>, JsError> {
         self.expect_punctuator(Punctuator::LBrace)?;
         let mut elements = Vec::new();
+        let mut has_constructor = false;
+        // Track private names to detect duplicates
+        // Fields and methods conflict with everything
+        // Getters and setters can coexist with each other but not duplicate
+        let mut private_fields_methods: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut private_getters: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut private_setters: std::collections::HashSet<String> = std::collections::HashSet::new();
 
         while !self.check_punctuator(Punctuator::RBrace)? {
             // Skip extra semicolons (allowed in class bodies)
@@ -1087,14 +1102,62 @@ impl<'a> Parser<'a> {
                 (self.parse_property_name()?, false)
             };
 
-            // Check for constructor
-            if let PropertyKey::Identifier(ref name) = key {
+            // Check for constructor (both identifier and string literal "constructor")
+            let constructor_name = match &key {
+                PropertyKey::Identifier(ref name) => Some(name.as_str()),
+                PropertyKey::String(ref s) => Some(s.as_str()),
+                _ => None,
+            };
+            if let Some(name) = constructor_name {
                 if name == "constructor" && !is_static {
                     kind = MethodKind::Constructor;
                 }
             }
 
             if self.check_punctuator(Punctuator::LParen)? {
+                // Check for duplicate constructor (only applies to methods)
+                if kind == MethodKind::Constructor {
+                    if has_constructor {
+                        return Err(syntax_error(
+                            "A class may only have one constructor",
+                            self.last_position.clone(),
+                        ));
+                    }
+                    has_constructor = true;
+                }
+                // Check for duplicate private names (methods)
+                if is_private {
+                    if let PropertyKey::Identifier(ref name) = key {
+                        if kind == MethodKind::Get {
+                            // Getter: conflicts with fields/methods and duplicate getters
+                            if private_fields_methods.contains(name) || private_getters.contains(name) {
+                                return Err(syntax_error(
+                                    "Duplicate private name",
+                                    self.last_position.clone(),
+                                ));
+                            }
+                            private_getters.insert(name.clone());
+                        } else if kind == MethodKind::Set {
+                            // Setter: conflicts with fields/methods and duplicate setters
+                            if private_fields_methods.contains(name) || private_setters.contains(name) {
+                                return Err(syntax_error(
+                                    "Duplicate private name",
+                                    self.last_position.clone(),
+                                ));
+                            }
+                            private_setters.insert(name.clone());
+                        } else {
+                            // Method: conflicts with everything
+                            if private_fields_methods.contains(name) || private_getters.contains(name) || private_setters.contains(name) {
+                                return Err(syntax_error(
+                                    "Duplicate private name",
+                                    self.last_position.clone(),
+                                ));
+                            }
+                            private_fields_methods.insert(name.clone());
+                        }
+                    }
+                }
                 // Method - set class context for super validation
                 let prev_in_class_method = self.in_class_method;
                 let prev_in_constructor = self.in_constructor;
@@ -1171,6 +1234,19 @@ impl<'a> Parser<'a> {
                         }
                     }
                 }
+                // Check for duplicate private names (fields)
+                if is_private {
+                    if let PropertyKey::Identifier(ref name) = key {
+                        // Field: conflicts with everything
+                        if private_fields_methods.contains(name) || private_getters.contains(name) || private_setters.contains(name) {
+                            return Err(syntax_error(
+                                "Duplicate private name",
+                                self.last_position.clone(),
+                            ));
+                        }
+                        private_fields_methods.insert(name.clone());
+                    }
+                }
                 let value = if self.check_punctuator(Punctuator::Assign)? {
                     self.lexer.next_token()?;
                     let init_expr = self.parse_assignment_expression()?;
@@ -1234,8 +1310,13 @@ impl<'a> Parser<'a> {
             None
         };
 
+        // Set heritage flag for super() validation in constructor
+        let prev_has_heritage = self.has_class_heritage;
+        self.has_class_heritage = super_class.is_some();
+
         let body = self.parse_class_body()?;
 
+        self.has_class_heritage = prev_has_heritage;
         self.strict_mode = prev_strict;
 
         Ok(Expression::ClassExpression {
@@ -3418,6 +3499,13 @@ impl<'a> Parser<'a> {
                 if matches!(expr, Expression::SuperExpression { .. }) && !self.in_constructor {
                     return Err(syntax_error(
                         "'super' call is not allowed outside of class constructor",
+                        self.last_position.clone(),
+                    ));
+                }
+                // super() calls require class heritage (extends clause)
+                if matches!(expr, Expression::SuperExpression { .. }) && !self.has_class_heritage {
+                    return Err(syntax_error(
+                        "'super' call is only valid in derived class constructor",
                         self.last_position.clone(),
                     ));
                 }
