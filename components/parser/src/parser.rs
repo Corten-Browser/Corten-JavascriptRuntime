@@ -3351,6 +3351,13 @@ impl<'a> Parser<'a> {
                     position: None,
                 };
             } else if self.check_punctuator(Punctuator::LParen)? {
+                // super() calls are only allowed in constructors
+                if matches!(expr, Expression::SuperExpression { .. }) && !self.in_constructor {
+                    return Err(syntax_error(
+                        "'super' call is not allowed outside of class constructor",
+                        self.last_position.clone(),
+                    ));
+                }
                 let arguments = self.parse_arguments()?;
                 expr = Expression::CallExpression {
                     callee: Box::new(expr),
