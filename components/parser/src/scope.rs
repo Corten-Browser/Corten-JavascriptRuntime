@@ -557,6 +557,11 @@ impl ScopeAnalyzer {
                 // Just visit the inner expression
                 self.visit_expression(expression)?;
             }
+
+            Expression::ImportExpression { source, .. } => {
+                // Visit the source expression (module specifier)
+                self.visit_expression(source)?;
+            }
         }
         Ok(())
     }

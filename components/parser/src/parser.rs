@@ -2940,6 +2940,24 @@ impl<'a> Parser<'a> {
             Token::Punctuator(Punctuator::LParen) => self.parse_parenthesized_or_arrow(),
             Token::Punctuator(Punctuator::LBracket) => self.parse_array_literal(),
             Token::Punctuator(Punctuator::LBrace) => self.parse_object_literal(),
+            // Dynamic import: import(specifier)
+            Token::Keyword(Keyword::Import) => {
+                self.lexer.next_token()?; // consume 'import'
+                // Expect opening paren for import()
+                if !self.check_punctuator(Punctuator::LParen)? {
+                    return Err(syntax_error(
+                        "Expected '(' after 'import' for dynamic import",
+                        self.last_position.clone(),
+                    ));
+                }
+                self.lexer.next_token()?; // consume '('
+                let source = self.parse_assignment_expression()?;
+                self.expect_punctuator(Punctuator::RParen)?;
+                Ok(Expression::ImportExpression {
+                    source: Box::new(source),
+                    position: None,
+                })
+            }
             _ => Err(syntax_error("Unexpected token", None)),
         }
     }

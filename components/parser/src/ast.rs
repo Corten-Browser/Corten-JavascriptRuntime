@@ -496,6 +496,14 @@ pub enum Expression {
         /// Source location
         position: Option<SourcePosition>,
     },
+
+    /// Dynamic import expression: import(specifier)
+    ImportExpression {
+        /// Module specifier
+        source: Box<Expression>,
+        /// Source location
+        position: Option<SourcePosition>,
+    },
 }
 
 /// Variable declaration kind
