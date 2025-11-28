@@ -202,7 +202,7 @@ impl<'a> Parser<'a> {
             | Token::Keyword(Keyword::Const)
             | Token::Keyword(Keyword::Var) => self.parse_variable_declaration(),
             Token::Keyword(Keyword::Function) => self.parse_function_declaration(),
-            Token::Keyword(Keyword::Async) => self.parse_async_function_or_expression(),
+            Token::Keyword(Keyword::Async) => self.parse_async_statement(),
             Token::Keyword(Keyword::Class) => self.parse_class_declaration(),
             Token::Keyword(Keyword::Return) => self.parse_return_statement(),
             Token::Keyword(Keyword::If) => self.parse_if_statement(),
@@ -542,9 +542,115 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn parse_async_function_or_expression(&mut self) -> Result<Statement, JsError> {
+    /// Parse statement starting with 'async' keyword
+    /// Handles: async function declaration, async arrow expression statement, or async as identifier
+    fn parse_async_statement(&mut self) -> Result<Statement, JsError> {
         self.expect_keyword(Keyword::Async)?;
 
+        // Peek next token to update line_terminator_before_token
+        // (after consuming async, we need to check what comes next)
+        self.lexer.peek_token()?;
+
+        // Check for line terminator after async (before the next token)
+        if self.lexer.line_terminator_before_token {
+            // Line terminator after async - async is just an identifier
+            self.consume_semicolon()?;
+            return Ok(Statement::ExpressionStatement {
+                expression: Expression::Identifier {
+                    name: "async".to_string(),
+                    position: None,
+                },
+                position: None,
+            });
+        }
+
+        // Check for async function declaration
+        if self.check_keyword(Keyword::Function)? {
+            return self.parse_async_function_declaration_after_async();
+        }
+
+        // Otherwise it's an expression statement with async arrow or async as identifier
+        // Parse the async expression part
+        let expr = self.parse_async_expression_after_async()?;
+        self.consume_semicolon()?;
+        Ok(Statement::ExpressionStatement {
+            expression: expr,
+            position: None,
+        })
+    }
+
+    fn parse_async_function_or_expression(&mut self) -> Result<Statement, JsError> {
+        self.expect_keyword(Keyword::Async)?;
+        self.parse_async_function_declaration_after_async()
+    }
+
+    /// Parse async expression after 'async' keyword has been consumed (for expression statements)
+    /// Handles async arrow functions and async as identifier
+    fn parse_async_expression_after_async(&mut self) -> Result<Expression, JsError> {
+        if self.check_punctuator(Punctuator::LParen)? {
+            // Async arrow function with parens: async (params) => body
+            let params = self.parse_parameters()?;
+            // Validate arrow parameters (duplicates and yield expressions)
+            self.validate_arrow_parameters(&params)?;
+            self.validate_arrow_params_no_yield(&params)?;
+            // Check for line terminator before =>
+            if self.check_punctuator(Punctuator::Arrow)? {
+                if self.lexer.line_terminator_before_token {
+                    return Err(syntax_error(
+                        "Line terminator not allowed before '=>'",
+                        self.last_position.clone(),
+                    ));
+                }
+            }
+            self.expect_punctuator(Punctuator::Arrow)?;
+            let body = self.parse_arrow_body_with_context(true)?;
+
+            Ok(Expression::ArrowFunctionExpression {
+                params,
+                body,
+                is_async: true,
+                position: None,
+            })
+        } else if let Token::Identifier(name, _) = self.lexer.peek_token()?.clone() {
+            // Could be async arrow function without parens: async x => body
+            // Or async followed by identifier as call target: async(x)
+            self.validate_binding_identifier(&name)?;
+            self.lexer.next_token()?;
+            // Check for arrow
+            if self.check_punctuator(Punctuator::Arrow)? {
+                if self.lexer.line_terminator_before_token {
+                    return Err(syntax_error(
+                        "Line terminator not allowed before '=>'",
+                        self.last_position.clone(),
+                    ));
+                }
+                self.lexer.next_token()?; // consume =>
+                let body = self.parse_arrow_body_with_context(true)?;
+
+                Ok(Expression::ArrowFunctionExpression {
+                    params: vec![Pattern::Identifier(name)],
+                    body,
+                    is_async: true,
+                    position: None,
+                })
+            } else {
+                // No arrow - this is 'async' as identifier followed by something else
+                // But we've consumed the identifier after async, so this is ambiguous
+                // For statement context, this is likely an error
+                Err(syntax_error("Expected '=>' after async arrow function parameter", None))
+            }
+        } else {
+            // Just 'async' followed by something that isn't ( or identifier
+            // Return async as standalone identifier
+            Ok(Expression::Identifier {
+                name: "async".to_string(),
+                position: None,
+            })
+        }
+    }
+
+    /// Parse async function declaration after 'async' keyword has been consumed
+    fn parse_async_function_declaration_after_async(&mut self) -> Result<Statement, JsError> {
         if self.check_keyword(Keyword::Function)? {
             self.lexer.next_token()?;
 
@@ -3007,6 +3113,17 @@ impl<'a> Parser<'a> {
     fn parse_async_function_expression(&mut self) -> Result<Expression, JsError> {
         self.expect_keyword(Keyword::Async)?;
 
+        // Peek next token to update line_terminator_before_token
+        self.lexer.peek_token()?;
+
+        // If there's a line terminator after async, treat it as an identifier
+        if self.lexer.line_terminator_before_token {
+            return Ok(Expression::Identifier {
+                name: "async".to_string(),
+                position: None,
+            });
+        }
+
         if self.check_keyword(Keyword::Function)? {
             self.lexer.next_token()?;
 
@@ -3053,6 +3170,15 @@ impl<'a> Parser<'a> {
             // Validate arrow parameters (duplicates and yield expressions)
             self.validate_arrow_parameters(&params)?;
             self.validate_arrow_params_no_yield(&params)?;
+            // Check for line terminator before =>
+            if self.check_punctuator(Punctuator::Arrow)? {
+                if self.lexer.line_terminator_before_token {
+                    return Err(syntax_error(
+                        "Line terminator not allowed before '=>'",
+                        self.last_position.clone(),
+                    ));
+                }
+            }
             self.expect_punctuator(Punctuator::Arrow)?;
             let body = self.parse_arrow_body_with_context(true)?;
 
@@ -3067,17 +3193,36 @@ impl<'a> Parser<'a> {
             // Validate the parameter identifier (e.g., no 'arguments'/'eval' in strict mode)
             self.validate_binding_identifier(&name)?;
             self.lexer.next_token()?;
-            self.expect_punctuator(Punctuator::Arrow)?;
-            let body = self.parse_arrow_body_with_context(true)?;
+            // Check for line terminator before =>
+            if self.check_punctuator(Punctuator::Arrow)? {
+                if self.lexer.line_terminator_before_token {
+                    return Err(syntax_error(
+                        "Line terminator not allowed before '=>'",
+                        self.last_position.clone(),
+                    ));
+                }
+                self.lexer.next_token()?; // consume =>
+                let body = self.parse_arrow_body_with_context(true)?;
 
-            Ok(Expression::ArrowFunctionExpression {
-                params: vec![Pattern::Identifier(name)],
-                body,
-                is_async: true,
+                Ok(Expression::ArrowFunctionExpression {
+                    params: vec![Pattern::Identifier(name)],
+                    body,
+                    is_async: true,
+                    position: None,
+                })
+            } else {
+                // No arrow - this is 'async' followed by identifier as separate expressions
+                // async has already been consumed, so we can't easily backtrack
+                // Return async as identifier (this case shouldn't happen with line_terminator check above)
+                Err(syntax_error("Expected '=>' after async arrow function parameter", None))
+            }
+        } else {
+            // No function, no paren, no identifier after async
+            // This means 'async' is a standalone identifier
+            Ok(Expression::Identifier {
+                name: "async".to_string(),
                 position: None,
             })
-        } else {
-            Err(syntax_error("Expected function or arrow function after async", None))
         }
     }
 
