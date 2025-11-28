@@ -145,6 +145,28 @@ impl Test262Harness {
         features.insert("computed-property-names".to_string());
         features.insert("Atomics".to_string());
         features.insert("SharedArrayBuffer".to_string());
+        // Class features
+        features.insert("class-fields-public".to_string());
+        features.insert("class-fields-private".to_string());
+        features.insert("class-methods-private".to_string());
+        features.insert("class-static-fields-public".to_string());
+        features.insert("class-static-fields-private".to_string());
+        features.insert("class-static-methods-private".to_string());
+        features.insert("class-static-block".to_string());
+        // Async/iteration features
+        features.insert("async-iteration".to_string());
+        features.insert("Symbol.iterator".to_string());
+        features.insert("Symbol.asyncIterator".to_string());
+        features.insert("Symbol".to_string());
+        features.insert("Symbol.toPrimitive".to_string());
+        // Object features
+        features.insert("object-rest".to_string());
+        // Other features
+        features.insert("new.target".to_string());
+        features.insert("exponentiation".to_string());
+        features.insert("logical-assignment-operators".to_string());
+        features.insert("BigInt".to_string());
+        features.insert("Proxy".to_string());
 
         Self {
             supported_features: features,
