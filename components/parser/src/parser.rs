@@ -5350,8 +5350,31 @@ impl<'a> Parser<'a> {
                     Ok(())
                 }
             }
-            // Valid: object/array destructuring patterns
-            Expression::ObjectExpression { .. } | Expression::ArrayExpression { .. } => Ok(()),
+            // Valid: object/array destructuring patterns - but need to check elements recursively
+            Expression::ArrayExpression { elements, .. } => {
+                for elem in elements {
+                    if let Some(e) = elem {
+                        match e {
+                            ArrayElement::Expression(expr) => self.validate_for_in_of_left(expr)?,
+                            ArrayElement::Spread(expr) => self.validate_for_in_of_left(expr)?,
+                        }
+                    }
+                }
+                Ok(())
+            }
+            Expression::ObjectExpression { properties, .. } => {
+                for prop in properties {
+                    match prop {
+                        ObjectProperty::Property { value, .. } => {
+                            self.validate_for_in_of_left(value)?;
+                        }
+                        ObjectProperty::SpreadElement(expr) => {
+                            self.validate_for_in_of_left(expr)?;
+                        }
+                    }
+                }
+                Ok(())
+            }
             // Invalid: call expressions
             Expression::CallExpression { .. } => {
                 Err(syntax_error(
