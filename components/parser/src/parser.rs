@@ -3892,6 +3892,14 @@ impl<'a> Parser<'a> {
             // (in non-strict mode) even when we're inside an outer generator context
             self.lexer.next_token()?;
             Some("yield".to_string())
+        } else if matches!(self.lexer.peek_token()?, Token::Keyword(Keyword::Await)) {
+            // For non-async function expressions, 'await' can be used as a binding identifier
+            // even when we're inside a static block or class (which is strict mode).
+            // 'await' is only reserved in async contexts and modules.
+            // Note: We don't check strict_mode here because 'await' is allowed in strict mode
+            // when not in an async context.
+            self.lexer.next_token()?;
+            Some("await".to_string())
         } else {
             None
         };
