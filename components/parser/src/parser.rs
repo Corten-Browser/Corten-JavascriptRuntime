@@ -4414,8 +4414,10 @@ impl<'a> Parser<'a> {
                 self.validate_binding_identifier(&name)?;
                 Ok(Pattern::Identifier(name))
             }
-            crate::ast::AssignmentTarget::Member(_expr) => {
-                Err(syntax_error("Member expressions not supported as parameters", None))
+            crate::ast::AssignmentTarget::Member(expr) => {
+                // Member expressions are valid as destructuring assignment targets
+                // e.g., [{y: 1}.y = 42] = vals; or [obj.x = 42] = arr;
+                Ok(Pattern::MemberExpression(expr))
             }
             crate::ast::AssignmentTarget::Pattern(pattern) => Ok(pattern),
         }
