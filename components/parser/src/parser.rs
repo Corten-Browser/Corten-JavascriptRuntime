@@ -1061,6 +1061,13 @@ impl<'a> Parser<'a> {
             let (key, computed) = if is_private {
                 // Private field/method
                 let name = self.expect_private_identifier()?;
+                // Private names cannot be "constructor"
+                if name == "constructor" {
+                    return Err(syntax_error(
+                        "Private name '#constructor' is not allowed",
+                        self.last_position.clone(),
+                    ));
+                }
                 (PropertyKey::Identifier(name), false)
             } else if self.check_punctuator(Punctuator::LBracket)? {
                 // Computed property name: [expr] - 'in' is always allowed inside
@@ -1096,6 +1103,13 @@ impl<'a> Parser<'a> {
                     } else if self.check_private_identifier()? {
                         is_private = true;
                         let name = self.expect_private_identifier()?;
+                        // Private names cannot be "constructor"
+                        if name == "constructor" {
+                            return Err(syntax_error(
+                                "Private name '#constructor' is not allowed",
+                                self.last_position.clone(),
+                            ));
+                        }
                         (PropertyKey::Identifier(name), false)
                     } else {
                         (self.parse_property_name()?, false)
@@ -1135,6 +1149,13 @@ impl<'a> Parser<'a> {
                     } else if self.check_private_identifier()? {
                         is_private = true;
                         let name = self.expect_private_identifier()?;
+                        // Private names cannot be "constructor"
+                        if name == "constructor" {
+                            return Err(syntax_error(
+                                "Private name '#constructor' is not allowed",
+                                self.last_position.clone(),
+                            ));
+                        }
                         (PropertyKey::Identifier(name), false)
                     } else {
                         (self.parse_property_name()?, false)
@@ -1153,14 +1174,33 @@ impl<'a> Parser<'a> {
                 (self.parse_property_name()?, false)
             };
 
-            // Check for constructor (both identifier and string literal "constructor")
-            let constructor_name = match &key {
+            // Get the method name for validation
+            let method_name = match &key {
                 PropertyKey::Identifier(ref name) => Some(name.as_str()),
                 PropertyKey::String(ref s) => Some(s.as_str()),
                 _ => None,
             };
-            if let Some(name) = constructor_name {
+
+            // Check for static methods named "prototype" (not allowed)
+            if let Some(name) = method_name {
+                if name == "prototype" && is_static {
+                    return Err(syntax_error(
+                        "Classes may not have a static property named 'prototype'",
+                        self.last_position.clone(),
+                    ));
+                }
+            }
+
+            // Check for constructor (both identifier and string literal "constructor")
+            if let Some(name) = method_name {
                 if name == "constructor" && !is_static {
+                    // Special methods (generators, async, getters, setters) cannot be named "constructor"
+                    if is_generator || is_async || kind == MethodKind::Get || kind == MethodKind::Set {
+                        return Err(syntax_error(
+                            "Class constructor may not be a generator, async method, or accessor",
+                            self.last_position.clone(),
+                        ));
+                    }
                     kind = MethodKind::Constructor;
                 }
             }
@@ -1239,6 +1279,20 @@ impl<'a> Parser<'a> {
                 let params = self.parse_parameters()?;
                 // Validate for duplicate parameters in non-simple params
                 self.validate_parameters(&params)?;
+                // Getters must have 0 parameters
+                if kind == MethodKind::Get && !params.is_empty() {
+                    return Err(syntax_error(
+                        "Getter must not have any formal parameters",
+                        self.last_position.clone(),
+                    ));
+                }
+                // Setters must have exactly 1 parameter
+                if kind == MethodKind::Set && params.len() != 1 {
+                    return Err(syntax_error(
+                        "Setter must have exactly one formal parameter",
+                        self.last_position.clone(),
+                    ));
+                }
                 // Validate no await expressions in formal parameters (early error for async methods)
                 if is_async {
                     self.validate_params_no_await(&params)?;
@@ -2420,7 +2474,17 @@ impl<'a> Parser<'a> {
 
     fn parse_expression_statement(&mut self) -> Result<Statement, JsError> {
         // Check for labeled statement: identifier followed by colon
-        if let Token::Identifier(name, _) = self.lexer.peek_token()?.clone() {
+        // In non-strict mode, 'yield' can be used as a label (when not in generator)
+        let potential_label = match self.lexer.peek_token()?.clone() {
+            Token::Identifier(name, _) => Some(name),
+            // 'yield' can be a label in non-strict, non-generator contexts
+            Token::Keyword(Keyword::Yield) if !self.strict_mode && !self.in_generator => {
+                Some("yield".to_string())
+            }
+            _ => None,
+        };
+
+        if let Some(name) = potential_label {
             // Save lexer state (same pattern as look_ahead_for_arrow in lexer)
             let saved_position = self.lexer.position;
             let saved_line = self.lexer.line;
@@ -2429,7 +2493,7 @@ impl<'a> Parser<'a> {
             let saved_line_term = self.lexer.line_terminator_before_token;
             let saved_token = self.lexer.current_token.clone();
 
-            self.lexer.next_token()?; // consume identifier
+            self.lexer.next_token()?; // consume identifier/yield
 
             if self.check_punctuator(Punctuator::Colon)? {
                 // This is a labeled statement
@@ -3103,8 +3167,22 @@ impl<'a> Parser<'a> {
         let mut left = self.parse_logical_or_expression()?;
 
         while self.check_punctuator(Punctuator::NullishCoalesce)? {
+            // Cannot mix ?? with && or || without parentheses
+            if Self::contains_unparenthesized_logical_op(&left) {
+                return Err(syntax_error(
+                    "Nullish coalescing operator (??) cannot be combined with && or || without parentheses",
+                    self.last_position.clone(),
+                ));
+            }
             self.lexer.next_token()?;
             let right = self.parse_logical_or_expression()?;
+            // Also check the right side
+            if Self::contains_unparenthesized_logical_op(&right) {
+                return Err(syntax_error(
+                    "Nullish coalescing operator (??) cannot be combined with && or || without parentheses",
+                    self.last_position.clone(),
+                ));
+            }
             left = Expression::LogicalExpression {
                 left: Box::new(left),
                 operator: LogicalOperator::NullishCoalesce,
@@ -3114,6 +3192,16 @@ impl<'a> Parser<'a> {
         }
 
         Ok(left)
+    }
+
+    /// Check if expression contains an unparenthesized || or && at the top level
+    fn contains_unparenthesized_logical_op(expr: &Expression) -> bool {
+        match expr {
+            Expression::LogicalExpression { operator, .. } => {
+                matches!(operator, LogicalOperator::Or | LogicalOperator::And)
+            }
+            _ => false,
+        }
     }
 
     fn parse_logical_or_expression(&mut self) -> Result<Expression, JsError> {
@@ -3397,12 +3485,18 @@ impl<'a> Parser<'a> {
             self.lexer.next_token()?;
             let argument = Box::new(self.parse_unary_expression()?);
 
-            // Early error: In strict mode, delete on private name is forbidden
-            // Also check the covered form (parenthesized expression)
+            // Early error: In strict mode, delete on identifier or private name is forbidden
             if matches!(operator, UnaryOperator::Delete) && self.strict_mode {
                 if Self::expression_has_private_name_access(&argument) {
                     return Err(syntax_error(
                         "Deleting a private field is a syntax error",
+                        self.last_position.clone(),
+                    ));
+                }
+                // delete identifier is forbidden in strict mode
+                if Self::is_identifier_reference(&argument) {
+                    return Err(syntax_error(
+                        "Delete of an unqualified identifier in strict mode",
                         self.last_position.clone(),
                     ));
                 }
@@ -3568,6 +3662,13 @@ impl<'a> Parser<'a> {
                 self.lexer.next_token()?;
                 // Check for private identifier after dot
                 let property = if self.check_private_identifier()? {
+                    // super.#private is not allowed
+                    if matches!(expr, Expression::SuperExpression { .. }) {
+                        return Err(syntax_error(
+                            "Private fields cannot be accessed via 'super'",
+                            self.last_position.clone(),
+                        ));
+                    }
                     let name = self.expect_private_identifier()?;
                     // Validate private name is declared in enclosing class
                     self.validate_private_name_reference(&name)?;
@@ -3697,6 +3798,16 @@ impl<'a> Parser<'a> {
                         expressions: vec![],
                         position: None,
                     };
+                    expr = Expression::TaggedTemplateExpression {
+                        tag: Box::new(expr),
+                        quasi: Box::new(quasi),
+                        position: None,
+                    };
+                }
+            } else if matches!(self.lexer.peek_token()?, Token::TemplateHead(_)) {
+                // Tagged template literal with expressions: tag`hello ${x}!`
+                if let Token::TemplateHead(s) = self.lexer.next_token()? {
+                    let quasi = self.parse_template_literal_with_expressions(s)?;
                     expr = Expression::TaggedTemplateExpression {
                         tag: Box::new(expr),
                         quasi: Box::new(quasi),
@@ -3876,6 +3987,10 @@ impl<'a> Parser<'a> {
                     expressions: vec![],
                     position: None,
                 })
+            }
+            Token::TemplateHead(s) => {
+                self.lexer.next_token()?;
+                self.parse_template_literal_with_expressions(s)
             }
             Token::Keyword(Keyword::True) => {
                 self.lexer.next_token()?;
@@ -4064,6 +4179,66 @@ impl<'a> Parser<'a> {
             }
             _ => Err(syntax_error("Unexpected token", None)),
         }
+    }
+
+    /// Parse a template literal with expressions (starting from after the head was consumed)
+    fn parse_template_literal_with_expressions(
+        &mut self,
+        head: String,
+    ) -> Result<Expression, JsError> {
+        let mut quasis = Vec::new();
+        let mut expressions = Vec::new();
+
+        // Add the head as the first quasi
+        quasis.push(TemplateElement {
+            raw: head.clone(),
+            cooked: head,
+            tail: false,
+        });
+
+        loop {
+            // Parse the expression inside ${ }
+            let expr = self.parse_expression()?;
+            expressions.push(expr);
+
+            // Expect and consume the closing }
+            self.expect_punctuator(Punctuator::RBrace)?;
+
+            // After consuming }, continue scanning the template
+            let next_token = self.lexer.scan_template_middle()?;
+
+            match next_token {
+                Token::TemplateMiddle(s) => {
+                    // More expressions to come
+                    quasis.push(TemplateElement {
+                        raw: s.clone(),
+                        cooked: s,
+                        tail: false,
+                    });
+                }
+                Token::TemplateTail(s) => {
+                    // End of template
+                    quasis.push(TemplateElement {
+                        raw: s.clone(),
+                        cooked: s,
+                        tail: true,
+                    });
+                    break;
+                }
+                _ => {
+                    return Err(syntax_error(
+                        "Expected template continuation",
+                        self.last_position.clone(),
+                    ));
+                }
+            }
+        }
+
+        Ok(Expression::TemplateLiteral {
+            quasis,
+            expressions,
+            position: None,
+        })
     }
 
     fn parse_function_expression(&mut self) -> Result<Expression, JsError> {
@@ -6456,6 +6631,17 @@ impl<'a> Parser<'a> {
                 Self::expression_has_private_name_access(&expressions[0])
             }
             // Handle other cases that might wrap the private name access
+            _ => false,
+        }
+    }
+
+    /// Check if expression is a simple identifier reference (unwrapping parentheses)
+    fn is_identifier_reference(expr: &Expression) -> bool {
+        match expr {
+            Expression::Identifier { .. } => true,
+            Expression::ParenthesizedExpression { expression, .. } => {
+                Self::is_identifier_reference(expression)
+            }
             _ => false,
         }
     }

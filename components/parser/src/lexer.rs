@@ -224,8 +224,14 @@ pub enum Token {
     BigIntLiteral(String),
     /// String literal
     String(String),
-    /// Template literal part
+    /// Template literal with no substitutions (no `${}`)
     TemplateLiteral(String),
+    /// Template head: from ` to first ${
+    TemplateHead(String),
+    /// Template middle: from } to next ${
+    TemplateMiddle(String),
+    /// Template tail: from } to closing `
+    TemplateTail(String),
     /// Regular expression literal (pattern, flags)
     RegExp(String, String),
     /// Keyword
@@ -662,8 +668,10 @@ impl<'a> Lexer<'a> {
 
         while !self.is_at_end() && self.peek() != '`' {
             if self.peek() == '$' && self.peek_next() == Some('{') {
-                // Template expression - for now, just include as part of string
-                value.push(self.advance());
+                // Template expression - return TemplateHead and stop
+                self.advance(); // $
+                self.advance(); // {
+                return Ok(Token::TemplateHead(value));
             } else if self.peek() == '\\' {
                 self.advance();
                 if !self.is_at_end() {
@@ -699,6 +707,59 @@ impl<'a> Lexer<'a> {
 
         self.advance(); // Closing backtick
         Ok(Token::TemplateLiteral(value))
+    }
+
+    /// Scan the continuation of a template literal after an expression.
+    /// Called by the parser after it has consumed the closing `}` token.
+    /// The lexer position should now be right after the `}`.
+    pub fn scan_template_middle(&mut self) -> Result<Token, JsError> {
+        // Clear any buffered token since we're switching to template mode
+        self.current_token = None;
+
+        let start_pos = self.current_position();
+        let mut value = String::new();
+
+        while !self.is_at_end() && self.peek() != '`' {
+            if self.peek() == '$' && self.peek_next() == Some('{') {
+                // Another template expression - return TemplateMiddle and stop
+                self.advance(); // $
+                self.advance(); // {
+                return Ok(Token::TemplateMiddle(value));
+            } else if self.peek() == '\\' {
+                self.advance();
+                if !self.is_at_end() {
+                    let escaped = self.advance();
+                    match escaped {
+                        'n' => value.push('\n'),
+                        't' => value.push('\t'),
+                        'r' => value.push('\r'),
+                        '\\' => value.push('\\'),
+                        '`' => value.push('`'),
+                        '$' => value.push('$'),
+                        _ => value.push(escaped),
+                    }
+                }
+            } else {
+                let ch = self.advance();
+                if ch == '\n' {
+                    self.line += 1;
+                    self.column = 1;
+                }
+                value.push(ch);
+            }
+        }
+
+        if self.is_at_end() {
+            return Err(JsError {
+                kind: ErrorKind::SyntaxError,
+                message: "Unterminated template literal".to_string(),
+                stack: vec![],
+                source_position: Some(start_pos),
+            });
+        }
+
+        self.advance(); // Closing backtick
+        Ok(Token::TemplateTail(value))
     }
 
     /// Scan a regular expression literal.
