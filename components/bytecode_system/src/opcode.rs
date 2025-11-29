@@ -129,6 +129,10 @@ pub enum Opcode {
     /// Create array with given number of elements (elements are on stack)
     CreateArray(usize),
 
+    // RegExp operations
+    /// Create RegExp object with pattern and flags (both stored as constant pool indices)
+    CreateRegExp(usize, usize),
+
     // Function operations
     /// Create closure from function at index with captured variables
     CreateClosure(usize, Vec<UpvalueDescriptor>),

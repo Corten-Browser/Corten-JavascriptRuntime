@@ -602,6 +602,8 @@ pub enum Literal {
     Null,
     /// Undefined
     Undefined,
+    /// Regular expression (pattern, flags)
+    RegExp(String, String),
 }
 
 /// Binary operators

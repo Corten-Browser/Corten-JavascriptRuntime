@@ -911,6 +911,12 @@ impl BytecodeGenerator {
                 Literal::Undefined => {
                     self.chunk.emit(Opcode::LoadUndefined);
                 }
+                Literal::RegExp(pattern, flags) => {
+                    // Store pattern and flags as constants
+                    let pattern_idx = self.chunk.add_constant(BytecodeValue::String(pattern.clone()));
+                    let flags_idx = self.chunk.add_constant(BytecodeValue::String(flags.clone()));
+                    self.chunk.emit(Opcode::CreateRegExp(pattern_idx, flags_idx));
+                }
             },
 
             Expression::BinaryExpression {

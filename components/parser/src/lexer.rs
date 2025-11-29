@@ -226,6 +226,8 @@ pub enum Token {
     String(String),
     /// Template literal part
     TemplateLiteral(String),
+    /// Regular expression literal (pattern, flags)
+    RegExp(String, String),
     /// Keyword
     Keyword(Keyword),
     /// Punctuator/operator
@@ -699,6 +701,95 @@ impl<'a> Lexer<'a> {
         Ok(Token::TemplateLiteral(value))
     }
 
+    /// Scan a regular expression literal.
+    /// This should be called by the parser when it sees a '/' in a context where
+    /// a regex literal is expected (not division).
+    pub fn scan_regexp(&mut self) -> Result<Token, JsError> {
+        let start_pos = self.current_position();
+
+        // We expect to be positioned at the opening '/'
+        if self.is_at_end() || self.peek() != '/' {
+            return Err(JsError {
+                kind: ErrorKind::SyntaxError,
+                message: "Expected '/' at start of regexp".to_string(),
+                stack: vec![],
+                source_position: Some(start_pos),
+            });
+        }
+        self.advance(); // Skip opening '/'
+
+        let mut pattern = String::new();
+        let mut in_class = false; // Inside character class [...]
+
+        // Parse the pattern
+        loop {
+            if self.is_at_end() {
+                return Err(JsError {
+                    kind: ErrorKind::SyntaxError,
+                    message: "Unterminated regular expression".to_string(),
+                    stack: vec![],
+                    source_position: Some(start_pos),
+                });
+            }
+
+            let ch = self.peek();
+
+            // Line terminators are not allowed in regex
+            if self.is_line_terminator(ch) {
+                return Err(JsError {
+                    kind: ErrorKind::SyntaxError,
+                    message: "Unterminated regular expression".to_string(),
+                    stack: vec![],
+                    source_position: Some(start_pos),
+                });
+            }
+
+            if ch == '\\' {
+                // Escape sequence - include both backslash and next char
+                pattern.push(ch);
+                self.advance();
+                if !self.is_at_end() {
+                    let escaped = self.peek();
+                    pattern.push(escaped);
+                    self.advance();
+                }
+            } else if ch == '[' {
+                in_class = true;
+                pattern.push(ch);
+                self.advance();
+            } else if ch == ']' && in_class {
+                in_class = false;
+                pattern.push(ch);
+                self.advance();
+            } else if ch == '/' && !in_class {
+                // End of pattern
+                self.advance(); // Skip closing '/'
+                break;
+            } else {
+                pattern.push(ch);
+                self.advance();
+            }
+        }
+
+        // Parse flags
+        let mut flags = String::new();
+        while !self.is_at_end() {
+            let ch = self.peek();
+            // Valid regex flags: g, i, m, s, u, y, d
+            if ch.is_ascii_alphabetic() || ch == '$' || ch == '_' {
+                flags.push(ch);
+                self.advance();
+            } else {
+                break;
+            }
+        }
+
+        let token = Token::RegExp(pattern, flags);
+        // Don't set current_token - the caller will handle the token directly
+        // and the next peek_token will scan fresh from the new position
+        Ok(token)
+    }
+
     fn scan_number(&mut self, first: char) -> Result<Token, JsError> {
         let start_pos = self.current_position();
         let mut num_str = first.to_string();
@@ -909,9 +1000,17 @@ impl<'a> Lexer<'a> {
     fn scan_leading_decimal_number(&mut self) -> Result<Token, JsError> {
         let mut num_str = String::from("0."); // Add leading 0 for parsing
 
-        // Scan digits after the decimal point
-        while !self.is_at_end() && self.peek().is_ascii_digit() {
-            num_str.push(self.advance());
+        // Scan digits after the decimal point (with optional numeric separators)
+        while !self.is_at_end() {
+            let ch = self.peek();
+            if ch.is_ascii_digit() {
+                num_str.push(self.advance());
+            } else if ch == '_' {
+                // Numeric separator - consume but don't add to string
+                self.advance();
+            } else {
+                break;
+            }
         }
 
         // Handle exponent
@@ -920,8 +1019,16 @@ impl<'a> Lexer<'a> {
             if !self.is_at_end() && (self.peek() == '+' || self.peek() == '-') {
                 num_str.push(self.advance());
             }
-            while !self.is_at_end() && self.peek().is_ascii_digit() {
-                num_str.push(self.advance());
+            // Scan exponent digits (with optional numeric separators)
+            while !self.is_at_end() {
+                let ch = self.peek();
+                if ch.is_ascii_digit() {
+                    num_str.push(self.advance());
+                } else if ch == '_' {
+                    self.advance();
+                } else {
+                    break;
+                }
             }
         }
 
@@ -1223,7 +1330,15 @@ impl<'a> Lexer<'a> {
         while !self.is_at_end() {
             match self.peek() {
                 // ECMAScript WhiteSpace: TAB, VT, FF, SP, NBSP, ZWNBSP (BOM), and other Zs category
-                ' ' | '\t' | '\u{000B}' | '\u{000C}' | '\u{00A0}' | '\u{FEFF}' => {
+                ' ' | '\t' | '\u{000B}' | '\u{000C}' | '\u{00A0}' | '\u{FEFF}' |
+                // Unicode Space_Separator category (Zs) characters
+                '\u{1680}' | // OGHAM SPACE MARK
+                '\u{2000}' | '\u{2001}' | '\u{2002}' | '\u{2003}' | '\u{2004}' | '\u{2005}' |
+                '\u{2006}' | '\u{2007}' | '\u{2008}' | '\u{2009}' | '\u{200A}' | // EN QUAD through HAIR SPACE
+                '\u{202F}' | // NARROW NO-BREAK SPACE
+                '\u{205F}' | // MEDIUM MATHEMATICAL SPACE
+                '\u{3000}'   // IDEOGRAPHIC SPACE
+                => {
                     self.advance();
                 }
                 '\n' | '\u{2028}' | '\u{2029}' => {

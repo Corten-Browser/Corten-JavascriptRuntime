@@ -256,6 +256,10 @@ impl<'a> Parser<'a> {
                 self.lexer.next_token()?;
                 Ok(Statement::EmptyStatement { position: None })
             }
+            // Handle / and /= at statement start as regex literal expression
+            Token::Punctuator(Punctuator::Slash) | Token::Punctuator(Punctuator::SlashEq) => {
+                self.parse_expression_statement()
+            }
             _ => self.parse_expression_statement(),
         }
     }
@@ -3943,6 +3947,39 @@ impl<'a> Parser<'a> {
                     source: Box::new(source),
                     position: None,
                 })
+            }
+            // Regular expression literal
+            Token::Punctuator(Punctuator::Slash) | Token::Punctuator(Punctuator::SlashEq) => {
+                // When we see / or /= in a primary expression context, it's a regex literal
+                // The lexer already consumed the token, but scan_regexp needs to start from /
+                // We need to back up the lexer position to before the /
+
+                // Reset lexer to rescan as regex
+                // We know peek_token was called, so current_token is set
+                // Get the current position and back up
+                let is_slash_eq = matches!(token, Token::Punctuator(Punctuator::SlashEq));
+
+                // Move lexer position back to rescan
+                if is_slash_eq {
+                    // Back up 2 characters for /=
+                    self.lexer.position = self.lexer.position.saturating_sub(2);
+                    self.lexer.current_token = None;
+                } else {
+                    // Back up 1 character for /
+                    self.lexer.position = self.lexer.position.saturating_sub(1);
+                    self.lexer.current_token = None;
+                }
+
+                // Now scan as regex
+                let regex_token = self.lexer.scan_regexp()?;
+                if let Token::RegExp(pattern, flags) = regex_token {
+                    Ok(Expression::Literal {
+                        value: Literal::RegExp(pattern, flags),
+                        position: None,
+                    })
+                } else {
+                    Err(syntax_error("Expected regular expression literal", None))
+                }
             }
             _ => Err(syntax_error("Unexpected token", None)),
         }

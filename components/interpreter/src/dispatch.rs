@@ -957,6 +957,42 @@ impl Dispatcher {
                         self.stack.push(Value::HeapObject(0));
                     }
                 }
+                Opcode::CreateRegExp(pattern_idx, flags_idx) => {
+                    // Create a RegExp object
+                    // For now, store pattern and flags as a string representation
+                    // Real implementation would create proper RegExp object
+                    let pattern = if let Some(bytecode_system::Value::String(p)) =
+                        ctx.bytecode.constants.get(pattern_idx)
+                    {
+                        p.clone()
+                    } else {
+                        "".to_string()
+                    };
+                    let flags = if let Some(bytecode_system::Value::String(f)) =
+                        ctx.bytecode.constants.get(flags_idx)
+                    {
+                        f.clone()
+                    } else {
+                        "".to_string()
+                    };
+
+                    // Create a simple object to represent the RegExp
+                    // A full implementation would use a proper RegExp type
+                    if let Some(ref heap) = self.heap {
+                        let mut gc_object = heap.create_object();
+                        // Set source and flags properties
+                        gc_object.set("source".to_string(), Value::String(pattern.clone()));
+                        gc_object.set("flags".to_string(), Value::String(flags.clone()));
+
+                        let boxed: Box<dyn Any> = Box::new(gc_object);
+                        let value =
+                            Value::NativeObject(Rc::new(RefCell::new(boxed)) as Rc<RefCell<dyn Any>>);
+                        self.stack.push(value);
+                    } else {
+                        // Fallback: push as string representation
+                        self.stack.push(Value::String(format!("/{}/{}", pattern, flags)));
+                    }
+                }
                 Opcode::CreateClosure(idx, upvalue_descs) => {
                     // Create a closure by capturing upvalues from the current scope
                     if upvalue_descs.is_empty() {

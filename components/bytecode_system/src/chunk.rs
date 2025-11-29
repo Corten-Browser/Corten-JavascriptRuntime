@@ -289,6 +289,11 @@ impl BytecodeChunk {
             Opcode::GetIndex => (45, vec![]),
             Opcode::SetIndex => (46, vec![]),
             Opcode::CreateArray(count) => (47, (*count as u32).to_le_bytes().to_vec()),
+            Opcode::CreateRegExp(pattern_idx, flags_idx) => {
+                let mut data = (*pattern_idx as u32).to_le_bytes().to_vec();
+                data.extend_from_slice(&(*flags_idx as u32).to_le_bytes());
+                (56, data)
+            }
             Opcode::CallMethod(argc) => (48, vec![*argc]),
             Opcode::CallNew(argc) => (49, vec![*argc]),
             Opcode::Typeof => (50, vec![]),
@@ -564,6 +569,15 @@ impl BytecodeChunk {
                     .map_err(|e| format!("Invalid UTF-8: {}", e))?;
                 offset += len;
                 Opcode::DeleteGlobal(s)
+            }
+            56 => {
+                let pattern_idx =
+                    u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap()) as usize;
+                offset += 4;
+                let flags_idx =
+                    u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap()) as usize;
+                offset += 4;
+                Opcode::CreateRegExp(pattern_idx, flags_idx)
             }
             200 => Opcode::Exp,
             _ => return Err(format!("Unknown opcode tag: {}", tag)),
