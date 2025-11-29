@@ -56,6 +56,12 @@ pub struct Parser<'a> {
     in_for_init: bool,
     /// Track if we're inside a class static block (await and arguments are reserved)
     in_static_block: bool,
+    /// Stack of private names declared in enclosing class scopes
+    /// Each entry is the set of private names declared in that class
+    class_private_names: Vec<std::collections::HashSet<String>>,
+    /// Track if we're in a context where new.target is valid
+    /// (inside a non-arrow function that creates its own new.target binding)
+    has_new_target_binding: bool,
 }
 
 impl<'a> Parser<'a> {
@@ -78,6 +84,8 @@ impl<'a> Parser<'a> {
             iteration_labels: std::collections::HashSet::new(),
             in_for_init: false,
             in_static_block: false,
+            class_private_names: Vec::new(),
+            has_new_target_binding: false,
         }
     }
 
@@ -606,6 +614,7 @@ impl<'a> Parser<'a> {
         // Clear class context - regular functions cannot use super
         let prev_in_class_method = self.in_class_method;
         let prev_in_constructor = self.in_constructor;
+        let prev_new_target = self.has_new_target_binding;
 
         // Set context for this function - regular functions are NOT async
         // so 'await' is allowed as an identifier inside them
@@ -613,6 +622,8 @@ impl<'a> Parser<'a> {
         self.in_async = false;  // Regular function declarations are not async
         self.in_class_method = false;
         self.in_constructor = false;
+        // Regular functions create their own new.target binding
+        self.has_new_target_binding = true;
 
         let params = self.parse_parameters()?;
         // Validate for duplicate parameters
@@ -632,6 +643,7 @@ impl<'a> Parser<'a> {
         self.in_async = prev_async;
         self.in_class_method = prev_in_class_method;
         self.in_constructor = prev_in_constructor;
+        self.has_new_target_binding = prev_new_target;
 
         Ok(Statement::FunctionDeclaration {
             name,
@@ -825,11 +837,14 @@ impl<'a> Parser<'a> {
             // Clear class context - regular async functions cannot use super
             let prev_in_class_method = self.in_class_method;
             let prev_in_constructor = self.in_constructor;
+            let prev_new_target = self.has_new_target_binding;
 
             self.in_async = true;
             self.in_generator = is_generator;
             self.in_class_method = false;
             self.in_constructor = false;
+            // Async functions create their own new.target binding
+            self.has_new_target_binding = true;
 
             let params = self.parse_parameters()?;
             // Validate for duplicate parameters
@@ -850,6 +865,7 @@ impl<'a> Parser<'a> {
             self.in_generator = prev_generator;
             self.in_class_method = prev_in_class_method;
             self.in_constructor = prev_in_constructor;
+            self.has_new_target_binding = prev_new_target;
 
             Ok(Statement::FunctionDeclaration {
                 name,
@@ -916,6 +932,9 @@ impl<'a> Parser<'a> {
         let mut private_fields_methods: std::collections::HashSet<String> = std::collections::HashSet::new();
         let mut private_getters: std::collections::HashSet<String> = std::collections::HashSet::new();
         let mut private_setters: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+        // Push a new scope for private name declarations
+        self.class_private_names.push(std::collections::HashSet::new());
 
         while !self.check_punctuator(Punctuator::RBrace)? {
             // Skip extra semicolons (allowed in class bodies)
@@ -1169,6 +1188,10 @@ impl<'a> Parser<'a> {
                                 ));
                             }
                             private_getters.insert(name.clone());
+                            // Register in class scope for reference checking
+                            if let Some(scope) = self.class_private_names.last_mut() {
+                                scope.insert(name.clone());
+                            }
                         } else if kind == MethodKind::Set {
                             // Setter: conflicts with fields/methods and duplicate setters
                             if private_fields_methods.contains(name) || private_setters.contains(name) {
@@ -1178,6 +1201,10 @@ impl<'a> Parser<'a> {
                                 ));
                             }
                             private_setters.insert(name.clone());
+                            // Register in class scope for reference checking
+                            if let Some(scope) = self.class_private_names.last_mut() {
+                                scope.insert(name.clone());
+                            }
                         } else {
                             // Method: conflicts with everything
                             if private_fields_methods.contains(name) || private_getters.contains(name) || private_setters.contains(name) {
@@ -1187,6 +1214,10 @@ impl<'a> Parser<'a> {
                                 ));
                             }
                             private_fields_methods.insert(name.clone());
+                            // Register in class scope for reference checking
+                            if let Some(scope) = self.class_private_names.last_mut() {
+                                scope.insert(name.clone());
+                            }
                         }
                     }
                 }
@@ -1277,6 +1308,10 @@ impl<'a> Parser<'a> {
                             ));
                         }
                         private_fields_methods.insert(name.clone());
+                        // Register in class scope for reference checking
+                        if let Some(scope) = self.class_private_names.last_mut() {
+                            scope.insert(name.clone());
+                        }
                     }
                 }
                 let value = if self.check_punctuator(Punctuator::Assign)? {
@@ -1312,6 +1347,10 @@ impl<'a> Parser<'a> {
         }
 
         self.expect_punctuator(Punctuator::RBrace)?;
+
+        // Pop the private names scope
+        self.class_private_names.pop();
+
         Ok(elements)
     }
 
@@ -1423,11 +1462,17 @@ impl<'a> Parser<'a> {
         let prev_loop_depth = self.loop_depth;
         self.loop_depth = 0;
 
+        // Increment function depth - enables return statements
+        self.function_depth += 1;
+
         while !self.check_punctuator(Punctuator::RBrace)? {
             statements.push(self.parse_statement()?);
         }
 
         self.expect_punctuator(Punctuator::RBrace)?;
+
+        // Restore function depth
+        self.function_depth -= 1;
 
         // Restore strict mode and labels after function body
         self.strict_mode = prev_strict;
@@ -1499,18 +1544,22 @@ impl<'a> Parser<'a> {
         let prev_async = self.in_async;
         let prev_generator = self.in_generator;
         let prev_static_block = self.in_static_block;
+        let prev_new_target = self.has_new_target_binding;
 
         self.in_async = is_async;
         self.in_generator = is_generator;
         // Reset static block context - nested functions have their own scope
         // and 'await' should be allowed as identifier in non-async nested functions
         self.in_static_block = false;
+        // Regular functions create their own new.target binding
+        self.has_new_target_binding = true;
 
         let body = self.parse_function_body()?;
 
         self.in_async = prev_async;
         self.in_generator = prev_generator;
         self.in_static_block = prev_static_block;
+        self.has_new_target_binding = prev_new_target;
 
         Ok(body)
     }
@@ -1519,14 +1568,18 @@ impl<'a> Parser<'a> {
     fn parse_method_body(&mut self) -> Result<Vec<Statement>, JsError> {
         let prev_method = self.in_method;
         let prev_static_block = self.in_static_block;
+        let prev_new_target = self.has_new_target_binding;
         self.in_method = true;
         // Reset static block context - nested methods have their own scope
         self.in_static_block = false;
+        // Methods create their own new.target binding
+        self.has_new_target_binding = true;
 
         let body = self.parse_function_body()?;
 
         self.in_method = prev_method;
         self.in_static_block = prev_static_block;
+        self.has_new_target_binding = prev_new_target;
         Ok(body)
     }
 
@@ -1540,12 +1593,15 @@ impl<'a> Parser<'a> {
         let prev_generator = self.in_generator;
         let prev_method = self.in_method;
         let prev_static_block = self.in_static_block;
+        let prev_new_target = self.has_new_target_binding;
 
         self.in_async = is_async;
         self.in_generator = is_generator;
         self.in_method = true;
         // Reset static block context - nested methods have their own scope
         self.in_static_block = false;
+        // Methods create their own new.target binding
+        self.has_new_target_binding = true;
 
         let body = self.parse_function_body()?;
 
@@ -1553,11 +1609,20 @@ impl<'a> Parser<'a> {
         self.in_generator = prev_generator;
         self.in_method = prev_method;
         self.in_static_block = prev_static_block;
+        self.has_new_target_binding = prev_new_target;
 
         Ok(body)
     }
 
     fn parse_return_statement(&mut self) -> Result<Statement, JsError> {
+        // Return is only valid inside a function body
+        if self.function_depth == 0 {
+            return Err(syntax_error(
+                "Illegal return statement",
+                self.last_position.clone(),
+            ));
+        }
+
         self.expect_keyword(Keyword::Return)?;
 
         // ASI Restricted Production: If there's a line terminator after 'return',
@@ -3166,6 +3231,8 @@ impl<'a> Parser<'a> {
         let mut left = if self.check_private_identifier()? && !self.in_for_init {
             // Peek ahead to see if this is "#name in"
             let priv_name = self.expect_private_identifier()?;
+            // Validate private name is declared in enclosing class
+            self.validate_private_name_reference(&priv_name)?;
             if self.check_keyword(Keyword::In)? {
                 // This is private field presence check: #name in expr
                 self.lexer.next_token()?; // consume 'in'
@@ -3502,6 +3569,8 @@ impl<'a> Parser<'a> {
                 // Check for private identifier after dot
                 let property = if self.check_private_identifier()? {
                     let name = self.expect_private_identifier()?;
+                    // Validate private name is declared in enclosing class
+                    self.validate_private_name_reference(&name)?;
                     Expression::Identifier {
                         name: format!("#{}", name),
                         position: None,
@@ -3551,6 +3620,8 @@ impl<'a> Parser<'a> {
                 } else if self.check_private_identifier()? {
                     // Optional private field: obj?.#prop
                     let name = self.expect_private_identifier()?;
+                    // Validate private name is declared in enclosing class
+                    self.validate_private_name_reference(&name)?;
                     let property = Expression::Identifier {
                         name: format!("#{}", name),
                         position: None,
@@ -3648,6 +3719,14 @@ impl<'a> Parser<'a> {
             self.lexer.next_token()?;
             let property = self.expect_identifier()?;
             if property == "target" {
+                // new.target is only valid inside a regular function that creates a binding
+                // Arrow functions don't create their own new.target binding
+                if !self.has_new_target_binding {
+                    return Err(syntax_error(
+                        "'new.target' expression is not allowed here",
+                        self.last_position.clone(),
+                    ));
+                }
                 return Ok(Expression::MetaProperty {
                     meta: "new".to_string(),
                     property: "target".to_string(),
@@ -3687,6 +3766,8 @@ impl<'a> Parser<'a> {
                 // Check for private identifier after dot
                 let property = if self.check_private_identifier()? {
                     let name = self.expect_private_identifier()?;
+                    // Validate private name is declared in enclosing class
+                    self.validate_private_name_reference(&name)?;
                     Expression::Identifier {
                         name: format!("#{}", name),
                         position: None,
@@ -4590,6 +4671,9 @@ impl<'a> Parser<'a> {
         let prev_static_block = self.in_static_block;
         self.in_static_block = false;
 
+        // Arrow functions DON'T set has_new_target_binding - they inherit from enclosing scope
+        // parse_function_body no longer sets this, so arrows correctly inherit the outer value
+
         let result = if self.check_punctuator(Punctuator::LBrace)? {
             let body = self.parse_function_body()?;
             Ok(ArrowFunctionBody::Block(body))
@@ -4609,6 +4693,9 @@ impl<'a> Parser<'a> {
         self.in_async = is_async;
         // Reset static block context - arrow function bodies have their own scope
         self.in_static_block = false;
+
+        // Arrow functions DON'T set has_new_target_binding - they inherit from enclosing scope
+        // parse_function_body no longer sets this, so arrows correctly inherit the outer value
 
         let result = if self.check_punctuator(Punctuator::LBrace)? {
             let body = self.parse_function_body()?;
@@ -5223,6 +5310,33 @@ impl<'a> Parser<'a> {
             &format!("{:?}", token),
             None,
         ))
+    }
+
+    /// Check if a private name is declared in any enclosing class scope
+    fn is_private_name_declared(&self, name: &str) -> bool {
+        for scope in self.class_private_names.iter().rev() {
+            if scope.contains(name) {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Validate that a private name reference is valid (declared in enclosing class)
+    fn validate_private_name_reference(&self, name: &str) -> Result<(), JsError> {
+        if self.class_private_names.is_empty() {
+            return Err(syntax_error(
+                format!("Private field '#{}' must be declared in an enclosing class", name),
+                self.last_position.clone(),
+            ));
+        }
+        if !self.is_private_name_declared(name) {
+            return Err(syntax_error(
+                format!("Private field '#{}' must be declared in an enclosing class", name),
+                self.last_position.clone(),
+            ));
+        }
+        Ok(())
     }
 
     fn expect_punctuator(&mut self, p: Punctuator) -> Result<(), JsError> {
