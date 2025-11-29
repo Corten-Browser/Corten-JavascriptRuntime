@@ -637,6 +637,12 @@ impl<'a> Parser<'a> {
         self.validate_params_with_body(&params, &body)?;
         // Validate parameter names don't conflict with lexical declarations in body
         self.validate_params_body_lexical(&params, &body)?;
+        // Validate function name is not 'eval' or 'arguments' when body is strict
+        self.validate_function_name_with_body(&Some(name.clone()), &body)?;
+        // Validate no duplicate simple parameters when body is strict
+        self.validate_no_duplicate_params_in_strict_body(&params, &body)?;
+        // Validate no 'eval'/'arguments' as parameter names when body is strict
+        self.validate_no_eval_arguments_params_in_strict_body(&params, &body)?;
 
         // Restore context
         self.in_generator = prev_generator;
@@ -860,6 +866,12 @@ impl<'a> Parser<'a> {
             self.validate_params_with_body(&params, &body)?;
             // Validate parameter names don't conflict with lexical declarations in body
             self.validate_params_body_lexical(&params, &body)?;
+            // Validate function name is not 'eval' or 'arguments' when body is strict
+            self.validate_function_name_with_body(&Some(name.clone()), &body)?;
+            // Validate no duplicate simple parameters when body is strict
+            self.validate_no_duplicate_params_in_strict_body(&params, &body)?;
+            // Validate no 'eval'/'arguments' as parameter names when body is strict
+            self.validate_no_eval_arguments_params_in_strict_body(&params, &body)?;
 
             self.in_async = prev_async;
             self.in_generator = prev_generator;
@@ -3456,6 +3468,16 @@ impl<'a> Parser<'a> {
 
         // Exponentiation is right-associative: a ** b ** c = a ** (b ** c)
         if self.check_punctuator(Punctuator::StarStar)? {
+            // Unary operators (except ++/--) cannot be the left operand of **
+            // This is a syntax error: ~3 ** 2, !x ** 2, delete x ** 2, etc.
+            // But these are OK: ++x ** 2, x++ ** 2, (-3) ** 2
+            if Self::is_unary_without_parens(&left) {
+                return Err(syntax_error(
+                    "Unary operator used immediately before exponentiation expression. Parentheses must be used to disambiguate",
+                    self.last_position.clone(),
+                ));
+            }
+
             self.lexer.next_token()?;
             let right = self.parse_exponentiation_expression()?;
             return Ok(Expression::BinaryExpression {
@@ -3467,6 +3489,16 @@ impl<'a> Parser<'a> {
         }
 
         Ok(left)
+    }
+
+    /// Check if expression is a unary expression without parentheses
+    /// (++/-- are allowed as they're UpdateExpressions, not UnaryExpressions)
+    fn is_unary_without_parens(expr: &Expression) -> bool {
+        matches!(
+            expr,
+            Expression::UnaryExpression { .. }
+                | Expression::AwaitExpression { .. }
+        )
     }
 
     fn parse_unary_expression(&mut self) -> Result<Expression, JsError> {
@@ -3620,17 +3652,19 @@ impl<'a> Parser<'a> {
                     Ok(())
                 }
             }
-            // In strict mode, call expressions are not valid update targets
+            // Call expressions are never valid update targets (AssignmentTargetType is "invalid")
             Expression::CallExpression { .. } => {
-                if self.strict_mode {
-                    Err(syntax_error(
-                        "Invalid left-hand side in prefix/postfix expression",
-                        self.last_position.clone(),
-                    ))
-                } else {
-                    // In non-strict mode, allow for web compatibility (runtime error)
-                    Ok(())
-                }
+                Err(syntax_error(
+                    "Invalid left-hand side in prefix/postfix expression",
+                    self.last_position.clone(),
+                ))
+            }
+            // Import expressions are never valid update targets
+            Expression::ImportExpression { .. } => {
+                Err(syntax_error(
+                    "Invalid left-hand side in prefix/postfix expression",
+                    self.last_position.clone(),
+                ))
             }
             // Handle parenthesized expressions
             Expression::ParenthesizedExpression { expression, .. } => {
@@ -3850,6 +3884,15 @@ impl<'a> Parser<'a> {
 
         // Parse callee without consuming call expressions - those belong to the NewExpression
         let callee = Box::new(self.parse_member_expression_without_call()?);
+
+        // 'new' cannot be used with import() or import.defer()/import.source()
+        if matches!(*callee, Expression::ImportExpression { .. }) {
+            return Err(syntax_error(
+                "'new' cannot be used with import()",
+                self.last_position.clone(),
+            ));
+        }
+
         let arguments = if self.check_punctuator(Punctuator::LParen)? {
             self.parse_arguments()?
         } else {
@@ -4117,16 +4160,23 @@ impl<'a> Parser<'a> {
                             property: "meta".to_string(),
                             position: None,
                         });
+                    } else if phase == "defer" || phase == "source" {
+                        // For defer/source, continue to parse the call
+                        self.expect_punctuator(Punctuator::LParen)?;
+                        let source = self.parse_assignment_expression()?;
+                        self.expect_punctuator(Punctuator::RParen)?;
+                        // Return ImportExpression with phase marker (for now, same as regular import)
+                        return Ok(Expression::ImportExpression {
+                            source: Box::new(source),
+                            position: None,
+                        });
+                    } else {
+                        // Unknown import.X - syntax error
+                        return Err(syntax_error(
+                            &format!("Unknown import attribute 'import.{}'", phase),
+                            self.last_position.clone(),
+                        ));
                     }
-                    // For defer/source, continue to parse the call
-                    self.expect_punctuator(Punctuator::LParen)?;
-                    let source = self.parse_assignment_expression()?;
-                    self.expect_punctuator(Punctuator::RParen)?;
-                    // Return ImportExpression with phase marker (for now, same as regular import)
-                    return Ok(Expression::ImportExpression {
-                        source: Box::new(source),
-                        position: None,
-                    });
                 }
 
                 // Regular import() - expect opening paren
@@ -4301,6 +4351,12 @@ impl<'a> Parser<'a> {
         self.validate_params_with_body(&params, &body)?;
         // Validate parameter names don't conflict with lexical declarations in body
         self.validate_params_body_lexical(&params, &body)?;
+        // Validate function name is not 'eval' or 'arguments' when body is strict
+        self.validate_function_name_with_body(&name, &body)?;
+        // Validate no duplicate simple parameters when body is strict
+        self.validate_no_duplicate_params_in_strict_body(&params, &body)?;
+        // Validate no 'eval'/'arguments' as parameter names when body is strict
+        self.validate_no_eval_arguments_params_in_strict_body(&params, &body)?;
 
         self.in_class_method = prev_in_class_method;
         self.in_constructor = prev_in_constructor;
@@ -4435,6 +4491,12 @@ impl<'a> Parser<'a> {
             self.validate_params_with_body(&params, &body)?;
             // Validate parameter names don't conflict with lexical declarations in body
             self.validate_params_body_lexical(&params, &body)?;
+            // Validate function name is not 'eval' or 'arguments' when body is strict
+            self.validate_function_name_with_body(&name, &body)?;
+            // Validate no duplicate simple parameters when body is strict
+            self.validate_no_duplicate_params_in_strict_body(&params, &body)?;
+            // Validate no 'eval'/'arguments' as parameter names when body is strict
+            self.validate_no_eval_arguments_params_in_strict_body(&params, &body)?;
 
             self.in_async = prev_async;
             self.in_generator = prev_generator;
@@ -6064,6 +6126,110 @@ impl<'a> Parser<'a> {
             ));
         }
         Ok(())
+    }
+
+    /// Validate that function name is not 'eval' or 'arguments' when body is strict
+    fn validate_function_name_with_body(
+        &self,
+        name: &Option<String>,
+        body: &[Statement],
+    ) -> Result<(), JsError> {
+        if let Some(n) = name {
+            if Self::body_contains_use_strict(body) && (n == "eval" || n == "arguments") {
+                return Err(syntax_error(
+                    &format!(
+                        "'{}' cannot be used as a function name in strict mode",
+                        n
+                    ),
+                    self.last_position.clone(),
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// Check for duplicate simple parameters when body becomes strict
+    fn validate_no_duplicate_params_in_strict_body(
+        &self,
+        params: &[Pattern],
+        body: &[Statement],
+    ) -> Result<(), JsError> {
+        if !Self::body_contains_use_strict(body) {
+            return Ok(());
+        }
+
+        // Collect all simple parameter names and check for duplicates
+        let mut seen = std::collections::HashSet::new();
+        for param in params {
+            if let Pattern::Identifier(name) = param {
+                if !seen.insert(name.clone()) {
+                    return Err(syntax_error(
+                        &format!("Duplicate parameter name '{}' not allowed in strict mode", name),
+                        self.last_position.clone(),
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Check for 'eval'/'arguments' as parameter names when body becomes strict
+    fn validate_no_eval_arguments_params_in_strict_body(
+        &self,
+        params: &[Pattern],
+        body: &[Statement],
+    ) -> Result<(), JsError> {
+        if !Self::body_contains_use_strict(body) {
+            return Ok(());
+        }
+
+        Self::check_params_for_eval_arguments(params, &self.last_position)
+    }
+
+    /// Helper to check params for 'eval' or 'arguments'
+    fn check_params_for_eval_arguments(
+        params: &[Pattern],
+        position: &Option<core_types::SourcePosition>,
+    ) -> Result<(), JsError> {
+        for param in params {
+            Self::check_pattern_for_eval_arguments(param, position)?;
+        }
+        Ok(())
+    }
+
+    /// Helper to check a single pattern for 'eval' or 'arguments'
+    fn check_pattern_for_eval_arguments(
+        pattern: &Pattern,
+        position: &Option<core_types::SourcePosition>,
+    ) -> Result<(), JsError> {
+        match pattern {
+            Pattern::Identifier(name) if name == "eval" || name == "arguments" => Err(syntax_error(
+                &format!(
+                    "'{}' cannot be used as a parameter name in strict mode",
+                    name
+                ),
+                position.clone(),
+            )),
+            Pattern::ObjectPattern(properties) => {
+                for prop in properties {
+                    Self::check_pattern_for_eval_arguments(&prop.value, position)?;
+                }
+                Ok(())
+            }
+            Pattern::ArrayPattern(elements) => {
+                for elem in elements.iter().flatten() {
+                    Self::check_pattern_for_eval_arguments(elem, position)?;
+                }
+                Ok(())
+            }
+            Pattern::AssignmentPattern { left, .. } => {
+                Self::check_pattern_for_eval_arguments(left, position)
+            }
+            Pattern::RestElement(argument) => {
+                Self::check_pattern_for_eval_arguments(argument, position)
+            }
+            _ => Ok(()),
+        }
     }
 
     /// Validate arrow function params with arrow body
