@@ -121,6 +121,7 @@ impl From<TypeInfo> for SpecializedType {
             TypeInfo::String => SpecializedType::String,
             TypeInfo::Object => SpecializedType::GenericObject,
             TypeInfo::Undefined | TypeInfo::Null => SpecializedType::NullOrUndefined,
+            TypeInfo::BigInt => SpecializedType::Unknown, // BigInt requires arbitrary precision
         }
     }
 }
@@ -397,6 +398,7 @@ impl TypeSpecializer {
             TypeInfo::Object => SpecializedType::GenericObject,
             TypeInfo::Undefined => SpecializedType::NullOrUndefined,
             TypeInfo::Null => SpecializedType::NullOrUndefined,
+            TypeInfo::BigInt => SpecializedType::Unknown, // BigInt requires arbitrary precision
         }
     }
 
@@ -495,6 +497,7 @@ impl TypeSpecializer {
                 TypeInfo::Boolean => boolean_count += 1,
                 TypeInfo::Object => object_count += 1,
                 TypeInfo::Undefined | TypeInfo::Null => null_undef_count += 1,
+                TypeInfo::BigInt => {} // BigInt prevents specialization - treat as polymorphic
             }
         }
 

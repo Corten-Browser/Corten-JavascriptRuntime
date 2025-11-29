@@ -20,6 +20,8 @@ pub enum TypeInfo {
     Undefined,
     /// Null value
     Null,
+    /// BigInt value
+    BigInt,
 }
 
 /// Branch outcome for profiling
@@ -76,6 +78,7 @@ impl ProfileData {
             Value::String(_) => TypeInfo::String,
             Value::HeapObject(_) | Value::NativeObject(_) => TypeInfo::Object,
             Value::NativeFunction(_) => TypeInfo::Object,
+            Value::BigInt(_) => TypeInfo::BigInt,
         };
         self.type_feedback.push(type_info);
     }

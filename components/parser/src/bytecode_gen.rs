@@ -5,6 +5,7 @@ use bytecode_system::{
     BytecodeChunk, Opcode, RegisterId, UpvalueDescriptor, Value as BytecodeValue,
 };
 use core_types::{ErrorKind, JsError};
+use num_bigint::BigInt;
 use std::collections::HashMap;
 
 /// Result of resolving a variable name
@@ -863,9 +864,46 @@ impl BytecodeGenerator {
                 Literal::Boolean(false) => {
                     self.chunk.emit(Opcode::LoadFalse);
                 }
-                Literal::BigInt(_s) => {
-                    // TODO: Implement BigInt support in bytecode
-                    unimplemented!("BigInt literals not yet supported in bytecode")
+                Literal::BigInt(s) => {
+                    // Parse the BigInt string (may be decimal, hex, binary, or octal)
+                    let bigint = if s.starts_with("0x") || s.starts_with("0X") {
+                        // Hexadecimal
+                        BigInt::parse_bytes(s[2..].as_bytes(), 16)
+                            .ok_or_else(|| JsError {
+                                kind: ErrorKind::SyntaxError,
+                                message: format!("Invalid BigInt literal: {}", s),
+                                stack: vec![],
+                                source_position: None,
+                            })?
+                    } else if s.starts_with("0b") || s.starts_with("0B") {
+                        // Binary
+                        BigInt::parse_bytes(s[2..].as_bytes(), 2)
+                            .ok_or_else(|| JsError {
+                                kind: ErrorKind::SyntaxError,
+                                message: format!("Invalid BigInt literal: {}", s),
+                                stack: vec![],
+                                source_position: None,
+                            })?
+                    } else if s.starts_with("0o") || s.starts_with("0O") {
+                        // Octal
+                        BigInt::parse_bytes(s[2..].as_bytes(), 8)
+                            .ok_or_else(|| JsError {
+                                kind: ErrorKind::SyntaxError,
+                                message: format!("Invalid BigInt literal: {}", s),
+                                stack: vec![],
+                                source_position: None,
+                            })?
+                    } else {
+                        // Decimal
+                        s.parse::<BigInt>().map_err(|_| JsError {
+                            kind: ErrorKind::SyntaxError,
+                            message: format!("Invalid BigInt literal: {}", s),
+                            stack: vec![],
+                            source_position: None,
+                        })?
+                    };
+                    let idx = self.chunk.add_constant(BytecodeValue::BigInt(bigint));
+                    self.chunk.emit(Opcode::LoadConstant(idx));
                 }
                 Literal::Null => {
                     self.chunk.emit(Opcode::LoadNull);

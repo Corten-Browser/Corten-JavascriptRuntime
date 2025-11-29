@@ -6,5 +6,6 @@ edition.workspace = true
 [dependencies]
 core_types = { path = "../core_types" }
 bytecode_system = { path = "../bytecode_system" }
+num-bigint = { workspace = true }
 
 [dev-dependencies]

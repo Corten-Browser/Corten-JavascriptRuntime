@@ -96,32 +96,48 @@ impl<'a> Parser<'a> {
     }
 
     /// Check for directive prologue (e.g., "use strict")
+    /// Note: This scans for "use strict" in the directive prologue without consuming tokens.
+    /// The actual string literals will be parsed as expression statements.
     fn check_directive_prologue(&mut self) -> Result<(), JsError> {
-        // Look for string literal expression statements at the start
-        while !self.is_at_end()? {
-            // Peek at the token
-            let token = self.lexer.peek_token()?.clone();
+        // Save lexer position for restoration
+        let saved_pos = self.lexer.position;
+        let saved_line = self.lexer.line;
+        let saved_column = self.lexer.column;
+        let saved_line_terminator = self.lexer.line_terminator_before_token;
 
-            // Check if it's a string literal that could be a directive
+        // Look for "use strict" in directive prologue (sequence of string literals at start)
+        loop {
+            if self.is_at_end()? {
+                break;
+            }
+
+            let token = self.lexer.next_token()?;
+
             if let Token::String(ref s) = token {
                 if s == "use strict" {
                     self.strict_mode = true;
+                    // Continue scanning in case we want to detect other directives later
                 }
-                // Consume the string and check for semicolon
-                self.lexer.next_token()?;
+                // Check for semicolon or line terminator after string
                 if self.check_punctuator(Punctuator::Semicolon)? {
                     self.lexer.next_token()?;
                 } else if !self.lexer.line_terminator_before_token {
-                    // Not a directive - put the string back by returning
-                    // In real implementation we'd need proper lookahead
-                    // For now, just continue - the string is consumed
+                    // No semicolon or newline - not a directive, stop scanning
                     break;
                 }
             } else {
-                // No more potential directives
+                // Not a string literal - directive prologue ends
                 break;
             }
         }
+
+        // Restore lexer position - actual parsing will re-consume these tokens
+        self.lexer.position = saved_pos;
+        self.lexer.line = saved_line;
+        self.lexer.column = saved_column;
+        self.lexer.line_terminator_before_token = saved_line_terminator;
+        self.lexer.current_token = None;
+
         Ok(())
     }
 
