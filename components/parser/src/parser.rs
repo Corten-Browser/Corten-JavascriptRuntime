@@ -3830,6 +3830,9 @@ impl<'a> Parser<'a> {
             self.parse_primary_expression()?
         };
 
+        // Track whether we've entered an optional chain - template literals are not allowed after
+        let mut in_optional_chain = false;
+
         loop {
             if self.check_punctuator(Punctuator::Dot)? {
                 self.lexer.next_token()?;
@@ -3866,6 +3869,8 @@ impl<'a> Parser<'a> {
                 };
             } else if self.check_punctuator(Punctuator::OptionalChain)? {
                 self.lexer.next_token()?;
+                // Mark that we're in an optional chain
+                in_optional_chain = true;
                 // Check what follows the optional chain operator
                 if self.check_punctuator(Punctuator::LParen)? {
                     // Optional call: obj?.(args)
@@ -3961,6 +3966,13 @@ impl<'a> Parser<'a> {
                 };
             } else if matches!(self.lexer.peek_token()?, Token::TemplateLiteral(_)) {
                 // Tagged template literal: tag`template`
+                // Template literals are NOT allowed after optional chaining
+                if in_optional_chain {
+                    return Err(syntax_error(
+                        "Template literal cannot be used as a tag in optional chain",
+                        self.last_position.clone(),
+                    ));
+                }
                 if let Token::TemplateLiteral(s) = self.lexer.next_token()? {
                     let quasi = Expression::TemplateLiteral {
                         quasis: vec![TemplateElement {
@@ -3979,6 +3991,13 @@ impl<'a> Parser<'a> {
                 }
             } else if matches!(self.lexer.peek_token()?, Token::TemplateHead(_)) {
                 // Tagged template literal with expressions: tag`hello ${x}!`
+                // Template literals are NOT allowed after optional chaining
+                if in_optional_chain {
+                    return Err(syntax_error(
+                        "Template literal cannot be used as a tag in optional chain",
+                        self.last_position.clone(),
+                    ));
+                }
                 if let Token::TemplateHead(s) = self.lexer.next_token()? {
                     let quasi = self.parse_template_literal_with_expressions(s)?;
                     expr = Expression::TaggedTemplateExpression {
