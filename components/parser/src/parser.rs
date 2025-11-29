@@ -5262,6 +5262,8 @@ impl<'a> Parser<'a> {
                 }
             } else if self.check_identifier("get")? {
                 // Could be: get prop() {}, { get }, { get: value }, or { get() {} }
+                // Track if 'get' had escape sequences (needed for accessor form validation)
+                let get_has_escapes = matches!(self.lexer.peek_token()?, Token::Identifier(_, true));
                 self.lexer.next_token()?;
                 // Check if this is shorthand property named "get" or method shorthand
                 if self.check_punctuator(Punctuator::Colon)?
@@ -5322,6 +5324,13 @@ impl<'a> Parser<'a> {
                     });
                 } else {
                     // Getter accessor: get prop() {} or get [expr]() {}
+                    // 'get' must not contain escape sequences when used as accessor keyword
+                    if get_has_escapes {
+                        return Err(syntax_error(
+                            "'get' keyword must not contain escape sequences",
+                            self.last_position.clone(),
+                        ));
+                    }
                     let (key, computed) = if self.check_punctuator(Punctuator::LBracket)? {
                         // Computed property name: get [expr]() {} - 'in' allowed
                         self.lexer.next_token()?;
@@ -5362,6 +5371,8 @@ impl<'a> Parser<'a> {
                 }
             } else if self.check_identifier("set")? {
                 // Could be: set prop(v) {}, { set }, { set: value }, or { set() {} }
+                // Track if 'set' had escape sequences (needed for accessor form validation)
+                let set_has_escapes = matches!(self.lexer.peek_token()?, Token::Identifier(_, true));
                 self.lexer.next_token()?;
                 // Check if this is shorthand property named "set" or method shorthand
                 if self.check_punctuator(Punctuator::Colon)?
@@ -5422,6 +5433,13 @@ impl<'a> Parser<'a> {
                     });
                 } else {
                     // Setter accessor: set prop(v) {} or set [expr](v) {}
+                    // 'set' must not contain escape sequences when used as accessor keyword
+                    if set_has_escapes {
+                        return Err(syntax_error(
+                            "'set' keyword must not contain escape sequences",
+                            self.last_position.clone(),
+                        ));
+                    }
                     let (key, computed) = if self.check_punctuator(Punctuator::LBracket)? {
                         // Computed property name: set [expr](v) {} - 'in' allowed
                         self.lexer.next_token()?;
