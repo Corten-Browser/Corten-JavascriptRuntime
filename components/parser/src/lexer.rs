@@ -587,7 +587,7 @@ impl<'a> Lexer<'a> {
                 kind: ErrorKind::SyntaxError,
                 message: format!("Unexpected character: '{}'", ch),
                 stack: vec![],
-                source_position: Some(start_pos),
+                source_position: Some(start_pos.clone()),
             }),
         }
     }
@@ -604,7 +604,7 @@ impl<'a> Lexer<'a> {
                         kind: ErrorKind::SyntaxError,
                         message: "Unterminated string".to_string(),
                         stack: vec![],
-                        source_position: Some(start_pos),
+                        source_position: Some(start_pos.clone()),
                     });
                 }
                 let escaped = self.advance();
@@ -642,7 +642,7 @@ impl<'a> Lexer<'a> {
                     kind: ErrorKind::SyntaxError,
                     message: "Unterminated string literal".to_string(),
                     stack: vec![],
-                    source_position: Some(start_pos),
+                    source_position: Some(start_pos.clone()),
                 });
             } else {
                 value.push(self.advance());
@@ -654,7 +654,7 @@ impl<'a> Lexer<'a> {
                 kind: ErrorKind::SyntaxError,
                 message: "Unterminated string".to_string(),
                 stack: vec![],
-                source_position: Some(start_pos),
+                source_position: Some(start_pos.clone()),
             });
         }
 
@@ -676,15 +676,7 @@ impl<'a> Lexer<'a> {
                 self.advance();
                 if !self.is_at_end() {
                     let escaped = self.advance();
-                    match escaped {
-                        'n' => value.push('\n'),
-                        't' => value.push('\t'),
-                        'r' => value.push('\r'),
-                        '\\' => value.push('\\'),
-                        '`' => value.push('`'),
-                        '$' => value.push('$'),
-                        _ => value.push(escaped),
-                    }
+                    self.scan_template_escape(escaped, &mut value, &start_pos)?;
                 }
             } else {
                 let ch = self.advance();
@@ -701,12 +693,152 @@ impl<'a> Lexer<'a> {
                 kind: ErrorKind::SyntaxError,
                 message: "Unterminated template literal".to_string(),
                 stack: vec![],
-                source_position: Some(start_pos),
+                source_position: Some(start_pos.clone()),
             });
         }
 
         self.advance(); // Closing backtick
         Ok(Token::TemplateLiteral(value))
+    }
+
+    /// Handle escape sequences in template literals with proper validation
+    fn scan_template_escape(&mut self, escaped: char, value: &mut String, start_pos: &SourcePosition) -> Result<(), JsError> {
+        match escaped {
+            'n' => value.push('\n'),
+            't' => value.push('\t'),
+            'r' => value.push('\r'),
+            'b' => value.push('\u{0008}'),
+            'f' => value.push('\u{000C}'),
+            'v' => value.push('\u{000B}'),
+            '0' if self.is_at_end() || !self.peek().is_ascii_digit() => {
+                value.push('\0');
+            }
+            '0'..='7' => {
+                // Legacy octal escapes are NOT allowed in template literals
+                return Err(JsError {
+                    kind: ErrorKind::SyntaxError,
+                    message: "Octal escape sequences are not allowed in template literals".to_string(),
+                    stack: vec![],
+                    source_position: Some(start_pos.clone()),
+                });
+            }
+            '8' | '9' => {
+                // \8 and \9 are NOT allowed in template literals
+                return Err(JsError {
+                    kind: ErrorKind::SyntaxError,
+                    message: format!("\\{} is not allowed in template literals", escaped),
+                    stack: vec![],
+                    source_position: Some(start_pos.clone()),
+                });
+            }
+            'x' => {
+                // Hex escape: \xHH (exactly 2 hex digits required)
+                if self.is_at_end() || !self.peek().is_ascii_hexdigit() {
+                    return Err(JsError {
+                        kind: ErrorKind::SyntaxError,
+                        message: "Invalid hexadecimal escape sequence".to_string(),
+                        stack: vec![],
+                        source_position: Some(start_pos.clone()),
+                    });
+                }
+                let h1 = self.advance();
+                if self.is_at_end() || !self.peek().is_ascii_hexdigit() {
+                    return Err(JsError {
+                        kind: ErrorKind::SyntaxError,
+                        message: "Invalid hexadecimal escape sequence".to_string(),
+                        stack: vec![],
+                        source_position: Some(start_pos.clone()),
+                    });
+                }
+                let h2 = self.advance();
+                let code = u8::from_str_radix(&format!("{}{}", h1, h2), 16).unwrap();
+                value.push(code as char);
+            }
+            'u' => {
+                // Unicode escape: \uHHHH or \u{H...}
+                if self.is_at_end() {
+                    return Err(JsError {
+                        kind: ErrorKind::SyntaxError,
+                        message: "Invalid Unicode escape sequence".to_string(),
+                        stack: vec![],
+                        source_position: Some(start_pos.clone()),
+                    });
+                }
+                if self.peek() == '{' {
+                    // \u{H...} form
+                    self.advance(); // consume {
+                    let mut hex = String::new();
+                    while !self.is_at_end() && self.peek() != '}' {
+                        if !self.peek().is_ascii_hexdigit() {
+                            return Err(JsError {
+                                kind: ErrorKind::SyntaxError,
+                                message: "Invalid Unicode escape sequence".to_string(),
+                                stack: vec![],
+                                source_position: Some(start_pos.clone()),
+                            });
+                        }
+                        hex.push(self.advance());
+                    }
+                    if self.is_at_end() || hex.is_empty() {
+                        return Err(JsError {
+                            kind: ErrorKind::SyntaxError,
+                            message: "Invalid Unicode escape sequence".to_string(),
+                            stack: vec![],
+                            source_position: Some(start_pos.clone()),
+                        });
+                    }
+                    self.advance(); // consume }
+                    let code = u32::from_str_radix(&hex, 16).unwrap_or(0x110000);
+                    if code > 0x10FFFF {
+                        return Err(JsError {
+                            kind: ErrorKind::SyntaxError,
+                            message: "Invalid Unicode escape sequence".to_string(),
+                            stack: vec![],
+                            source_position: Some(start_pos.clone()),
+                        });
+                    }
+                    if let Some(ch) = char::from_u32(code) {
+                        value.push(ch);
+                    }
+                } else {
+                    // \uHHHH form (exactly 4 hex digits)
+                    let mut hex = String::new();
+                    for _ in 0..4 {
+                        if self.is_at_end() || !self.peek().is_ascii_hexdigit() {
+                            return Err(JsError {
+                                kind: ErrorKind::SyntaxError,
+                                message: "Invalid Unicode escape sequence".to_string(),
+                                stack: vec![],
+                                source_position: Some(start_pos.clone()),
+                            });
+                        }
+                        hex.push(self.advance());
+                    }
+                    let code = u16::from_str_radix(&hex, 16).unwrap();
+                    if let Some(ch) = char::from_u32(code as u32) {
+                        value.push(ch);
+                    }
+                }
+            }
+            '\\' => value.push('\\'),
+            '`' => value.push('`'),
+            '$' => value.push('$'),
+            '\n' => {
+                // Line continuation
+                self.line += 1;
+                self.column = 1;
+            }
+            '\r' => {
+                // Line continuation (CRLF or CR)
+                self.line += 1;
+                self.column = 1;
+                if !self.is_at_end() && self.peek() == '\n' {
+                    self.advance();
+                }
+            }
+            _ => value.push(escaped),
+        }
+        Ok(())
     }
 
     /// Scan the continuation of a template literal after an expression.
@@ -729,15 +861,7 @@ impl<'a> Lexer<'a> {
                 self.advance();
                 if !self.is_at_end() {
                     let escaped = self.advance();
-                    match escaped {
-                        'n' => value.push('\n'),
-                        't' => value.push('\t'),
-                        'r' => value.push('\r'),
-                        '\\' => value.push('\\'),
-                        '`' => value.push('`'),
-                        '$' => value.push('$'),
-                        _ => value.push(escaped),
-                    }
+                    self.scan_template_escape(escaped, &mut value, &start_pos)?;
                 }
             } else {
                 let ch = self.advance();
@@ -754,7 +878,7 @@ impl<'a> Lexer<'a> {
                 kind: ErrorKind::SyntaxError,
                 message: "Unterminated template literal".to_string(),
                 stack: vec![],
-                source_position: Some(start_pos),
+                source_position: Some(start_pos.clone()),
             });
         }
 
@@ -774,7 +898,7 @@ impl<'a> Lexer<'a> {
                 kind: ErrorKind::SyntaxError,
                 message: "Expected '/' at start of regexp".to_string(),
                 stack: vec![],
-                source_position: Some(start_pos),
+                source_position: Some(start_pos.clone()),
             });
         }
         self.advance(); // Skip opening '/'
@@ -789,7 +913,7 @@ impl<'a> Lexer<'a> {
                     kind: ErrorKind::SyntaxError,
                     message: "Unterminated regular expression".to_string(),
                     stack: vec![],
-                    source_position: Some(start_pos),
+                    source_position: Some(start_pos.clone()),
                 });
             }
 
@@ -801,7 +925,7 @@ impl<'a> Lexer<'a> {
                     kind: ErrorKind::SyntaxError,
                     message: "Unterminated regular expression".to_string(),
                     stack: vec![],
-                    source_position: Some(start_pos),
+                    source_position: Some(start_pos.clone()),
                 });
             }
 
@@ -870,7 +994,7 @@ impl<'a> Lexer<'a> {
                             kind: ErrorKind::SyntaxError,
                             message: "Invalid hexadecimal literal".to_string(),
                             stack: vec![],
-                            source_position: Some(start_pos),
+                            source_position: Some(start_pos.clone()),
                         });
                     }
                     while !self.is_at_end() {
@@ -894,7 +1018,7 @@ impl<'a> Lexer<'a> {
                             kind: ErrorKind::SyntaxError,
                             message: "Invalid binary literal".to_string(),
                             stack: vec![],
-                            source_position: Some(start_pos),
+                            source_position: Some(start_pos.clone()),
                         });
                     }
                     while !self.is_at_end() {
@@ -918,7 +1042,7 @@ impl<'a> Lexer<'a> {
                             kind: ErrorKind::SyntaxError,
                             message: "Invalid octal literal".to_string(),
                             stack: vec![],
-                            source_position: Some(start_pos),
+                            source_position: Some(start_pos.clone()),
                         });
                     }
                     while !self.is_at_end() {
@@ -950,7 +1074,7 @@ impl<'a> Lexer<'a> {
                     kind: ErrorKind::SyntaxError,
                     message: "BigInt literals cannot have decimal points".to_string(),
                     stack: vec![],
-                    source_position: Some(start_pos),
+                    source_position: Some(start_pos.clone()),
                 });
             }
             self.advance(); // consume 'n'
@@ -972,7 +1096,7 @@ impl<'a> Lexer<'a> {
                     kind: ErrorKind::SyntaxError,
                     message: format!("Invalid number literal"),
                     stack: vec![],
-                    source_position: Some(start_pos),
+                    source_position: Some(start_pos.clone()),
                 })?
             }
             None => {
@@ -981,7 +1105,7 @@ impl<'a> Lexer<'a> {
                     kind: ErrorKind::SyntaxError,
                     message: format!("Invalid number: {}", num_str),
                     stack: vec![],
-                    source_position: Some(start_pos),
+                    source_position: Some(start_pos.clone()),
                 })?
             }
         };
@@ -1202,7 +1326,7 @@ impl<'a> Lexer<'a> {
                 kind: ErrorKind::SyntaxError,
                 message: "Private identifier must have a name".to_string(),
                 stack: vec![],
-                source_position: Some(start_pos),
+                source_position: Some(start_pos.clone()),
             });
         }
 
@@ -1216,7 +1340,7 @@ impl<'a> Lexer<'a> {
                     kind: ErrorKind::SyntaxError,
                     message: "Invalid Unicode escape sequence in private identifier start".to_string(),
                     stack: vec![],
-                    source_position: Some(start_pos),
+                    source_position: Some(start_pos.clone()),
                 });
             }
             name.push(ch);
@@ -1227,7 +1351,7 @@ impl<'a> Lexer<'a> {
                 kind: ErrorKind::SyntaxError,
                 message: "Private identifier must have a name".to_string(),
                 stack: vec![],
-                source_position: Some(start_pos),
+                source_position: Some(start_pos.clone()),
             });
         }
 
@@ -1269,7 +1393,7 @@ impl<'a> Lexer<'a> {
                 kind: ErrorKind::SyntaxError,
                 message: format!("Invalid Unicode escape sequence in identifier start"),
                 stack: vec![],
-                source_position: Some(start_pos),
+                source_position: Some(start_pos.clone()),
             });
         }
 
@@ -1286,7 +1410,7 @@ impl<'a> Lexer<'a> {
                         kind: ErrorKind::SyntaxError,
                         message: format!("Invalid Unicode escape sequence in identifier"),
                         stack: vec![],
-                        source_position: Some(start_pos),
+                        source_position: Some(start_pos.clone()),
                     });
                 }
                 ident.push(ch);
@@ -1312,7 +1436,7 @@ impl<'a> Lexer<'a> {
                 kind: ErrorKind::SyntaxError,
                 message: "Expected 'u' in Unicode escape".to_string(),
                 stack: vec![],
-                source_position: Some(start_pos),
+                source_position: Some(start_pos.clone()),
             });
         }
 
@@ -1383,7 +1507,7 @@ impl<'a> Lexer<'a> {
             kind: ErrorKind::SyntaxError,
             message: format!("Invalid Unicode code point: {}", code_point),
             stack: vec![],
-            source_position: Some(start_pos),
+            source_position: Some(start_pos.clone()),
         })
     }
 
