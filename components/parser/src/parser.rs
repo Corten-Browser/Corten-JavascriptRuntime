@@ -982,12 +982,15 @@ impl<'a> Parser<'a> {
                     self.lexer.next_token()?; // consume {
 
                     // Save context and set static block context
-                    // In static blocks: 'await' is reserved, 'arguments' is reserved,
-                    // and super.prop is allowed (like methods)
+                    // In static blocks: 'await' is reserved (cannot use await expressions),
+                    // 'arguments' is reserved, and super.prop is allowed (like methods)
                     let prev_in_static_block = self.in_static_block;
                     let prev_in_method = self.in_method;
+                    let prev_in_async = self.in_async;
                     self.in_static_block = true;
                     self.in_method = true;  // Allow super.prop in static blocks
+                    // Static blocks cannot contain await expressions even when nested in async context
+                    self.in_async = false;
 
                     let mut body = Vec::new();
                     while !self.check_punctuator(Punctuator::RBrace)? {
@@ -997,6 +1000,7 @@ impl<'a> Parser<'a> {
                     // Restore context
                     self.in_static_block = prev_in_static_block;
                     self.in_method = prev_in_method;
+                    self.in_async = prev_in_async;
 
                     self.expect_punctuator(Punctuator::RBrace)?;
                     elements.push(ClassElement::StaticBlock { body });
