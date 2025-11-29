@@ -1656,7 +1656,12 @@ impl<'a> Lexer<'a> {
 /// - Other_ID_Start (special exceptions)
 /// - $ (dollar sign)
 /// - _ (underscore)
+/// Excludes: Characters with Pattern_Syntax property
 fn is_id_start(ch: char) -> bool {
+    // Pattern_Syntax characters are never valid, even if alphabetic
+    if is_pattern_syntax(ch) {
+        return false;
+    }
     ch == '_' || ch == '$' || ch.is_alphabetic() || is_unicode_id_start(ch)
         || is_other_id_start(ch)
 }
@@ -1680,7 +1685,12 @@ fn is_other_id_start(ch: char) -> bool {
 /// - $ (dollar sign)
 /// - U+200C (Zero Width Non-Joiner)
 /// - U+200D (Zero Width Joiner)
+/// Excludes: Characters with Pattern_Syntax property
 fn is_id_continue(ch: char) -> bool {
+    // Pattern_Syntax characters are never valid, even if alphabetic
+    if is_pattern_syntax(ch) {
+        return false;
+    }
     ch == '_' || ch == '$' || ch.is_alphanumeric() || is_unicode_id_continue(ch)
         || is_other_id_start(ch) || is_other_id_continue(ch)
         || ch == '\u{200C}' || ch == '\u{200D}'
@@ -1700,6 +1710,10 @@ fn is_other_id_continue(ch: char) -> bool {
 
 /// Check if character is in Unicode ID_Start
 fn is_unicode_id_start(ch: char) -> bool {
+    // Characters with Pattern_Syntax or Pattern_White_Space are NOT valid identifier chars
+    if is_pattern_syntax(ch) {
+        return false;
+    }
     // Check common Unicode letter categories
     matches!(unicode_category(ch),
         UnicodeCategory::Lu | // Uppercase_Letter
@@ -1713,11 +1727,56 @@ fn is_unicode_id_start(ch: char) -> bool {
 
 /// Check if character is in Unicode ID_Continue
 fn is_unicode_id_continue(ch: char) -> bool {
+    // Characters with Pattern_Syntax or Pattern_White_Space are NOT valid identifier chars
+    if is_pattern_syntax(ch) {
+        return false;
+    }
     is_unicode_id_start(ch) || matches!(unicode_category(ch),
         UnicodeCategory::Mn | // Nonspacing_Mark
         UnicodeCategory::Mc | // Spacing_Combining_Mark
         UnicodeCategory::Nd | // Decimal_Number
         UnicodeCategory::Pc   // Connector_Punctuation
+    )
+}
+
+/// Check if character has Pattern_Syntax property
+/// Characters with this property cannot be used in identifiers
+/// Note: We exclude $ (0x0024) and _ (0x005F) as they are valid in identifiers
+fn is_pattern_syntax(ch: char) -> bool {
+    let code = ch as u32;
+    // Pattern_Syntax ranges from Unicode
+    // https://www.unicode.org/Public/UCD/latest/ucd/PropList.txt
+    // Note: We split ranges to exclude $ (0x0024) and _ (0x005F) which ARE valid identifier chars
+    matches!(code,
+        0x0021..=0x0023 | // !"#
+        0x0025..=0x002F | // %&'()*+,-./  (skip $ = 0x0024)
+        0x003A..=0x0040 | // :;<=>?@
+        0x005B..=0x005E | // [\]^  (0x005F = _ is valid, 0x0060 = ` handled separately)
+        0x0060 |          // `
+        0x007B..=0x007E | // {|}~
+        0x00A1..=0x00A7 | // ¡¢£¤¥¦§
+        0x00A9 |          // ©
+        0x00AB..=0x00AC | // «¬
+        0x00AE |          // ®
+        0x00B0..=0x00B1 | // °±
+        0x00B6 |          // ¶
+        0x00BB |          // »
+        0x00BF |          // ¿
+        0x00D7 |          // ×
+        0x00F7 |          // ÷
+        0x2010..=0x2027 | // Various dashes, quotation marks, bullets
+        0x2030..=0x203E | // Per mille, prime, etc.
+        0x2041..=0x2053 | // Various punctuation
+        0x2055..=0x205E | // Various punctuation
+        0x2190..=0x245F | // Arrows and math symbols
+        0x2500..=0x2775 | // Box drawing, blocks, geometric shapes
+        0x2794..=0x2BFF | // Arrows, math symbols
+        0x2E00..=0x2E7F | // Supplemental Punctuation (includes VERTICAL TILDE U+2E2F)
+        0x3001..=0x3003 | // CJK punctuation
+        0x3008..=0x3020 | // CJK brackets and symbols
+        0x3030 |          // WAVY DASH
+        0xFD3E..=0xFD3F | // Arabic ornate parentheses
+        0xFE45..=0xFE46   // SESAME DOT and WHITE SESAME DOT
     )
 }
 
