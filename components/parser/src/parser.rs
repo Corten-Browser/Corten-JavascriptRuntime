@@ -2147,10 +2147,19 @@ impl<'a> Parser<'a> {
             let body = Box::new(self.parse_substatement()?);
             self.loop_depth -= 1;
 
-            // Convert expression to pattern if possible, otherwise keep as expression
-            let left = match self.expression_to_pattern(left_expr.clone()) {
-                Ok(pattern) => ForInOfLeft::Pattern(pattern),
-                Err(_) => ForInOfLeft::Expression(left_expr),
+            // Convert expression to pattern if it looks like a destructuring pattern
+            // Otherwise keep as expression (e.g., simple identifier)
+            let left = if matches!(left_expr, Expression::ArrayExpression { .. } | Expression::ObjectExpression { .. }) {
+                // For array/object expressions, they MUST be valid patterns
+                // Any error here is a syntax error
+                ForInOfLeft::Pattern(self.expression_to_pattern(left_expr)?)
+            } else {
+                // For other expressions (identifiers, member expressions), try to convert
+                // but fall back to expression if not a pattern
+                match self.expression_to_pattern(left_expr.clone()) {
+                    Ok(pattern) => ForInOfLeft::Pattern(pattern),
+                    Err(_) => ForInOfLeft::Expression(left_expr),
+                }
             };
             return Ok(Statement::ForInStatement {
                 left,
@@ -2172,10 +2181,19 @@ impl<'a> Parser<'a> {
             let body = Box::new(self.parse_substatement()?);
             self.loop_depth -= 1;
 
-            // Convert expression to pattern if possible, otherwise keep as expression
-            let left = match self.expression_to_pattern(left_expr.clone()) {
-                Ok(pattern) => ForInOfLeft::Pattern(pattern),
-                Err(_) => ForInOfLeft::Expression(left_expr),
+            // Convert expression to pattern if it looks like a destructuring pattern
+            // Otherwise keep as expression (e.g., simple identifier)
+            let left = if matches!(left_expr, Expression::ArrayExpression { .. } | Expression::ObjectExpression { .. }) {
+                // For array/object expressions, they MUST be valid patterns
+                // Any error here is a syntax error
+                ForInOfLeft::Pattern(self.expression_to_pattern(left_expr)?)
+            } else {
+                // For other expressions (identifiers, member expressions), try to convert
+                // but fall back to expression if not a pattern
+                match self.expression_to_pattern(left_expr.clone()) {
+                    Ok(pattern) => ForInOfLeft::Pattern(pattern),
+                    Err(_) => ForInOfLeft::Expression(left_expr),
+                }
             };
             return Ok(Statement::ForOfStatement {
                 left,
