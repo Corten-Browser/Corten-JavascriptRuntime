@@ -941,9 +941,13 @@ impl<'a> Parser<'a> {
         // Track private names to detect duplicates
         // Fields and methods conflict with everything
         // Getters and setters can coexist with each other but not duplicate
+        // Static and instance private names with same name also conflict (except static getter + static setter or instance getter + instance setter)
         let mut private_fields_methods: std::collections::HashSet<String> = std::collections::HashSet::new();
         let mut private_getters: std::collections::HashSet<String> = std::collections::HashSet::new();
         let mut private_setters: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut static_private_getters: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut static_private_setters: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut static_private_fields_methods: std::collections::HashSet<String> = std::collections::HashSet::new();
 
         // Push a new scope for private name declarations
         self.class_private_names.push(std::collections::HashSet::new());
@@ -1229,47 +1233,105 @@ impl<'a> Parser<'a> {
                     has_constructor = true;
                 }
                 // Check for duplicate private names (methods)
+                // Static and instance private names conflict unless both are getter/setter pairs of same staticness
                 if is_private {
                     if let PropertyKey::Identifier(ref name) = key {
-                        if kind == MethodKind::Get {
-                            // Getter: conflicts with fields/methods and duplicate getters
-                            if private_fields_methods.contains(name) || private_getters.contains(name) {
-                                return Err(syntax_error(
-                                    "Duplicate private name",
-                                    self.last_position.clone(),
-                                ));
-                            }
-                            private_getters.insert(name.clone());
-                            // Register in class scope for reference checking
-                            if let Some(scope) = self.class_private_names.last_mut() {
-                                scope.insert(name.clone());
-                            }
-                        } else if kind == MethodKind::Set {
-                            // Setter: conflicts with fields/methods and duplicate setters
-                            if private_fields_methods.contains(name) || private_setters.contains(name) {
-                                return Err(syntax_error(
-                                    "Duplicate private name",
-                                    self.last_position.clone(),
-                                ));
-                            }
-                            private_setters.insert(name.clone());
-                            // Register in class scope for reference checking
-                            if let Some(scope) = self.class_private_names.last_mut() {
-                                scope.insert(name.clone());
+                        if is_static {
+                            // Static private member
+                            if kind == MethodKind::Get {
+                                // Static getter: conflicts with static fields/methods, static duplicate getters, and ALL instance private names
+                                if static_private_fields_methods.contains(name)
+                                    || static_private_getters.contains(name)
+                                    || private_fields_methods.contains(name)
+                                    || private_getters.contains(name)
+                                    || private_setters.contains(name)
+                                {
+                                    return Err(syntax_error(
+                                        "Duplicate private name",
+                                        self.last_position.clone(),
+                                    ));
+                                }
+                                static_private_getters.insert(name.clone());
+                            } else if kind == MethodKind::Set {
+                                // Static setter: conflicts with static fields/methods, static duplicate setters, and ALL instance private names
+                                if static_private_fields_methods.contains(name)
+                                    || static_private_setters.contains(name)
+                                    || private_fields_methods.contains(name)
+                                    || private_getters.contains(name)
+                                    || private_setters.contains(name)
+                                {
+                                    return Err(syntax_error(
+                                        "Duplicate private name",
+                                        self.last_position.clone(),
+                                    ));
+                                }
+                                static_private_setters.insert(name.clone());
+                            } else {
+                                // Static method: conflicts with all static and instance private names
+                                if static_private_fields_methods.contains(name)
+                                    || static_private_getters.contains(name)
+                                    || static_private_setters.contains(name)
+                                    || private_fields_methods.contains(name)
+                                    || private_getters.contains(name)
+                                    || private_setters.contains(name)
+                                {
+                                    return Err(syntax_error(
+                                        "Duplicate private name",
+                                        self.last_position.clone(),
+                                    ));
+                                }
+                                static_private_fields_methods.insert(name.clone());
                             }
                         } else {
-                            // Method: conflicts with everything
-                            if private_fields_methods.contains(name) || private_getters.contains(name) || private_setters.contains(name) {
-                                return Err(syntax_error(
-                                    "Duplicate private name",
-                                    self.last_position.clone(),
-                                ));
+                            // Instance private member
+                            if kind == MethodKind::Get {
+                                // Instance getter: conflicts with instance fields/methods, instance duplicate getters, and ALL static private names
+                                if private_fields_methods.contains(name)
+                                    || private_getters.contains(name)
+                                    || static_private_fields_methods.contains(name)
+                                    || static_private_getters.contains(name)
+                                    || static_private_setters.contains(name)
+                                {
+                                    return Err(syntax_error(
+                                        "Duplicate private name",
+                                        self.last_position.clone(),
+                                    ));
+                                }
+                                private_getters.insert(name.clone());
+                            } else if kind == MethodKind::Set {
+                                // Instance setter: conflicts with instance fields/methods, instance duplicate setters, and ALL static private names
+                                if private_fields_methods.contains(name)
+                                    || private_setters.contains(name)
+                                    || static_private_fields_methods.contains(name)
+                                    || static_private_getters.contains(name)
+                                    || static_private_setters.contains(name)
+                                {
+                                    return Err(syntax_error(
+                                        "Duplicate private name",
+                                        self.last_position.clone(),
+                                    ));
+                                }
+                                private_setters.insert(name.clone());
+                            } else {
+                                // Instance method: conflicts with all static and instance private names
+                                if private_fields_methods.contains(name)
+                                    || private_getters.contains(name)
+                                    || private_setters.contains(name)
+                                    || static_private_fields_methods.contains(name)
+                                    || static_private_getters.contains(name)
+                                    || static_private_setters.contains(name)
+                                {
+                                    return Err(syntax_error(
+                                        "Duplicate private name",
+                                        self.last_position.clone(),
+                                    ));
+                                }
+                                private_fields_methods.insert(name.clone());
                             }
-                            private_fields_methods.insert(name.clone());
-                            // Register in class scope for reference checking
-                            if let Some(scope) = self.class_private_names.last_mut() {
-                                scope.insert(name.clone());
-                            }
+                        }
+                        // Register in class scope for reference checking
+                        if let Some(scope) = self.class_private_names.last_mut() {
+                            scope.insert(name.clone());
                         }
                     }
                 }
@@ -1366,14 +1428,37 @@ impl<'a> Parser<'a> {
                 // Check for duplicate private names (fields)
                 if is_private {
                     if let PropertyKey::Identifier(ref name) = key {
-                        // Field: conflicts with everything
-                        if private_fields_methods.contains(name) || private_getters.contains(name) || private_setters.contains(name) {
-                            return Err(syntax_error(
-                                "Duplicate private name",
-                                self.last_position.clone(),
-                            ));
+                        if is_static {
+                            // Static field: conflicts with any static private name
+                            // AND conflicts with any instance private name (static/instance cannot share names)
+                            if static_private_fields_methods.contains(name)
+                                || static_private_getters.contains(name)
+                                || static_private_setters.contains(name)
+                                || private_fields_methods.contains(name)
+                                || private_getters.contains(name)
+                                || private_setters.contains(name) {
+                                return Err(syntax_error(
+                                    "Duplicate private name",
+                                    self.last_position.clone(),
+                                ));
+                            }
+                            static_private_fields_methods.insert(name.clone());
+                        } else {
+                            // Instance field: conflicts with any instance private name
+                            // AND conflicts with any static private name (static/instance cannot share names)
+                            if private_fields_methods.contains(name)
+                                || private_getters.contains(name)
+                                || private_setters.contains(name)
+                                || static_private_fields_methods.contains(name)
+                                || static_private_getters.contains(name)
+                                || static_private_setters.contains(name) {
+                                return Err(syntax_error(
+                                    "Duplicate private name",
+                                    self.last_position.clone(),
+                                ));
+                            }
+                            private_fields_methods.insert(name.clone());
                         }
-                        private_fields_methods.insert(name.clone());
                         // Register in class scope for reference checking
                         if let Some(scope) = self.class_private_names.last_mut() {
                             scope.insert(name.clone());
@@ -3337,6 +3422,16 @@ impl<'a> Parser<'a> {
                 // This is private field presence check: #name in expr
                 self.lexer.next_token()?; // consume 'in'
                 let right = self.parse_shift_expression()?;
+                // Arrow functions are not valid ShiftExpressions
+                if matches!(
+                    &right,
+                    Expression::ArrowFunctionExpression { .. }
+                ) {
+                    return Err(syntax_error(
+                        "Arrow function not allowed as right-hand side of 'in' expression",
+                        self.last_position.clone(),
+                    ));
+                }
                 return Ok(Expression::BinaryExpression {
                     left: Box::new(Expression::PrivateIdentifier {
                         name: priv_name,
@@ -3862,23 +3957,36 @@ impl<'a> Parser<'a> {
         // Check for new.target meta property
         if self.check_punctuator(Punctuator::Dot)? {
             self.lexer.next_token()?;
-            let property = self.expect_identifier()?;
-            if property == "target" {
-                // new.target is only valid inside a regular function that creates a binding
-                // Arrow functions don't create their own new.target binding
-                if !self.has_new_target_binding {
-                    return Err(syntax_error(
-                        "'new.target' expression is not allowed here",
-                        self.last_position.clone(),
-                    ));
+            self.update_position()?;
+            let token = self.lexer.next_token()?;
+            match token {
+                Token::Identifier(name, has_escapes) => {
+                    if name == "target" {
+                        // 'target' must not contain escape sequences
+                        if has_escapes {
+                            return Err(syntax_error(
+                                "'target' in 'new.target' must not contain escape sequences",
+                                self.last_position.clone(),
+                            ));
+                        }
+                        // new.target is only valid inside a regular function that creates a binding
+                        // Arrow functions don't create their own new.target binding
+                        if !self.has_new_target_binding {
+                            return Err(syntax_error(
+                                "'new.target' expression is not allowed here",
+                                self.last_position.clone(),
+                            ));
+                        }
+                        return Ok(Expression::MetaProperty {
+                            meta: "new".to_string(),
+                            property: "target".to_string(),
+                            position: None,
+                        });
+                    } else {
+                        return Err(syntax_error("Expected 'target' after 'new.'", None));
+                    }
                 }
-                return Ok(Expression::MetaProperty {
-                    meta: "new".to_string(),
-                    property: "target".to_string(),
-                    position: None,
-                });
-            } else {
-                return Err(syntax_error("Expected 'target' after 'new.'", None));
+                _ => return Err(syntax_error("Expected 'target' after 'new.'", None)),
             }
         }
 
@@ -4152,30 +4260,49 @@ impl<'a> Parser<'a> {
                 if self.check_punctuator(Punctuator::Dot)? {
                     self.lexer.next_token()?; // consume '.'
                     // Expect 'defer' or 'source' or 'meta'
-                    let phase = self.expect_identifier()?;
-                    if phase == "meta" {
-                        // import.meta - handled specially
-                        return Ok(Expression::MetaProperty {
-                            meta: "import".to_string(),
-                            property: "meta".to_string(),
-                            position: None,
-                        });
-                    } else if phase == "defer" || phase == "source" {
-                        // For defer/source, continue to parse the call
-                        self.expect_punctuator(Punctuator::LParen)?;
-                        let source = self.parse_assignment_expression()?;
-                        self.expect_punctuator(Punctuator::RParen)?;
-                        // Return ImportExpression with phase marker (for now, same as regular import)
-                        return Ok(Expression::ImportExpression {
-                            source: Box::new(source),
-                            position: None,
-                        });
-                    } else {
-                        // Unknown import.X - syntax error
-                        return Err(syntax_error(
-                            &format!("Unknown import attribute 'import.{}'", phase),
-                            self.last_position.clone(),
-                        ));
+                    self.update_position()?;
+                    let token = self.lexer.next_token()?;
+                    match token {
+                        Token::Identifier(phase, has_escapes) => {
+                            if phase == "meta" {
+                                // 'meta' must not contain escape sequences
+                                if has_escapes {
+                                    return Err(syntax_error(
+                                        "'meta' in 'import.meta' must not contain escape sequences",
+                                        self.last_position.clone(),
+                                    ));
+                                }
+                                // import.meta is only valid in module context
+                                // Since we're currently always parsing as script, reject it
+                                // TODO: Add module parsing mode and only reject in script mode
+                                return Err(syntax_error(
+                                    "'import.meta' is only valid in module code",
+                                    self.last_position.clone(),
+                                ));
+                            } else if phase == "defer" || phase == "source" {
+                                // For defer/source, continue to parse the call
+                                self.expect_punctuator(Punctuator::LParen)?;
+                                let source = self.parse_assignment_expression()?;
+                                self.expect_punctuator(Punctuator::RParen)?;
+                                // Return ImportExpression with phase marker (for now, same as regular import)
+                                return Ok(Expression::ImportExpression {
+                                    source: Box::new(source),
+                                    position: None,
+                                });
+                            } else {
+                                // Unknown import.X - syntax error
+                                return Err(syntax_error(
+                                    &format!("Unknown import attribute 'import.{}'", phase),
+                                    self.last_position.clone(),
+                                ));
+                            }
+                        }
+                        _ => {
+                            return Err(syntax_error(
+                                "Expected identifier after 'import.'",
+                                self.last_position.clone(),
+                            ));
+                        }
                     }
                 }
 
@@ -4682,6 +4809,8 @@ impl<'a> Parser<'a> {
             }
             // Single expression in parentheses - wrap in ParenthesizedExpression
             // to track that it cannot be used as a destructuring assignment target
+            // Validate that any CoverInitializedName in object literals is rejected
+            self.validate_no_cover_initialized_name(&first)?;
             return Ok(Expression::ParenthesizedExpression {
                 expression: Box::new(first),
                 position: None,
@@ -5476,19 +5605,20 @@ impl<'a> Parser<'a> {
                 } else if self.check_punctuator(Punctuator::Assign)? {
                     // CoverInitializedName: { key = defaultValue }
                     // This is only valid when re-interpreted as a pattern
+                    // We parse it here but validate later when we know the context
                     self.lexer.next_token()?; // consume =
                     let default_value = self.parse_assignment_expression()?;
                     // Create an AssignmentExpression that will be converted to AssignmentPattern later
-                    let value = Expression::AssignmentExpression {
-                        left: AssignmentTarget::Identifier(key.clone()),
-                        operator: AssignmentOperator::Assign,
-                        right: Box::new(default_value),
-                        position: None,
-                    };
+                    // Mark this property with a special flag to detect when used in non-pattern context
                     properties.push(ObjectProperty::Property {
                         key: PropertyKey::Identifier(key.clone()),
-                        value,
-                        shorthand: true,
+                        value: Expression::AssignmentExpression {
+                            left: AssignmentTarget::Identifier(key),
+                            operator: AssignmentOperator::Assign,
+                            right: Box::new(default_value),
+                            position: None,
+                        },
+                        shorthand: true,  // Mark as CoverInitializedName
                         computed: false,
                     });
                 } else {
@@ -6313,6 +6443,48 @@ impl<'a> Parser<'a> {
         }
 
         Ok(())
+    }
+
+    /// Validate that an expression does not contain CoverInitializedName or duplicate __proto__
+    /// These are only valid in destructuring patterns, not object literal expressions
+    fn validate_no_cover_initialized_name(&self, expr: &Expression) -> Result<(), JsError> {
+        match expr {
+            Expression::ObjectExpression { properties, .. } => {
+                let mut has_proto = false;
+                for prop in properties {
+                    if let ObjectProperty::Property { shorthand, value, key, .. } = prop {
+                        // A shorthand property with an AssignmentExpression value
+                        // is CoverInitializedName: { x = 1 }
+                        if *shorthand && matches!(value, Expression::AssignmentExpression { .. }) {
+                            return Err(syntax_error(
+                                "Invalid shorthand property initializer",
+                                self.last_position.clone(),
+                            ));
+                        }
+                        // Check for duplicate __proto__ (only PropertyName: value form)
+                        // Duplicate __proto__ is allowed in destructuring but not object literals
+                        if !*shorthand {
+                            if let PropertyKey::Identifier(name) = key {
+                                if name == "__proto__" {
+                                    if has_proto {
+                                        return Err(syntax_error(
+                                            "Duplicate __proto__ fields are not allowed in object literals",
+                                            self.last_position.clone(),
+                                        ));
+                                    }
+                                    has_proto = true;
+                                }
+                            }
+                        }
+                    }
+                }
+                Ok(())
+            }
+            Expression::ParenthesizedExpression { expression, .. } => {
+                self.validate_no_cover_initialized_name(expression)
+            }
+            _ => Ok(()),
+        }
     }
 
     /// Validate arrow function parameters - always rejects duplicates and yield expressions
