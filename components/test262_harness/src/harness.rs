@@ -167,6 +167,8 @@ impl Test262Harness {
         features.insert("logical-assignment-operators".to_string());
         features.insert("BigInt".to_string());
         features.insert("Proxy".to_string());
+        // Numeric separator feature (ES2021)
+        features.insert("numeric-separator-literal".to_string());
 
         Self {
             supported_features: features,

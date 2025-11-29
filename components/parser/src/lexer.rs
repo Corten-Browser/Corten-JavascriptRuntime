@@ -990,6 +990,7 @@ impl<'a> Lexer<'a> {
                     // Hexadecimal
                     self.advance(); // skip the 'x' (don't add to num_str for parsing)
                     num_str.clear(); // We'll build the digits-only string
+                    // Must start with a hex digit, not underscore
                     if self.is_at_end() || !self.peek().is_ascii_hexdigit() {
                         return Err(JsError {
                             kind: ErrorKind::SyntaxError,
@@ -998,15 +999,36 @@ impl<'a> Lexer<'a> {
                             source_position: Some(start_pos.clone()),
                         });
                     }
+                    let mut last_was_underscore = false;
                     while !self.is_at_end() {
                         let ch = self.peek();
                         if ch.is_ascii_hexdigit() {
                             num_str.push(self.advance());
+                            last_was_underscore = false;
                         } else if ch == '_' {
+                            // Consecutive underscores are not allowed
+                            if last_was_underscore {
+                                return Err(JsError {
+                                    kind: ErrorKind::SyntaxError,
+                                    message: "Numeric separator cannot appear consecutively".to_string(),
+                                    stack: vec![],
+                                    source_position: Some(start_pos.clone()),
+                                });
+                            }
                             self.advance(); // consume but don't add
+                            last_was_underscore = true;
                         } else {
                             break;
                         }
+                    }
+                    // Trailing underscore is not allowed
+                    if last_was_underscore {
+                        return Err(JsError {
+                            kind: ErrorKind::SyntaxError,
+                            message: "Numeric separator cannot appear at end of number".to_string(),
+                            stack: vec![],
+                            source_position: Some(start_pos.clone()),
+                        });
                     }
                     radix = Some(16);
                 }
@@ -1014,6 +1036,7 @@ impl<'a> Lexer<'a> {
                     // Binary
                     self.advance(); // skip the 'b'
                     num_str.clear();
+                    // Must start with a binary digit, not underscore
                     if self.is_at_end() || (self.peek() != '0' && self.peek() != '1') {
                         return Err(JsError {
                             kind: ErrorKind::SyntaxError,
@@ -1022,15 +1045,36 @@ impl<'a> Lexer<'a> {
                             source_position: Some(start_pos.clone()),
                         });
                     }
+                    let mut last_was_underscore = false;
                     while !self.is_at_end() {
                         let ch = self.peek();
                         if ch == '0' || ch == '1' {
                             num_str.push(self.advance());
+                            last_was_underscore = false;
                         } else if ch == '_' {
+                            // Consecutive underscores are not allowed
+                            if last_was_underscore {
+                                return Err(JsError {
+                                    kind: ErrorKind::SyntaxError,
+                                    message: "Numeric separator cannot appear consecutively".to_string(),
+                                    stack: vec![],
+                                    source_position: Some(start_pos.clone()),
+                                });
+                            }
                             self.advance(); // consume but don't add
+                            last_was_underscore = true;
                         } else {
                             break;
                         }
+                    }
+                    // Trailing underscore is not allowed
+                    if last_was_underscore {
+                        return Err(JsError {
+                            kind: ErrorKind::SyntaxError,
+                            message: "Numeric separator cannot appear at end of number".to_string(),
+                            stack: vec![],
+                            source_position: Some(start_pos.clone()),
+                        });
                     }
                     radix = Some(2);
                 }
@@ -1038,6 +1082,7 @@ impl<'a> Lexer<'a> {
                     // Octal
                     self.advance(); // skip the 'o'
                     num_str.clear();
+                    // Must start with an octal digit, not underscore
                     if self.is_at_end() || !('0'..='7').contains(&self.peek()) {
                         return Err(JsError {
                             kind: ErrorKind::SyntaxError,
@@ -1046,27 +1091,55 @@ impl<'a> Lexer<'a> {
                             source_position: Some(start_pos.clone()),
                         });
                     }
+                    let mut last_was_underscore = false;
                     while !self.is_at_end() {
                         let ch = self.peek();
                         if ('0'..='7').contains(&ch) {
                             num_str.push(self.advance());
+                            last_was_underscore = false;
                         } else if ch == '_' {
+                            // Consecutive underscores are not allowed
+                            if last_was_underscore {
+                                return Err(JsError {
+                                    kind: ErrorKind::SyntaxError,
+                                    message: "Numeric separator cannot appear consecutively".to_string(),
+                                    stack: vec![],
+                                    source_position: Some(start_pos.clone()),
+                                });
+                            }
                             self.advance(); // consume but don't add
+                            last_was_underscore = true;
                         } else {
                             break;
                         }
+                    }
+                    // Trailing underscore is not allowed
+                    if last_was_underscore {
+                        return Err(JsError {
+                            kind: ErrorKind::SyntaxError,
+                            message: "Numeric separator cannot appear at end of number".to_string(),
+                            stack: vec![],
+                            source_position: Some(start_pos.clone()),
+                        });
                     }
                     radix = Some(8);
                 }
 _ => {
                     // Regular decimal number starting with 0 (could be legacy octal or non-octal decimal)
-                    // Scan all digits
+                    // Numeric separators are NOT allowed in legacy octal-like or non-octal decimal literals
+                    // Scan all digits, error on underscore
                     while !self.is_at_end() {
                         let ch = self.peek();
                         if ch.is_ascii_digit() {
                             num_str.push(self.advance());
                         } else if ch == '_' {
-                            self.advance(); // consume but don't add
+                            // Numeric separators are not allowed in legacy octal or non-octal decimal
+                            return Err(JsError {
+                                kind: ErrorKind::SyntaxError,
+                                message: "Numeric separators are not allowed in legacy octal or non-octal decimal literals".to_string(),
+                                stack: vec![],
+                                source_position: Some(start_pos.clone()),
+                            });
                         } else {
                             break;
                         }
@@ -1107,7 +1180,7 @@ _ => {
             }
         } else {
             // Regular decimal number
-            self.scan_decimal_digits(&mut num_str, &mut is_float);
+            self.scan_decimal_digits(&mut num_str, &mut is_float, &start_pos)?;
         }
 
         // Check for BigInt suffix 'n'
@@ -1166,15 +1239,26 @@ _ => {
         Ok(Token::Number(value))
     }
 
-    fn scan_decimal_digits(&mut self, num_str: &mut String, is_float: &mut bool) {
+    fn scan_decimal_digits(&mut self, num_str: &mut String, is_float: &mut bool, start_pos: &SourcePosition) -> Result<(), JsError> {
         // Scan integer part (with optional numeric separators)
+        let mut last_was_underscore = false;
         while !self.is_at_end() {
             let ch = self.peek();
             if ch.is_ascii_digit() {
                 num_str.push(self.advance());
+                last_was_underscore = false;
             } else if ch == '_' {
-                // Numeric separator - must be between digits
+                // Consecutive underscores are not allowed
+                if last_was_underscore {
+                    return Err(JsError {
+                        kind: ErrorKind::SyntaxError,
+                        message: "Numeric separator cannot appear consecutively".to_string(),
+                        stack: vec![],
+                        source_position: Some(start_pos.clone()),
+                    });
+                }
                 self.advance(); // consume underscore but don't add to num_str
+                last_was_underscore = true;
             } else {
                 break;
             }
@@ -1184,22 +1268,51 @@ _ => {
         // JavaScript allows both "1.5" and "1." (trailing decimal)
         // We need to distinguish from member access like "123.toString()"
         if !self.is_at_end() && self.peek() == '.' {
+            // Underscore immediately before '.' is not allowed
+            if last_was_underscore {
+                return Err(JsError {
+                    kind: ErrorKind::SyntaxError,
+                    message: "Numeric separator cannot appear adjacent to decimal point".to_string(),
+                    stack: vec![],
+                    source_position: Some(start_pos.clone()),
+                });
+            }
             // Look ahead to see what follows the dot
             if let Some(next) = self.peek_next() {
-                if next.is_ascii_digit() || next == '_' {
-                    // Definitely a decimal: 1.5 or 1.5_0
+                if next.is_ascii_digit() {
+                    // Definitely a decimal: 1.5
                     *is_float = true;
                     num_str.push(self.advance()); // consume '.'
+                    last_was_underscore = false;
                     while !self.is_at_end() {
                         let ch = self.peek();
                         if ch.is_ascii_digit() {
                             num_str.push(self.advance());
+                            last_was_underscore = false;
                         } else if ch == '_' {
+                            // Consecutive underscores are not allowed
+                            if last_was_underscore {
+                                return Err(JsError {
+                                    kind: ErrorKind::SyntaxError,
+                                    message: "Numeric separator cannot appear consecutively".to_string(),
+                                    stack: vec![],
+                                    source_position: Some(start_pos.clone()),
+                                });
+                            }
                             self.advance(); // consume but don't add
+                            last_was_underscore = true;
                         } else {
                             break;
                         }
                     }
+                } else if next == '_' {
+                    // Underscore immediately after '.' is not allowed: 1._5
+                    return Err(JsError {
+                        kind: ErrorKind::SyntaxError,
+                        message: "Numeric separator cannot appear adjacent to decimal point".to_string(),
+                        stack: vec![],
+                        source_position: Some(start_pos.clone()),
+                    });
                 } else if !is_id_start(next) {
                     // Trailing decimal: 1. followed by non-identifier (like ; or whitespace)
                     // This is valid: "1." equals 1.0
@@ -1212,40 +1325,110 @@ _ => {
                 *is_float = true;
                 num_str.push(self.advance()); // consume '.'
             }
+        } else if last_was_underscore {
+            // Trailing underscore with no decimal point (e.g., 1_)
+            return Err(JsError {
+                kind: ErrorKind::SyntaxError,
+                message: "Numeric separator cannot appear at end of number".to_string(),
+                stack: vec![],
+                source_position: Some(start_pos.clone()),
+            });
         }
 
         // Handle exponent
         if !self.is_at_end() && (self.peek() == 'e' || self.peek() == 'E') {
+            // Underscore immediately before 'e' is not allowed
+            if last_was_underscore {
+                return Err(JsError {
+                    kind: ErrorKind::SyntaxError,
+                    message: "Numeric separator cannot appear adjacent to exponent".to_string(),
+                    stack: vec![],
+                    source_position: Some(start_pos.clone()),
+                });
+            }
             *is_float = true;
             num_str.push(self.advance());
             if !self.is_at_end() && (self.peek() == '+' || self.peek() == '-') {
                 num_str.push(self.advance());
             }
+            // Check for underscore immediately after 'e' or sign
+            if !self.is_at_end() && self.peek() == '_' {
+                return Err(JsError {
+                    kind: ErrorKind::SyntaxError,
+                    message: "Numeric separator cannot appear adjacent to exponent".to_string(),
+                    stack: vec![],
+                    source_position: Some(start_pos.clone()),
+                });
+            }
+            last_was_underscore = false;
             while !self.is_at_end() {
                 let ch = self.peek();
                 if ch.is_ascii_digit() {
                     num_str.push(self.advance());
+                    last_was_underscore = false;
                 } else if ch == '_' {
+                    // Consecutive underscores are not allowed
+                    if last_was_underscore {
+                        return Err(JsError {
+                            kind: ErrorKind::SyntaxError,
+                            message: "Numeric separator cannot appear consecutively".to_string(),
+                            stack: vec![],
+                            source_position: Some(start_pos.clone()),
+                        });
+                    }
                     self.advance(); // consume but don't add
+                    last_was_underscore = true;
                 } else {
                     break;
                 }
             }
+            // Trailing underscore in exponent
+            if last_was_underscore {
+                return Err(JsError {
+                    kind: ErrorKind::SyntaxError,
+                    message: "Numeric separator cannot appear at end of number".to_string(),
+                    stack: vec![],
+                    source_position: Some(start_pos.clone()),
+                });
+            }
         }
+        Ok(())
     }
 
     /// Scan a number that starts with a decimal point: .5, .123, .1e5, etc.
     fn scan_leading_decimal_number(&mut self) -> Result<Token, JsError> {
+        let start_pos = self.current_position();
         let mut num_str = String::from("0."); // Add leading 0 for parsing
 
+        // Check for underscore immediately after decimal point
+        if !self.is_at_end() && self.peek() == '_' {
+            return Err(JsError {
+                kind: ErrorKind::SyntaxError,
+                message: "Numeric separator cannot appear adjacent to decimal point".to_string(),
+                stack: vec![],
+                source_position: Some(start_pos),
+            });
+        }
+
         // Scan digits after the decimal point (with optional numeric separators)
+        let mut last_was_underscore = false;
         while !self.is_at_end() {
             let ch = self.peek();
             if ch.is_ascii_digit() {
                 num_str.push(self.advance());
+                last_was_underscore = false;
             } else if ch == '_' {
-                // Numeric separator - consume but don't add to string
+                // Consecutive underscores are not allowed
+                if last_was_underscore {
+                    return Err(JsError {
+                        kind: ErrorKind::SyntaxError,
+                        message: "Numeric separator cannot appear consecutively".to_string(),
+                        stack: vec![],
+                        source_position: Some(start_pos.clone()),
+                    });
+                }
                 self.advance();
+                last_was_underscore = true;
             } else {
                 break;
             }
@@ -1253,21 +1436,68 @@ _ => {
 
         // Handle exponent
         if !self.is_at_end() && (self.peek() == 'e' || self.peek() == 'E') {
+            // Underscore immediately before 'e' is not allowed
+            if last_was_underscore {
+                return Err(JsError {
+                    kind: ErrorKind::SyntaxError,
+                    message: "Numeric separator cannot appear adjacent to exponent".to_string(),
+                    stack: vec![],
+                    source_position: Some(start_pos.clone()),
+                });
+            }
             num_str.push(self.advance());
             if !self.is_at_end() && (self.peek() == '+' || self.peek() == '-') {
                 num_str.push(self.advance());
             }
+            // Check for underscore immediately after 'e' or sign
+            if !self.is_at_end() && self.peek() == '_' {
+                return Err(JsError {
+                    kind: ErrorKind::SyntaxError,
+                    message: "Numeric separator cannot appear adjacent to exponent".to_string(),
+                    stack: vec![],
+                    source_position: Some(start_pos.clone()),
+                });
+            }
+            last_was_underscore = false;
             // Scan exponent digits (with optional numeric separators)
             while !self.is_at_end() {
                 let ch = self.peek();
                 if ch.is_ascii_digit() {
                     num_str.push(self.advance());
+                    last_was_underscore = false;
                 } else if ch == '_' {
+                    // Consecutive underscores are not allowed
+                    if last_was_underscore {
+                        return Err(JsError {
+                            kind: ErrorKind::SyntaxError,
+                            message: "Numeric separator cannot appear consecutively".to_string(),
+                            stack: vec![],
+                            source_position: Some(start_pos.clone()),
+                        });
+                    }
                     self.advance();
+                    last_was_underscore = true;
                 } else {
                     break;
                 }
             }
+            // Trailing underscore in exponent
+            if last_was_underscore {
+                return Err(JsError {
+                    kind: ErrorKind::SyntaxError,
+                    message: "Numeric separator cannot appear at end of number".to_string(),
+                    stack: vec![],
+                    source_position: Some(start_pos.clone()),
+                });
+            }
+        } else if last_was_underscore {
+            // Trailing underscore after decimal (e.g., .5_)
+            return Err(JsError {
+                kind: ErrorKind::SyntaxError,
+                message: "Numeric separator cannot appear at end of number".to_string(),
+                stack: vec![],
+                source_position: Some(start_pos.clone()),
+            });
         }
 
         // Parse as float
