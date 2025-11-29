@@ -3867,8 +3867,8 @@ impl<'a> Parser<'a> {
                         position: None,
                     }
                 } else {
-                    // Allow keywords as property names after dot
-                    let name = self.expect_property_name()?;
+                    // IdentifierName only (not strings or numbers) after dot
+                    let name = self.expect_identifier_name()?;
                     Expression::Identifier {
                         name,
                         position: None,
@@ -4112,8 +4112,8 @@ impl<'a> Parser<'a> {
                         position: None,
                     }
                 } else {
-                    // Allow keywords as property names after dot
-                    let name = self.expect_property_name()?;
+                    // IdentifierName only (not strings or numbers) after dot
+                    let name = self.expect_identifier_name()?;
                     Expression::Identifier {
                         name,
                         position: None,
@@ -5969,6 +5969,21 @@ impl<'a> Parser<'a> {
             _ => Err(unexpected_token(
                 "property name",
                 &format!("{:?}", token),
+                self.last_position.clone(),
+            )),
+        }
+    }
+
+    /// Expect an IdentifierName (identifier or keyword) - used after dot in member expressions
+    /// Unlike expect_property_name, this does NOT accept strings or numbers
+    fn expect_identifier_name(&mut self) -> Result<String, JsError> {
+        self.update_position()?;
+        let token = self.lexer.next_token()?;
+        match token {
+            Token::Identifier(name, _) => Ok(name),
+            Token::Keyword(k) => Ok(keyword_to_string(k)),
+            _ => Err(syntax_error(
+                "Expected identifier after '.'",
                 self.last_position.clone(),
             )),
         }
