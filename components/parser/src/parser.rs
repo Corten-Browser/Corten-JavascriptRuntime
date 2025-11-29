@@ -5376,6 +5376,8 @@ impl<'a> Parser<'a> {
                     let body = self.parse_method_body()?;
                     // Validate use strict with non-simple parameters
                     self.validate_params_with_body(&params, &body)?;
+                    // Validate parameter names don't conflict with lexical declarations
+                    self.validate_params_body_lexical(&params, &body)?;
                     self.in_method = prev_method;
                     self.in_static_block = prev_in_static_block;
 
@@ -5485,6 +5487,8 @@ impl<'a> Parser<'a> {
                     let body = self.parse_method_body()?;
                     // Validate use strict with non-simple parameters
                     self.validate_params_with_body(&params, &body)?;
+                    // Validate parameter names don't conflict with lexical declarations
+                    self.validate_params_body_lexical(&params, &body)?;
                     self.in_method = prev_method;
                     self.in_static_block = prev_in_static_block;
 
@@ -5633,6 +5637,8 @@ impl<'a> Parser<'a> {
                     let body = self.parse_method_body_with_context(true, is_generator)?;
                     // Validate use strict with non-simple parameters
                     self.validate_params_with_body(&params, &body)?;
+                    // Validate parameter names don't conflict with lexical declarations
+                    self.validate_params_body_lexical(&params, &body)?;
 
                     self.in_async = prev_async;
                     self.in_generator = prev_generator;
