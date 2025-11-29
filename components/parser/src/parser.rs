@@ -1902,6 +1902,13 @@ impl<'a> Parser<'a> {
 
     fn parse_with_statement(&mut self) -> Result<Statement, JsError> {
         self.expect_keyword(Keyword::With)?;
+        // 'with' statements are not allowed in strict mode
+        if self.strict_mode {
+            return Err(syntax_error(
+                "Strict mode code may not include a with statement",
+                self.last_position.clone(),
+            ));
+        }
         self.expect_punctuator(Punctuator::LParen)?;
         let object = self.parse_expression()?;
         self.expect_punctuator(Punctuator::RParen)?;
@@ -4797,6 +4804,10 @@ impl<'a> Parser<'a> {
                 // Validate arrow parameters (duplicates and yield expressions)
                 self.validate_arrow_parameters(&params)?;
                 self.validate_arrow_params_no_yield(&params)?;
+                // In async context, arrow parameter defaults cannot contain await
+                if self.in_async {
+                    self.validate_params_no_await(&params)?;
+                }
                 let body = self.parse_arrow_body()?;
                 // Validate "use strict" with non-simple parameters
                 self.validate_arrow_params_with_body(&params, &body)?;
@@ -4862,6 +4873,10 @@ impl<'a> Parser<'a> {
                 // Validate arrow parameters (duplicates always rejected, yield expressions checked)
                 self.validate_arrow_parameters(&params)?;
                 self.validate_arrow_params_no_yield(&params)?;
+                // In async context, arrow parameter defaults cannot contain await
+                if self.in_async {
+                    self.validate_params_no_await(&params)?;
+                }
                 let body = self.parse_arrow_body()?;
                 // Validate "use strict" with non-simple parameters
                 self.validate_arrow_params_with_body(&params, &body)?;
@@ -5210,7 +5225,11 @@ impl<'a> Parser<'a> {
                     self.in_method = true;
                     self.in_static_block = false;
                     let params = self.parse_parameters()?;
+                    // Methods use UniqueFormalParameters - always reject duplicates
+                    self.validate_arrow_parameters(&params)?;
                     let body = self.parse_method_body()?;
+                    // Validate use strict with non-simple parameters
+                    self.validate_params_with_body(&params, &body)?;
                     self.in_method = prev_method;
                     self.in_static_block = prev_in_static_block;
 
@@ -5278,7 +5297,11 @@ impl<'a> Parser<'a> {
                     self.in_method = true;
                     self.in_static_block = false; // Methods have their own scope
                     let params = self.parse_parameters()?;
+                    // Methods use UniqueFormalParameters - always reject duplicates
+                    self.validate_arrow_parameters(&params)?;
                     let body = self.parse_method_body()?;
+                    // Validate use strict with non-simple parameters
+                    self.validate_params_with_body(&params, &body)?;
                     self.in_method = prev_method;
                     self.in_static_block = prev_in_static_block;
 
@@ -5374,7 +5397,11 @@ impl<'a> Parser<'a> {
                     self.in_method = true;
                     self.in_static_block = false; // Methods have their own scope
                     let params = self.parse_parameters()?;
+                    // Methods use UniqueFormalParameters - always reject duplicates
+                    self.validate_arrow_parameters(&params)?;
                     let body = self.parse_method_body()?;
+                    // Validate use strict with non-simple parameters
+                    self.validate_params_with_body(&params, &body)?;
                     self.in_method = prev_method;
                     self.in_static_block = prev_in_static_block;
 
@@ -5415,7 +5442,11 @@ impl<'a> Parser<'a> {
                     self.in_method = true;
                     self.in_static_block = false; // Methods have their own scope
                     let params = self.parse_parameters()?;
+                    // Setters use UniqueFormalParameters - always reject duplicates
+                    self.validate_arrow_parameters(&params)?;
                     let body = self.parse_method_body()?;
+                    // Validate use strict with non-simple parameters
+                    self.validate_params_with_body(&params, &body)?;
                     self.in_method = prev_method;
                     self.in_static_block = prev_in_static_block;
 
@@ -5441,8 +5472,12 @@ impl<'a> Parser<'a> {
                 }
             } else if self.check_keyword(Keyword::Async)? {
                 // Async method: async name() {} or async *name() {}
-                self.lexer.next_token()?;
+                self.lexer.next_token()?; // consume 'async'
                 // Check if this is shorthand property named "async"
+                // AsyncMethod requires [no LineTerminator here] after 'async'
+                // Peek the next token to update line_terminator_before_token
+                let _ = self.lexer.peek_token()?;
+                let has_line_terminator = self.lexer.line_terminator_before_token;
                 if self.check_punctuator(Punctuator::Colon)?
                     || self.check_punctuator(Punctuator::Comma)?
                     || self.check_punctuator(Punctuator::RBrace)?
@@ -5468,6 +5503,14 @@ impl<'a> Parser<'a> {
                         });
                     }
                 } else {
+                    // AsyncMethod requires [no LineTerminator here] between 'async' and PropertyName
+                    if has_line_terminator {
+                        return Err(syntax_error(
+                            "Unexpected line terminator after 'async'",
+                            self.last_position.clone(),
+                        ));
+                    }
+
                     // Check for async generator: async *name() {}
                     let is_generator = self.check_punctuator(Punctuator::Star)?;
                     if is_generator {
@@ -5560,7 +5603,14 @@ impl<'a> Parser<'a> {
                 });
             } else {
                 // Regular property or method shorthand
-                // Use expect_property_name to allow keywords as property names
+                // First, peek at the token to determine its type
+                self.update_position()?;
+                let token = self.lexer.peek_token()?;
+
+                // Track whether this key comes from an identifier
+                let key_is_identifier = matches!(token, Token::Identifier(_, _) | Token::Keyword(_));
+
+                // Get the key using expect_property_name
                 let key = self.expect_property_name()?;
 
                 if self.check_punctuator(Punctuator::LParen)? {
@@ -5572,7 +5622,11 @@ impl<'a> Parser<'a> {
                     self.in_method = true;
                     self.in_static_block = false;
                     let params = self.parse_parameters()?;
+                    // Methods use UniqueFormalParameters - always reject duplicates
+                    self.validate_arrow_parameters(&params)?;
                     let body = self.parse_method_body()?;
+                    // Validate use strict with non-simple parameters
+                    self.validate_params_with_body(&params, &body)?;
                     self.in_method = prev_method;
                     self.in_static_block = prev_in_static_block;
 
@@ -5604,6 +5658,13 @@ impl<'a> Parser<'a> {
                     });
                 } else if self.check_punctuator(Punctuator::Assign)? {
                     // CoverInitializedName: { key = defaultValue }
+                    // Shorthand-like syntax requires an identifier key
+                    if !key_is_identifier {
+                        return Err(syntax_error(
+                            "Invalid shorthand property initializer",
+                            self.last_position.clone(),
+                        ));
+                    }
                     // This is only valid when re-interpreted as a pattern
                     // We parse it here but validate later when we know the context
                     self.lexer.next_token()?; // consume =
@@ -5623,6 +5684,20 @@ impl<'a> Parser<'a> {
                     });
                 } else {
                     // Shorthand property: { key }
+                    // Shorthand properties must be identifier references, not literals
+                    if !key_is_identifier {
+                        return Err(syntax_error(
+                            "Invalid shorthand property",
+                            self.last_position.clone(),
+                        ));
+                    }
+                    // In strict mode, check for reserved words
+                    if self.strict_mode && self.is_strict_reserved_word(&key) {
+                        return Err(syntax_error(
+                            &format!("'{}' is reserved in strict mode", key),
+                            self.last_position.clone(),
+                        ));
+                    }
                     properties.push(ObjectProperty::Property {
                         key: PropertyKey::Identifier(key.clone()),
                         value: Expression::Identifier {
