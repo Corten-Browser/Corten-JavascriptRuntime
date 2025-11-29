@@ -3805,6 +3805,20 @@ impl<'a> Parser<'a> {
                     self.last_position.clone(),
                 ))
             }
+            // MetaProperty (new.target, import.meta) is never a valid update target
+            Expression::MetaProperty { .. } => {
+                Err(syntax_error(
+                    "Invalid left-hand side in prefix/postfix expression",
+                    self.last_position.clone(),
+                ))
+            }
+            // Yield expressions are never valid update targets
+            Expression::YieldExpression { .. } => {
+                Err(syntax_error(
+                    "Invalid left-hand side in prefix/postfix expression",
+                    self.last_position.clone(),
+                ))
+            }
             // Handle parenthesized expressions
             Expression::ParenthesizedExpression { expression, .. } => {
                 self.validate_update_target(expression)
