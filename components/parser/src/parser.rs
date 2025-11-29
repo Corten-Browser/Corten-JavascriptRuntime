@@ -281,13 +281,43 @@ impl<'a> Parser<'a> {
         };
 
         let mut declarations = Vec::new();
+        let is_lexical = kind == VariableKind::Let || kind == VariableKind::Const;
 
         loop {
             let id = self.parse_pattern()?;
+
+            // In lexical declarations (let/const), 'let' cannot be used as a binding name
+            // Also check for 'await' in static blocks
+            if is_lexical || self.in_static_block {
+                let mut names = Vec::new();
+                Self::collect_bound_names(&id, &mut names);
+                for name in &names {
+                    if is_lexical && name == "let" {
+                        return Err(syntax_error(
+                            "'let' is not allowed as a binding identifier in lexical declarations",
+                            self.last_position.clone(),
+                        ));
+                    }
+                    if self.in_static_block && name == "await" {
+                        return Err(syntax_error(
+                            "'await' cannot be used as an identifier in class static blocks",
+                            self.last_position.clone(),
+                        ));
+                    }
+                }
+            }
+
             let init = if self.check_punctuator(Punctuator::Assign)? {
                 self.lexer.next_token()?;
                 Some(self.parse_assignment_expression()?)
             } else {
+                // const declarations require an initializer
+                if kind == VariableKind::Const {
+                    return Err(syntax_error(
+                        "Missing initializer in const declaration",
+                        self.last_position.clone(),
+                    ));
+                }
                 None
             };
 
@@ -325,27 +355,30 @@ impl<'a> Parser<'a> {
         // Check for line terminator after peek so the flag is updated
         let has_line_terminator = self.lexer.line_terminator_before_token;
 
-        // "let" is a keyword (declaration) if followed by (without line terminator):
-        // - identifier (but not 'in' or 'of' which could be for-in/for-of with let as LHS)
-        // - [ (array destructuring)
-        // - { (object destructuring)
-        // If there's a line terminator, `let` is an identifier expression with ASI after it
-        let is_declaration = if has_line_terminator {
-            // Line terminator after 'let' means it's an identifier, not a declaration
-            false
-        } else {
-            match next {
-                Token::Identifier(_, _) => true,
-                Token::Punctuator(Punctuator::LBracket) => true,
-                Token::Punctuator(Punctuator::LBrace) => true,
-                // Keywords that can be identifiers in certain contexts
-                Token::Keyword(Keyword::Yield) if !self.in_generator => true,
-                Token::Keyword(Keyword::Await) if !self.in_async && !self.in_static_block => true,
-                Token::Keyword(Keyword::Static) if !self.strict_mode => true,
-                // 'async' can be used as an identifier
-                Token::Keyword(Keyword::Async) => true,
-                _ => false,
-            }
+        // "let" is a keyword (declaration) if followed by:
+        // - identifier (with or without line terminator - no ASI needed)
+        // - [ (array destructuring) - BUT only without line terminator due to `let [` restriction
+        // - { (object destructuring) - only without line terminator
+        //
+        // The ExpressionStatement has a lookahead restriction: [lookahead ∉ { let [ }]
+        // This means `let` followed by newline then `[` triggers ASI (let becomes expression)
+        // But `let` followed by newline then identifier is still a declaration
+        let is_declaration = match next {
+            // Identifiers after let = declaration (even with newline)
+            Token::Identifier(_, _) => true,
+            // Keywords that can be identifiers in some contexts - grammatically these ARE valid
+            // binding identifiers, even if later rejected by static semantics
+            // This is important for correct error reporting (should fail on binding, not ASI)
+            Token::Keyword(Keyword::Yield) => true, // may be rejected later if in generator/strict
+            Token::Keyword(Keyword::Await) => true, // may be rejected later if in async/module
+            Token::Keyword(Keyword::Static) => true, // may be rejected later in strict mode
+            Token::Keyword(Keyword::Async) => true,
+            // 'let' as binding name (will be caught by later validation)
+            Token::Keyword(Keyword::Let) => true,
+            // [ and { only without line terminator (due to ExpressionStatement lookahead restriction)
+            Token::Punctuator(Punctuator::LBracket) if !has_line_terminator => true,
+            Token::Punctuator(Punctuator::LBrace) if !has_line_terminator => true,
+            _ => false,
         };
 
         // Restore lexer state
@@ -5713,7 +5746,14 @@ impl<'a> Parser<'a> {
                             self.last_position.clone(),
                         ));
                     }
-                    // In strict mode, check for reserved words
+                    // Reserved words that are always reserved cannot be identifier references
+                    if self.is_always_reserved_word(&key) {
+                        return Err(syntax_error(
+                            &format!("'{}' is a reserved word and cannot be used as an identifier", key),
+                            self.last_position.clone(),
+                        ));
+                    }
+                    // In strict mode, check for strict mode reserved words
                     if self.strict_mode && self.is_strict_reserved_word(&key) {
                         return Err(syntax_error(
                             &format!("'{}' is reserved in strict mode", key),
@@ -6127,6 +6167,22 @@ impl<'a> Parser<'a> {
         )
     }
 
+    /// Check if a name is a reserved word that can never be an identifier
+    /// These are always reserved regardless of strict mode or context
+    fn is_always_reserved_word(&self, name: &str) -> bool {
+        matches!(
+            name,
+            "true" | "false" | "null"
+            | "break" | "case" | "catch" | "continue" | "debugger"
+            | "default" | "delete" | "do" | "else" | "finally"
+            | "for" | "function" | "if" | "in" | "instanceof"
+            | "new" | "return" | "switch" | "this" | "throw"
+            | "try" | "typeof" | "var" | "void" | "while" | "with"
+            | "class" | "const" | "enum" | "export" | "extends"
+            | "import" | "super"
+        )
+    }
+
     /// Validate that a for-in/for-of left-hand side expression is a valid assignment target
     /// In strict mode, call expressions and other non-simple expressions are not allowed
     fn validate_for_in_of_left(&self, expr: &Expression) -> Result<(), JsError> {
@@ -6290,6 +6346,14 @@ impl<'a> Parser<'a> {
         if self.strict_mode && (name == "arguments" || name == "eval") {
             return Err(syntax_error(
                 &format!("'{}' cannot be used as a binding identifier in strict mode", name),
+                self.last_position.clone(),
+            ));
+        }
+
+        // 'await' cannot be used as a binding identifier in class static blocks
+        if self.in_static_block && name == "await" {
+            return Err(syntax_error(
+                "'await' cannot be used as an identifier in class static blocks",
                 self.last_position.clone(),
             ));
         }
