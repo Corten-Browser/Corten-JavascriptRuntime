@@ -1025,9 +1025,30 @@ impl<'a> Parser<'a> {
                     // Static blocks cannot contain await expressions even when nested in async context
                     self.in_async = false;
 
+                    // Parse statements with validation for duplicate lexical declarations
                     let mut body = Vec::new();
+                    let mut lexical_names: std::collections::HashSet<String> = std::collections::HashSet::new();
+
                     while !self.check_punctuator(Punctuator::RBrace)? {
-                        body.push(self.parse_statement()?);
+                        let stmt = self.parse_statement()?;
+
+                        // Check for duplicate lexical declarations in static block
+                        Self::check_lexical_declaration(&stmt, &mut lexical_names, &self.last_position)?;
+
+                        body.push(stmt);
+                    }
+
+                    // Collect var names and check against lexical names
+                    let mut var_names: std::collections::HashSet<String> = std::collections::HashSet::new();
+                    Self::collect_var_declared_names(&body, &mut var_names);
+
+                    for var_name in &var_names {
+                        if lexical_names.contains(var_name) {
+                            return Err(syntax_error(
+                                &format!("Identifier '{}' has already been declared", var_name),
+                                None,
+                            ));
+                        }
                     }
 
                     // Restore context
@@ -1803,8 +1824,9 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_return_statement(&mut self) -> Result<Statement, JsError> {
-        // Return is only valid inside a function body
-        if self.function_depth == 0 {
+        // Return is only valid inside a function body, not in static blocks
+        // Static blocks are NOT functions even when nested inside functions
+        if self.function_depth == 0 || self.in_static_block {
             return Err(syntax_error(
                 "Illegal return statement",
                 self.last_position.clone(),
