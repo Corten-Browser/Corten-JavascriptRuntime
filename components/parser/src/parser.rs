@@ -5716,6 +5716,13 @@ impl<'a> Parser<'a> {
                             self.last_position.clone(),
                         ));
                     }
+                    // In static blocks, 'await' and 'arguments' cannot be identifier references
+                    if self.in_static_block && (key == "await" || key == "arguments") {
+                        return Err(syntax_error(
+                            &format!("'{}' is not allowed as an identifier in class static blocks", key),
+                            self.last_position.clone(),
+                        ));
+                    }
                     properties.push(ObjectProperty::Property {
                         key: PropertyKey::Identifier(key.clone()),
                         value: Expression::Identifier {
