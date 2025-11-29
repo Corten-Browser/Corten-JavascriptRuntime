@@ -5220,6 +5220,8 @@ impl<'a> Parser<'a> {
                 let body = self.parse_method_body_with_context(false, true)?;
                 // Validate use strict with non-simple parameters
                 self.validate_params_with_body(&params, &body)?;
+                // Validate parameter names don't conflict with lexical declarations
+                self.validate_params_body_lexical(&params, &body)?;
 
                 self.in_generator = prev_generator;
                 self.in_method = prev_method;
@@ -5502,6 +5504,10 @@ impl<'a> Parser<'a> {
                     let body = self.parse_method_body()?;
                     // Validate use strict with non-simple parameters
                     self.validate_params_with_body(&params, &body)?;
+                    // Validate parameter names don't conflict with lexical declarations
+                    self.validate_params_body_lexical(&params, &body)?;
+                    // Validate no eval/arguments params when body becomes strict
+                    self.validate_no_eval_arguments_params_in_strict_body(&params, &body)?;
                     self.in_method = prev_method;
                     self.in_static_block = prev_in_static_block;
 
@@ -5636,6 +5642,8 @@ impl<'a> Parser<'a> {
                 let body = self.parse_method_body_with_context(false, true)?;
                 // Validate use strict with non-simple parameters
                 self.validate_params_with_body(&params, &body)?;
+                // Validate parameter names don't conflict with lexical declarations
+                self.validate_params_body_lexical(&params, &body)?;
 
                 self.in_generator = prev_generator;
                 self.in_method = prev_method;
@@ -5682,6 +5690,8 @@ impl<'a> Parser<'a> {
                     let body = self.parse_method_body()?;
                     // Validate use strict with non-simple parameters
                     self.validate_params_with_body(&params, &body)?;
+                    // Validate parameter names don't conflict with lexical declarations
+                    self.validate_params_body_lexical(&params, &body)?;
                     self.in_method = prev_method;
                     self.in_static_block = prev_in_static_block;
 
