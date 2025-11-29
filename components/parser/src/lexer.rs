@@ -1059,16 +1059,11 @@ impl<'a> Lexer<'a> {
                     radix = Some(8);
                 }
 _ => {
-                    // Regular decimal number starting with 0 (could be legacy octal)
-                    // Check if it's a legacy octal: 0 followed by 0-7 digits only
-                    // Scan digits and check for legacy octal pattern
-                    is_legacy_octal = true; // Assume legacy octal until we see a digit > 7
+                    // Regular decimal number starting with 0 (could be legacy octal or non-octal decimal)
+                    // Scan all digits
                     while !self.is_at_end() {
                         let ch = self.peek();
                         if ch.is_ascii_digit() {
-                            if ch > '7' {
-                                is_legacy_octal = false;
-                            }
                             num_str.push(self.advance());
                         } else if ch == '_' {
                             self.advance(); // consume but don't add
@@ -1076,9 +1071,11 @@ _ => {
                             break;
                         }
                     }
-                    // If only the initial '0' and no more digits, it's just 0 (not legacy octal)
-                    if num_str.len() == 1 {
-                        is_legacy_octal = false;
+                    // If there are more digits after the initial '0', BigInt is not allowed
+                    // This applies to both legacy octal (00, 07) and non-octal decimal (08, 09)
+                    // Only "0" by itself can have BigInt suffix
+                    if num_str.len() > 1 {
+                        is_legacy_octal = true; // Reuse this flag to indicate BigInt not allowed
                     }
                     // Handle decimal point and exponent if present
                     if !is_float && !self.is_at_end() && self.peek() == '.' {
@@ -1123,11 +1120,12 @@ _ => {
                     source_position: Some(start_pos.clone()),
                 });
             }
-            // Legacy octal literals cannot have BigInt suffix
+            // Numbers starting with 0 followed by more digits cannot have BigInt suffix
+            // This includes legacy octal (00, 07) and non-octal decimal (08, 09)
             if is_legacy_octal {
                 return Err(JsError {
                     kind: ErrorKind::SyntaxError,
-                    message: "Invalid BigInt literal: legacy octal literals cannot have BigInt suffix".to_string(),
+                    message: "Invalid BigInt literal: numeric literals starting with 0 followed by digits cannot have BigInt suffix".to_string(),
                     stack: vec![],
                     source_position: Some(start_pos.clone()),
                 });
