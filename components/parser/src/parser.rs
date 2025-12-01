@@ -2232,6 +2232,8 @@ impl<'a> Parser<'a> {
                 self.loop_depth += 1;
                 let body = Box::new(self.parse_substatement()?);
                 self.loop_depth -= 1;
+                // Check that body is not a labelled function declaration
+                Self::check_for_body_not_labelled_function(&body, &self.last_position)?;
                 // Check that body's var declarations don't conflict with header's lexical names
                 if matches!(kind, VariableKind::Let | VariableKind::Const) {
                     Self::check_for_in_of_var_conflict(&id, &body, &self.last_position)?;
@@ -2255,6 +2257,8 @@ impl<'a> Parser<'a> {
                 self.loop_depth += 1;
                 let body = Box::new(self.parse_substatement()?);
                 self.loop_depth -= 1;
+                // Check that body is not a labelled function declaration
+                Self::check_for_body_not_labelled_function(&body, &self.last_position)?;
                 // Check that body's var declarations don't conflict with header's lexical names
                 if matches!(kind, VariableKind::Let | VariableKind::Const) {
                     Self::check_for_in_of_var_conflict(&id, &body, &self.last_position)?;
@@ -2331,6 +2335,9 @@ impl<'a> Parser<'a> {
             let body = Box::new(self.parse_substatement()?);
             self.loop_depth -= 1;
 
+            // Check that body is not a labelled function declaration
+            Self::check_for_body_not_labelled_function(&body, &self.last_position)?;
+
             // Convert expression to pattern if it looks like a destructuring pattern
             // Otherwise keep as expression (e.g., simple identifier)
             let left = if matches!(left_expr, Expression::ArrayExpression { .. } | Expression::ObjectExpression { .. }) {
@@ -2364,6 +2371,9 @@ impl<'a> Parser<'a> {
             self.loop_depth += 1;
             let body = Box::new(self.parse_substatement()?);
             self.loop_depth -= 1;
+
+            // Check that body is not a labelled function declaration
+            Self::check_for_body_not_labelled_function(&body, &self.last_position)?;
 
             // Convert expression to pattern if it looks like a destructuring pattern
             // Otherwise keep as expression (e.g., simple identifier)
@@ -2425,6 +2435,36 @@ impl<'a> Parser<'a> {
         self.loop_depth += 1;
         let body = Box::new(self.parse_substatement()?);
         self.loop_depth -= 1;
+
+        // Check that body is not a labelled function declaration
+        Self::check_for_body_not_labelled_function(&body, &self.last_position)?;
+
+        // Check that body's var declarations don't conflict with header's lexical declarations
+        if let Some(ForInit::VariableDeclaration { kind, declarations }) = &init {
+            if matches!(kind, VariableKind::Let | VariableKind::Const) {
+                // Collect lexical names from declarations
+                let mut header_names = std::collections::HashSet::new();
+                for decl in declarations {
+                    let mut names = Vec::new();
+                    Self::collect_bound_names(&decl.id, &mut names);
+                    for name in names {
+                        header_names.insert(name);
+                    }
+                }
+                // Collect var names from body
+                let mut var_names = std::collections::HashSet::new();
+                Self::collect_var_declared_names_stmt(&body, &mut var_names);
+                // Check for conflicts
+                for name in var_names {
+                    if header_names.contains(&name) {
+                        return Err(syntax_error(
+                            &format!("Identifier '{}' has already been declared", name),
+                            self.last_position.clone(),
+                        ));
+                    }
+                }
+            }
+        }
 
         Ok(Statement::ForStatement {
             init,
@@ -7010,6 +7050,33 @@ impl<'a> Parser<'a> {
                     position.clone(),
                 ));
             }
+        }
+        Ok(())
+    }
+
+    /// Check if a statement is a labelled function declaration (recursively)
+    /// This is forbidden as the body of for/for-in/for-of/while/do-while/with/if
+    fn is_labelled_function(stmt: &Statement) -> bool {
+        match stmt {
+            Statement::LabeledStatement { body, .. } => {
+                // Check if the body is a function or recursively a labelled function
+                matches!(**body, Statement::FunctionDeclaration { .. })
+                    || Self::is_labelled_function(body)
+            }
+            _ => false,
+        }
+    }
+
+    /// Validate that a for/for-in/for-of body is not a labelled function declaration
+    fn check_for_body_not_labelled_function(
+        body: &Statement,
+        position: &Option<core_types::SourcePosition>,
+    ) -> Result<(), JsError> {
+        if Self::is_labelled_function(body) {
+            return Err(syntax_error(
+                "Labelled function declarations cannot be the body of a for loop",
+                position.clone(),
+            ));
         }
         Ok(())
     }
