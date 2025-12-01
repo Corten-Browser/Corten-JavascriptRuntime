@@ -4237,6 +4237,32 @@ impl<'a> Parser<'a> {
                     position: None,
                 })
             }
+            Token::LegacyOctalLiteral(n) => {
+                if self.strict_mode {
+                    return Err(syntax_error(
+                        "Octal literals are not allowed in strict mode",
+                        self.last_position.clone(),
+                    ));
+                }
+                self.lexer.next_token()?;
+                Ok(Expression::Literal {
+                    value: Literal::Number(n),
+                    position: None,
+                })
+            }
+            Token::NonOctalDecimalLiteral(n) => {
+                if self.strict_mode {
+                    return Err(syntax_error(
+                        "Decimals with leading zeros are not allowed in strict mode",
+                        self.last_position.clone(),
+                    ));
+                }
+                self.lexer.next_token()?;
+                Ok(Expression::Literal {
+                    value: Literal::Number(n),
+                    position: None,
+                })
+            }
             Token::String(s) => {
                 self.lexer.next_token()?;
                 Ok(Expression::Literal {
@@ -6011,6 +6037,8 @@ impl<'a> Parser<'a> {
             Token::Keyword(k) => Ok(keyword_to_string(k)),
             Token::String(s) => Ok(s),
             Token::Number(n) => Ok(n.to_string()),
+            Token::LegacyOctalLiteral(n) => Ok(n.to_string()),
+            Token::NonOctalDecimalLiteral(n) => Ok(n.to_string()),
             Token::BigIntLiteral(s) => Ok(s), // BigInt property names converted to string
             _ => Err(unexpected_token(
                 "property name",
@@ -6053,6 +6081,8 @@ impl<'a> Parser<'a> {
             Token::Identifier(name, _) => Ok(PropertyKey::Identifier(name)),
             Token::String(s) => Ok(PropertyKey::String(s)),
             Token::Number(n) => Ok(PropertyKey::Number(n)),
+            Token::LegacyOctalLiteral(n) => Ok(PropertyKey::Number(n)),
+            Token::NonOctalDecimalLiteral(n) => Ok(PropertyKey::Number(n)),
             Token::BigIntLiteral(s) => {
                 // BigInt property names are converted to their string representation
                 Ok(PropertyKey::String(s))
@@ -6079,6 +6109,8 @@ impl<'a> Parser<'a> {
                 | Token::Keyword(_)
                 | Token::String(_)
                 | Token::Number(_)
+                | Token::LegacyOctalLiteral(_)
+                | Token::NonOctalDecimalLiteral(_)
                 | Token::BigIntLiteral(_)
                 | Token::Punctuator(Punctuator::LBracket)
                 | Token::PrivateIdentifier(_)

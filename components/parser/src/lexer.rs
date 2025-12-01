@@ -220,6 +220,10 @@ pub enum Token {
     PrivateIdentifier(String),
     /// Number literal
     Number(f64),
+    /// Legacy octal integer literal (e.g., 00, 07) - NOT allowed in strict mode
+    LegacyOctalLiteral(f64),
+    /// Non-octal decimal integer literal (e.g., 08, 09) - NOT allowed in strict mode
+    NonOctalDecimalLiteral(f64),
     /// BigInt literal (integer with 'n' suffix)
     BigIntLiteral(String),
     /// String literal
@@ -612,10 +616,112 @@ impl<'a> Lexer<'a> {
                     'n' => value.push('\n'),
                     't' => value.push('\t'),
                     'r' => value.push('\r'),
+                    'b' => value.push('\u{0008}'),
+                    'f' => value.push('\u{000C}'),
+                    'v' => value.push('\u{000B}'),
                     '\\' => value.push('\\'),
                     '\'' => value.push('\''),
                     '"' => value.push('"'),
-                    '0' => value.push('\0'),
+                    '0' if self.is_at_end() || !self.peek().is_ascii_digit() => {
+                        value.push('\0');
+                    }
+                    'x' => {
+                        // Hex escape: \xHH (exactly 2 hex digits required)
+                        if self.is_at_end() || !self.peek().is_ascii_hexdigit() {
+                            return Err(JsError {
+                                kind: ErrorKind::SyntaxError,
+                                message: "Invalid hexadecimal escape sequence".to_string(),
+                                stack: vec![],
+                                source_position: Some(start_pos.clone()),
+                            });
+                        }
+                        let h1 = self.advance();
+                        if self.is_at_end() || !self.peek().is_ascii_hexdigit() {
+                            return Err(JsError {
+                                kind: ErrorKind::SyntaxError,
+                                message: "Invalid hexadecimal escape sequence".to_string(),
+                                stack: vec![],
+                                source_position: Some(start_pos.clone()),
+                            });
+                        }
+                        let h2 = self.advance();
+                        let code = u8::from_str_radix(&format!("{}{}", h1, h2), 16).unwrap();
+                        value.push(code as char);
+                    }
+                    'u' => {
+                        // Unicode escape: \uHHHH or \u{H...}
+                        if self.is_at_end() {
+                            return Err(JsError {
+                                kind: ErrorKind::SyntaxError,
+                                message: "Invalid Unicode escape sequence".to_string(),
+                                stack: vec![],
+                                source_position: Some(start_pos.clone()),
+                            });
+                        }
+                        if self.peek() == '{' {
+                            // \u{H...} form - numeric separators NOT allowed
+                            self.advance(); // consume {
+                            let mut hex = String::new();
+                            while !self.is_at_end() && self.peek() != '}' {
+                                let ch = self.peek();
+                                if ch == '_' {
+                                    // Numeric separators are NOT allowed in unicode escapes
+                                    return Err(JsError {
+                                        kind: ErrorKind::SyntaxError,
+                                        message: "Numeric separators are not allowed in Unicode escape sequences".to_string(),
+                                        stack: vec![],
+                                        source_position: Some(start_pos.clone()),
+                                    });
+                                }
+                                if !ch.is_ascii_hexdigit() {
+                                    return Err(JsError {
+                                        kind: ErrorKind::SyntaxError,
+                                        message: "Invalid Unicode escape sequence".to_string(),
+                                        stack: vec![],
+                                        source_position: Some(start_pos.clone()),
+                                    });
+                                }
+                                hex.push(self.advance());
+                            }
+                            if self.is_at_end() || hex.is_empty() {
+                                return Err(JsError {
+                                    kind: ErrorKind::SyntaxError,
+                                    message: "Invalid Unicode escape sequence".to_string(),
+                                    stack: vec![],
+                                    source_position: Some(start_pos.clone()),
+                                });
+                            }
+                            self.advance(); // consume }
+                            let code = u32::from_str_radix(&hex, 16).unwrap_or(0x110000);
+                            if code > 0x10FFFF {
+                                return Err(JsError {
+                                    kind: ErrorKind::SyntaxError,
+                                    message: "Invalid Unicode code point".to_string(),
+                                    stack: vec![],
+                                    source_position: Some(start_pos.clone()),
+                                });
+                            }
+                            if let Some(ch) = char::from_u32(code) {
+                                value.push(ch);
+                            }
+                        } else {
+                            // \uHHHH form (exactly 4 hex digits)
+                            let mut hex = String::new();
+                            for _ in 0..4 {
+                                if self.is_at_end() || !self.peek().is_ascii_hexdigit() {
+                                    return Err(JsError {
+                                        kind: ErrorKind::SyntaxError,
+                                        message: "Invalid Unicode escape sequence".to_string(),
+                                        stack: vec![],
+                                        source_position: Some(start_pos.clone()),
+                                    });
+                                }
+                                hex.push(self.advance());
+                            }
+                            let code = u16::from_str_radix(&hex, 16).unwrap();
+                            value.push(char::from_u32(code as u32).unwrap_or('\u{FFFD}'));
+                        }
+                    }
                     // Line continuation: backslash followed by actual line terminator
                     '\n' => {
                         // Line continuation - skip the newline, don't add anything
@@ -637,7 +743,7 @@ impl<'a> Lexer<'a> {
                     }
                     _ => value.push(escaped),
                 }
-            } else if self.peek() == '\n' {
+            } else if self.peek() == '\n' || self.peek() == '\r' {
                 return Err(JsError {
                     kind: ErrorKind::SyntaxError,
                     message: "Unterminated string literal".to_string(),
@@ -980,7 +1086,8 @@ impl<'a> Lexer<'a> {
         let mut num_str = first.to_string();
         let mut is_float = false;
         let mut radix: Option<u32> = None; // None = decimal, Some(16) = hex, etc.
-        let mut is_legacy_octal = false; // Track legacy octal for BigInt rejection
+        let mut is_legacy_octal = false; // Track legacy octal (00-07) for BigInt rejection and strict mode
+        let mut is_non_octal_decimal = false; // Track non-octal decimal (08, 09) for strict mode
 
         // Check for hex (0x), binary (0b), or octal (0o) literals
         if first == '0' && !self.is_at_end() {
@@ -1128,9 +1235,14 @@ _ => {
                     // Regular decimal number starting with 0 (could be legacy octal or non-octal decimal)
                     // Numeric separators are NOT allowed in legacy octal-like or non-octal decimal literals
                     // Scan all digits, error on underscore
+                    // Track whether we see digits 8 or 9 (non-octal decimal)
+                    let mut has_non_octal_digit = false;
                     while !self.is_at_end() {
                         let ch = self.peek();
                         if ch.is_ascii_digit() {
+                            if ch == '8' || ch == '9' {
+                                has_non_octal_digit = true;
+                            }
                             num_str.push(self.advance());
                         } else if ch == '_' {
                             // Numeric separators are not allowed in legacy octal or non-octal decimal
@@ -1144,30 +1256,51 @@ _ => {
                             break;
                         }
                     }
-                    // If there are more digits after the initial '0', BigInt is not allowed
+                    // If there are more digits after the initial '0', mark for strict mode checking
                     // This applies to both legacy octal (00, 07) and non-octal decimal (08, 09)
                     // Only "0" by itself can have BigInt suffix
                     if num_str.len() > 1 {
-                        is_legacy_octal = true; // Reuse this flag to indicate BigInt not allowed
+                        if has_non_octal_digit {
+                            is_non_octal_decimal = true; // Contains 8 or 9
+                        } else {
+                            is_legacy_octal = true; // All digits 0-7
+                        }
                     }
                     // Handle decimal point and exponent if present
                     if !is_float && !self.is_at_end() && self.peek() == '.' {
                         // Look ahead to see what follows the dot
                         if let Some(next_after_dot) = self.peek_next() {
                             if next_after_dot.is_ascii_digit() {
+                                // Decimal with fractional part: 0.5
                                 is_float = true;
                                 is_legacy_octal = false; // No longer legacy octal
+                                is_non_octal_decimal = false;
                                 num_str.push(self.advance()); // consume '.'
                                 while !self.is_at_end() && self.peek().is_ascii_digit() {
                                     num_str.push(self.advance());
                                 }
+                            } else if !is_id_start(next_after_dot) {
+                                // Trailing decimal: 0. followed by non-identifier (like ; or whitespace)
+                                // This is valid: "0." equals 0.0
+                                is_float = true;
+                                is_legacy_octal = false;
+                                is_non_octal_decimal = false;
+                                num_str.push(self.advance()); // consume '.'
                             }
+                            // If next is an identifier start (like 'toString'), leave the dot for member access
+                        } else {
+                            // End of file after dot: 0.EOF is valid
+                            is_float = true;
+                            is_legacy_octal = false;
+                            is_non_octal_decimal = false;
+                            num_str.push(self.advance()); // consume '.'
                         }
                     }
                     // Handle exponent
                     if !self.is_at_end() && (self.peek() == 'e' || self.peek() == 'E') {
                         is_float = true;
                         is_legacy_octal = false;
+                        is_non_octal_decimal = false;
                         num_str.push(self.advance());
                         if !self.is_at_end() && (self.peek() == '+' || self.peek() == '-') {
                             num_str.push(self.advance());
@@ -1195,7 +1328,7 @@ _ => {
             }
             // Numbers starting with 0 followed by more digits cannot have BigInt suffix
             // This includes legacy octal (00, 07) and non-octal decimal (08, 09)
-            if is_legacy_octal {
+            if is_legacy_octal || is_non_octal_decimal {
                 return Err(JsError {
                     kind: ErrorKind::SyntaxError,
                     message: "Invalid BigInt literal: numeric literals starting with 0 followed by digits cannot have BigInt suffix".to_string(),
@@ -1212,6 +1345,26 @@ _ => {
                 _ => num_str,
             };
             return Ok(Token::BigIntLiteral(bigint_str));
+        }
+
+        // Check that numeric literal is not immediately followed by an identifier start
+        // ECMAScript spec: "The source character immediately following a NumericLiteral
+        // must not be an IdentifierStart or DecimalDigit."
+        if !self.is_at_end() {
+            let next_char = self.peek();
+            // Check for identifier start (letters, $, _, unicode)
+            if is_id_start(next_char) {
+                return Err(JsError {
+                    kind: ErrorKind::SyntaxError,
+                    message: "Identifier starts immediately after numeric literal".to_string(),
+                    stack: vec![],
+                    source_position: Some(start_pos.clone()),
+                });
+            }
+            // Note: We don't check for DecimalDigit here because that would have been
+            // consumed as part of the number already. The only way to have a digit
+            // immediately after is if we hit BigInt suffix and returned early,
+            // or if radix parsing stopped (which means non-valid digit for that radix).
         }
 
         // Parse as regular number
@@ -1236,7 +1389,16 @@ _ => {
             }
         };
 
-        Ok(Token::Number(value))
+        // Return appropriate token type based on literal form
+        // Legacy octal and non-octal decimal literals need special tokens
+        // so the parser can reject them in strict mode
+        if is_legacy_octal {
+            Ok(Token::LegacyOctalLiteral(value))
+        } else if is_non_octal_decimal {
+            Ok(Token::NonOctalDecimalLiteral(value))
+        } else {
+            Ok(Token::Number(value))
+        }
     }
 
     fn scan_decimal_digits(&mut self, num_str: &mut String, is_float: &mut bool, start_pos: &SourcePosition) -> Result<(), JsError> {
