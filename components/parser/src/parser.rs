@@ -69,6 +69,8 @@ pub struct Parser<'a> {
     /// In this context, LexicalDeclarations are not allowed, so `let identifier`
     /// with newline should trigger ASI
     in_labeled_item: bool,
+    /// Track if we're parsing module code (affects await/yield identifier restrictions)
+    is_module: bool,
 }
 
 impl<'a> Parser<'a> {
@@ -95,6 +97,16 @@ impl<'a> Parser<'a> {
             pending_private_validations: Vec::new(),
             has_new_target_binding: false,
             in_labeled_item: false,
+            is_module: false,
+        }
+    }
+
+    /// Set module mode for parsing (affects await/yield identifier restrictions)
+    pub fn set_module_mode(&mut self, is_module: bool) {
+        self.is_module = is_module;
+        // Module code is always strict mode
+        if is_module {
+            self.strict_mode = true;
         }
     }
 
@@ -109,7 +121,63 @@ impl<'a> Parser<'a> {
             statements.push(self.parse_statement()?);
         }
 
+        // Validate script body:
+        // 1. No duplicate LexicallyDeclaredNames (let, const, class declarations)
+        // 2. VarDeclaredNames and LexicallyDeclaredNames must not overlap
+        self.validate_script_body(&statements)?;
+
         Ok(ASTNode::Program(statements))
+    }
+
+    /// Validate script body for duplicate declarations
+    fn validate_script_body(&self, statements: &[Statement]) -> Result<(), JsError> {
+        let mut lexical_names: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+        // Collect and check lexically declared names for duplicates
+        for stmt in statements {
+            match stmt {
+                Statement::VariableDeclaration { kind, declarations, .. }
+                    if matches!(kind, crate::ast::VariableKind::Let | crate::ast::VariableKind::Const) =>
+                {
+                    for decl in declarations {
+                        let mut names = Vec::new();
+                        Self::collect_bound_names(&decl.id, &mut names);
+                        for name in names {
+                            if !lexical_names.insert(name.clone()) {
+                                return Err(syntax_error(
+                                    &format!("Identifier '{}' has already been declared", name),
+                                    None,
+                                ));
+                            }
+                        }
+                    }
+                }
+                Statement::ClassDeclaration { name, .. } if !name.is_empty() => {
+                    if !lexical_names.insert(name.clone()) {
+                        return Err(syntax_error(
+                            &format!("Identifier '{}' has already been declared", name),
+                            None,
+                        ));
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        // Check that var names don't conflict with lexical names
+        let mut var_names: std::collections::HashSet<String> = std::collections::HashSet::new();
+        Self::collect_var_declared_names(statements, &mut var_names);
+
+        for var_name in &var_names {
+            if lexical_names.contains(var_name) {
+                return Err(syntax_error(
+                    &format!("Identifier '{}' has already been declared", var_name),
+                    None,
+                ));
+            }
+        }
+
+        Ok(())
     }
 
     /// Check for directive prologue (e.g., "use strict")
@@ -1083,6 +1151,7 @@ impl<'a> Parser<'a> {
                     // In static blocks: 'await' is reserved (cannot use await expressions),
                     // 'arguments' is reserved, and super.prop is allowed (like methods)
                     // Also, break/continue cannot cross static block boundaries
+                    // new.target is allowed (returns undefined)
                     let prev_in_static_block = self.in_static_block;
                     let prev_in_method = self.in_method;
                     let prev_in_async = self.in_async;
@@ -1090,6 +1159,7 @@ impl<'a> Parser<'a> {
                     let prev_loop_depth = self.loop_depth;
                     let prev_active_labels = std::mem::take(&mut self.active_labels);
                     let prev_iteration_labels = std::mem::take(&mut self.iteration_labels);
+                    let prev_new_target = self.has_new_target_binding;
                     self.in_static_block = true;
                     self.in_method = true;  // Allow super.prop in static blocks
                     // Static blocks cannot contain await/yield expressions even when nested
@@ -1097,6 +1167,8 @@ impl<'a> Parser<'a> {
                     self.in_generator = false;
                     // Reset loop depth so break/continue cannot cross static block boundary
                     self.loop_depth = 0;
+                    // new.target is valid in static blocks (evaluates to undefined)
+                    self.has_new_target_binding = true;
 
                     // Parse statements with validation for duplicate lexical declarations
                     let mut body = Vec::new();
@@ -1132,6 +1204,7 @@ impl<'a> Parser<'a> {
                     self.loop_depth = prev_loop_depth;
                     self.active_labels = prev_active_labels;
                     self.iteration_labels = prev_iteration_labels;
+                    self.has_new_target_binding = prev_new_target;
 
                     self.expect_punctuator(Punctuator::RBrace)?;
                     elements.push(ClassElement::StaticBlock { body });
@@ -1661,10 +1734,10 @@ impl<'a> Parser<'a> {
         self.strict_mode = true;
 
         // Name is optional for class expressions
-        // await/yield can be class names when not in async/generator/static block context
+        // await/yield can be class names when not in async/generator/static block/module context
         let name = match self.lexer.peek_token()? {
             Token::Identifier(_, _) => Some(self.expect_identifier()?),
-            Token::Keyword(Keyword::Await) if !self.in_async && !self.in_static_block => Some(self.expect_identifier()?),
+            Token::Keyword(Keyword::Await) if !self.in_async && !self.in_static_block && !self.is_module => Some(self.expect_identifier()?),
             Token::Keyword(Keyword::Yield) if !self.in_generator => Some(self.expect_identifier()?),
             _ => None,
         };
@@ -2990,11 +3063,16 @@ impl<'a> Parser<'a> {
     fn parse_expression_statement(&mut self) -> Result<Statement, JsError> {
         // Check for labeled statement: identifier followed by colon
         // In non-strict mode, 'yield' can be used as a label (when not in generator)
+        // In non-module, non-async contexts, 'await' can be used as a label
         let potential_label = match self.lexer.peek_token()?.clone() {
             Token::Identifier(name, _) => Some(name),
             // 'yield' can be a label in non-strict, non-generator contexts
             Token::Keyword(Keyword::Yield) if !self.strict_mode && !self.in_generator => {
                 Some("yield".to_string())
+            }
+            // 'await' can be a label in non-module, non-async contexts
+            Token::Keyword(Keyword::Await) if !self.is_module && !self.in_async && !self.in_static_block => {
+                Some("await".to_string())
             }
             _ => None,
         };
@@ -6369,9 +6447,9 @@ impl<'a> Parser<'a> {
                 self.validate_binding_identifier(&name)?;
                 Ok(name)
             }
-            // 'await' is a keyword only in async contexts or static blocks, otherwise it's a valid identifier
-            // But 'await' cannot be an identifier in module code (handled elsewhere)
-            Token::Keyword(Keyword::Await) if !self.in_async && !self.in_static_block => {
+            // 'await' is a keyword only in async contexts, static blocks, or module code
+            // otherwise it's a valid identifier
+            Token::Keyword(Keyword::Await) if !self.in_async && !self.in_static_block && !self.is_module => {
                 Ok("await".to_string())
             }
             // 'yield' is a keyword only in generator contexts, otherwise it's a valid identifier
@@ -6935,6 +7013,14 @@ impl<'a> Parser<'a> {
             ));
         }
 
+        // 'await' is a reserved word in module code
+        if self.is_module && name == "await" {
+            return Err(syntax_error(
+                "'await' is not allowed as an identifier in module code",
+                self.last_position.clone(),
+            ));
+        }
+
         // 'yield' is a reserved word in generator function contexts
         if self.in_generator && name == "yield" {
             return Err(syntax_error(
@@ -7202,27 +7288,74 @@ impl<'a> Parser<'a> {
 
     /// Validate that parameter names don't conflict with lexically declared names in body
     fn validate_params_body_lexical(&self, params: &[Pattern], body: &[Statement]) -> Result<(), JsError> {
+        // In non-strict mode with simple parameters, function declarations can shadow parameters
+        // Only let/const/class need to be checked in this case
+        // In strict mode or with non-simple parameters, all lexical declarations conflict
+
+        let is_simple = Self::is_simple_parameter_list(params);
+
         // Collect parameter bound names
         let mut param_names = Vec::new();
         for param in params {
             Self::collect_bound_names(param, &mut param_names);
         }
 
-        // Collect lexically declared names from body
-        let mut lexical_names = Vec::new();
-        Self::collect_lexically_declared_names(body, &mut lexical_names);
+        // In non-strict mode with simple parameters, function declarations are allowed
+        // to have the same name as parameters (they shadow them)
+        if !self.strict_mode && is_simple {
+            // Only collect let/const/class declarations (not function declarations)
+            let mut lexical_names = Vec::new();
+            Self::collect_let_const_class_names(body, &mut lexical_names);
 
-        // Check for conflicts
-        for param_name in &param_names {
-            if lexical_names.contains(param_name) {
-                return Err(syntax_error(
-                    &format!("Identifier '{}' has already been declared", param_name),
-                    self.last_position.clone(),
-                ));
+            for param_name in &param_names {
+                if lexical_names.contains(param_name) {
+                    return Err(syntax_error(
+                        &format!("Identifier '{}' has already been declared", param_name),
+                        self.last_position.clone(),
+                    ));
+                }
+            }
+        } else {
+            // In strict mode or with non-simple parameters, all lexical declarations conflict
+            let mut lexical_names = Vec::new();
+            Self::collect_lexically_declared_names(body, &mut lexical_names);
+
+            for param_name in &param_names {
+                if lexical_names.contains(param_name) {
+                    return Err(syntax_error(
+                        &format!("Identifier '{}' has already been declared", param_name),
+                        self.last_position.clone(),
+                    ));
+                }
             }
         }
 
         Ok(())
+    }
+
+    /// Collect only let/const/class declared names (excludes function declarations)
+    fn collect_let_const_class_names(body: &[Statement], names: &mut Vec<String>) {
+        for stmt in body {
+            match stmt {
+                Statement::VariableDeclaration { kind, declarations, .. } => {
+                    // Only let and const are lexical declarations
+                    if matches!(kind, crate::ast::VariableKind::Let | crate::ast::VariableKind::Const) {
+                        for decl in declarations {
+                            Self::collect_bound_names(&decl.id, names);
+                        }
+                    }
+                }
+                // Class declarations are also lexically declared
+                Statement::ClassDeclaration { name, .. } => {
+                    if !name.is_empty() {
+                        names.push(name.clone());
+                    }
+                }
+                // Function declarations are NOT included here - they can shadow parameters
+                // in non-strict mode with simple parameters
+                _ => {}
+            }
+        }
     }
 
     /// Validate parameters for duplicates based on context
