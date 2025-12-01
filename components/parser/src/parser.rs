@@ -1926,10 +1926,15 @@ impl<'a> Parser<'a> {
         self.expect_punctuator(Punctuator::RParen)?;
 
         let consequent = Box::new(self.parse_substatement()?);
+        // Check that consequent is not a labelled function declaration
+        Self::check_for_body_not_labelled_function(&consequent, &self.last_position)?;
 
         let alternate = if self.check_keyword(Keyword::Else)? {
             self.lexer.next_token()?;
-            Some(Box::new(self.parse_substatement()?))
+            let alt = Box::new(self.parse_substatement()?);
+            // Check that alternate is not a labelled function declaration
+            Self::check_for_body_not_labelled_function(&alt, &self.last_position)?;
+            Some(alt)
         } else {
             None
         };
@@ -1952,6 +1957,9 @@ impl<'a> Parser<'a> {
         let body = Box::new(self.parse_substatement()?);
         self.loop_depth -= 1;
 
+        // Check that body is not a labelled function declaration
+        Self::check_for_body_not_labelled_function(&body, &self.last_position)?;
+
         Ok(Statement::WhileStatement {
             test,
             body,
@@ -1964,6 +1972,8 @@ impl<'a> Parser<'a> {
         self.loop_depth += 1;
         let body = Box::new(self.parse_substatement()?);
         self.loop_depth -= 1;
+        // Check that body is not a labelled function declaration
+        Self::check_for_body_not_labelled_function(&body, &self.last_position)?;
         self.expect_keyword(Keyword::While)?;
         self.expect_punctuator(Punctuator::LParen)?;
         let test = self.parse_expression()?;
@@ -2118,6 +2128,8 @@ impl<'a> Parser<'a> {
         let object = self.parse_expression()?;
         self.expect_punctuator(Punctuator::RParen)?;
         let body = Box::new(self.parse_substatement()?);
+        // Check that body is not a labelled function declaration
+        Self::check_for_body_not_labelled_function(&body, &self.last_position)?;
         Ok(Statement::WithStatement {
             object,
             body,
