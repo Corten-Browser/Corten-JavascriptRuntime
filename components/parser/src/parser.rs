@@ -65,6 +65,10 @@ pub struct Parser<'a> {
     /// Track if we're in a context where new.target is valid
     /// (inside a non-arrow function that creates its own new.target binding)
     has_new_target_binding: bool,
+    /// Track if we're parsing a labeled item (LabelledStatement body)
+    /// In this context, LexicalDeclarations are not allowed, so `let identifier`
+    /// with newline should trigger ASI
+    in_labeled_item: bool,
 }
 
 impl<'a> Parser<'a> {
@@ -90,6 +94,7 @@ impl<'a> Parser<'a> {
             class_private_names: Vec::new(),
             pending_private_validations: Vec::new(),
             has_new_target_binding: false,
+            in_labeled_item: false,
         }
     }
 
@@ -262,6 +267,32 @@ impl<'a> Parser<'a> {
             // Check if 'let' is used as keyword (followed by identifier, [, or {)
             let is_let_declaration = self.is_let_declaration()?;
             if !is_let_declaration {
+                // `let [` is in the lookahead restriction for ExpressionStatement
+                // Even if we're treating `let` as an identifier, we need to check
+                // if the next token is `[` and reject it
+                let saved_pos = self.lexer.position;
+                let saved_line = self.lexer.line;
+                let saved_col = self.lexer.column;
+                let saved_line_term = self.lexer.line_terminator_before_token;
+                let saved_tok = self.lexer.current_token.clone();
+
+                self.lexer.next_token()?; // consume 'let'
+                let next = self.lexer.peek_token()?.clone();
+
+                // Restore lexer state
+                self.lexer.position = saved_pos;
+                self.lexer.line = saved_line;
+                self.lexer.column = saved_col;
+                self.lexer.line_terminator_before_token = saved_line_term;
+                self.lexer.current_token = saved_tok;
+
+                if matches!(next, Token::Punctuator(Punctuator::LBracket)) {
+                    return Err(syntax_error(
+                        "Lexical declaration cannot appear in a single-statement context",
+                        self.last_position.clone(),
+                    ));
+                }
+
                 // 'let' is an identifier, parse as expression statement
                 return self.parse_expression_statement();
             }
@@ -383,24 +414,30 @@ impl<'a> Parser<'a> {
         let has_line_terminator = self.lexer.line_terminator_before_token;
 
         // "let" is a keyword (declaration) if followed by:
-        // - identifier (with or without line terminator - no ASI needed)
-        // - [ (array destructuring) - BUT only without line terminator due to `let [` restriction
+        // - identifier WITHOUT line terminator, OR without line terminator if in labeled item context
+        //   (in labeled item context, ASI applies with newline because declarations are not allowed)
+        // - [ (array destructuring) - BUT only without line terminator due to `let [` lookahead restriction
         // - { (object destructuring) - only without line terminator
         //
-        // The ExpressionStatement has a lookahead restriction: [lookahead ∉ { let [ }]
-        // This means `let` followed by newline then `[` triggers ASI (let becomes expression)
-        // But `let` followed by newline then identifier is still a declaration
+        // Per the spec, when `let` is followed by an identifier, it's ALWAYS a LexicalDeclaration,
+        // even if separated by a newline. Static semantics are checked after production matching.
+        // HOWEVER, in a LabelledItem context, LexicalDeclarations are not allowed, so if there's
+        // a newline, ASI kicks in and `let` becomes an expression statement.
         let is_declaration = match next {
-            // Identifiers after let = declaration (even with newline)
+            // Identifiers after let = declaration (even with newline - no ASI)
+            // UNLESS we're in a labeled item context AND there's a line terminator
+            Token::Identifier(_, _) if self.in_labeled_item && has_line_terminator => false,
             Token::Identifier(_, _) => true,
-            // Keywords that can be identifiers in some contexts - grammatically these ARE valid
-            // binding identifiers, even if later rejected by static semantics
-            // This is important for correct error reporting (should fail on binding, not ASI)
-            Token::Keyword(Keyword::Yield) => true, // may be rejected later if in generator/strict
-            Token::Keyword(Keyword::Await) => true, // may be rejected later if in async/module
-            Token::Keyword(Keyword::Static) => true, // may be rejected later in strict mode
+            // Keywords that can be binding identifiers in some contexts
+            Token::Keyword(Keyword::Yield) if self.in_labeled_item && has_line_terminator => false,
+            Token::Keyword(Keyword::Yield) => true,
+            Token::Keyword(Keyword::Await) if self.in_labeled_item && has_line_terminator => false,
+            Token::Keyword(Keyword::Await) => true,
+            Token::Keyword(Keyword::Static) if self.in_labeled_item && has_line_terminator => false,
+            Token::Keyword(Keyword::Static) => true,
+            Token::Keyword(Keyword::Async) if self.in_labeled_item && has_line_terminator => false,
             Token::Keyword(Keyword::Async) => true,
-            // 'let' as binding name (will be caught by later validation)
+            Token::Keyword(Keyword::Let) if self.in_labeled_item && has_line_terminator => false,
             Token::Keyword(Keyword::Let) => true,
             // [ and { only without line terminator (due to ExpressionStatement lookahead restriction)
             Token::Punctuator(Punctuator::LBracket) if !has_line_terminator => true,
@@ -2237,6 +2274,8 @@ impl<'a> Parser<'a> {
                 // For let/const, check for duplicate bound names in the pattern
                 if matches!(kind, VariableKind::Let | VariableKind::Const) {
                     Self::check_duplicate_bound_names(&id, &self.last_position)?;
+                    // BoundNames of ForDeclaration cannot contain "let"
+                    Self::check_forin_of_bound_names_not_let(&id, &self.last_position)?;
                 }
                 self.lexer.next_token()?; // consume 'in'
                 let right = self.parse_expression()?;
@@ -2262,6 +2301,8 @@ impl<'a> Parser<'a> {
                 // For let/const, check for duplicate bound names in the pattern
                 if matches!(kind, VariableKind::Let | VariableKind::Const) {
                     Self::check_duplicate_bound_names(&id, &self.last_position)?;
+                    // BoundNames of ForDeclaration cannot contain "let"
+                    Self::check_forin_of_bound_names_not_let(&id, &self.last_position)?;
                 }
                 self.lexer.next_token()?; // consume 'of'
                 let right = self.parse_assignment_expression()?;
@@ -2620,11 +2661,35 @@ impl<'a> Parser<'a> {
                 self.lexer.next_token()?;
                 let p = self.parse_pattern()?;
                 self.expect_punctuator(Punctuator::RParen)?;
+
+                // Check for duplicate bound names in catch parameter
+                Self::check_duplicate_bound_names(&p, &self.last_position)?;
+
+                // Check for await as catch parameter in class static block
+                if self.in_static_block {
+                    let mut param_names = Vec::new();
+                    Self::collect_bound_names(&p, &mut param_names);
+                    for name in &param_names {
+                        if name == "await" {
+                            return Err(syntax_error(
+                                "'await' cannot be used as a binding identifier in class static block",
+                                self.last_position.clone(),
+                            ));
+                        }
+                    }
+                }
+
                 Some(p)
             } else {
                 None
             };
             let body = self.parse_block_body()?;
+
+            // Check if catch parameter names conflict with lexically declared names in body
+            if let Some(ref param_pattern) = param {
+                self.validate_catch_param_body_lexical(param_pattern, &body)?;
+            }
+
             Some(CatchClause { param, body })
         } else {
             None
@@ -2643,6 +2708,29 @@ impl<'a> Parser<'a> {
             finalizer,
             position: None,
         })
+    }
+
+    /// Validate that catch parameter names don't conflict with lexically declared names in body
+    fn validate_catch_param_body_lexical(&self, param: &Pattern, body: &[Statement]) -> Result<(), JsError> {
+        // Collect parameter bound names
+        let mut param_names = Vec::new();
+        Self::collect_bound_names(param, &mut param_names);
+
+        // Collect lexically declared names from body (includes let/const/function/class)
+        let mut lexical_names = Vec::new();
+        Self::collect_lexically_declared_names(body, &mut lexical_names);
+
+        // Check for conflicts
+        for param_name in &param_names {
+            if lexical_names.contains(param_name) {
+                return Err(syntax_error(
+                    &format!("Identifier '{}' has already been declared", param_name),
+                    self.last_position.clone(),
+                ));
+            }
+        }
+
+        Ok(())
     }
 
     fn parse_block_statement(&mut self) -> Result<Statement, JsError> {
@@ -2958,7 +3046,11 @@ impl<'a> Parser<'a> {
                 // Also check for nested labels that might wrap an iteration
                 // e.g., label1: label2: while(...)
                 // We'll determine this after parsing the body
+                // Set in_labeled_item flag so that `let identifier` with newline triggers ASI
+                let prev_in_labeled_item = self.in_labeled_item;
+                self.in_labeled_item = true;
                 let body = Box::new(self.parse_statement()?);
+                self.in_labeled_item = prev_in_labeled_item;
 
                 // Check if the parsed body is a disallowed declaration type
                 // (catches generator functions which start with 'function *')
@@ -6948,6 +7040,18 @@ impl<'a> Parser<'a> {
                         }
                     }
                 }
+                // Function declarations are also lexically declared in block scope
+                Statement::FunctionDeclaration { name, .. } => {
+                    if !name.is_empty() {
+                        names.push(name.clone());
+                    }
+                }
+                // Class declarations are also lexically declared
+                Statement::ClassDeclaration { name, .. } => {
+                    if !name.is_empty() {
+                        names.push(name.clone());
+                    }
+                }
                 _ => {}
             }
         }
@@ -7059,6 +7163,26 @@ impl<'a> Parser<'a> {
             if !seen.insert(name.clone()) {
                 return Err(syntax_error(
                     &format!("Duplicate binding name '{}' in for-in/for-of head", name),
+                    position.clone(),
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// Check that BoundNames of ForDeclaration do not contain "let"
+    /// Per spec: It is a Syntax Error if the BoundNames of ForDeclaration contains "let".
+    fn check_forin_of_bound_names_not_let(
+        pattern: &Pattern,
+        position: &Option<core_types::SourcePosition>,
+    ) -> Result<(), JsError> {
+        let mut names = Vec::new();
+        Self::collect_bound_names(pattern, &mut names);
+
+        for name in names {
+            if name == "let" {
+                return Err(syntax_error(
+                    "The identifier 'let' is not allowed in for-in/for-of declarations",
                     position.clone(),
                 ));
             }
@@ -7639,15 +7763,26 @@ impl<'a> Parser<'a> {
                 ));
             }
             // In sloppy mode, peek ahead to see if this looks like a lexical declaration
-            // `let` followed by identifier, `[`, or `{` (without line terminator) is a declaration
-            // `let` followed by a line terminator is an identifier expression
+            // `let` followed by identifier (without line terminator), `[`, or `{` triggers special handling
             self.lexer.next_token()?; // consume 'let'
             // First peek the next token so that line_terminator_before_token is updated
             let next_token = self.lexer.peek_token()?.clone();
+
+            // `let [` is in the lookahead restriction for ExpressionStatement
+            // This is forbidden REGARDLESS of line terminators
+            // Per spec: ExpressionStatement [lookahead ∉ { {, function, class, let [ }]
+            if matches!(next_token, Token::Punctuator(Punctuator::LBracket)) {
+                return Err(syntax_error(
+                    "Lexical declaration cannot appear in a single-statement context",
+                    self.last_position.clone(),
+                ));
+            }
+
+            // For identifier or brace, it's a declaration only if no line terminator before
             let is_declaration = !self.lexer.line_terminator_before_token
                 && matches!(
                     next_token,
-                    Token::Identifier(_, _) | Token::Punctuator(Punctuator::LBracket) | Token::Punctuator(Punctuator::LBrace)
+                    Token::Identifier(_, _) | Token::Punctuator(Punctuator::LBrace)
                 );
 
             if is_declaration {
