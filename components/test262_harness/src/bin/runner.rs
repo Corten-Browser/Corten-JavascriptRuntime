@@ -120,6 +120,7 @@ const UNSUPPORTED_FEATURES: &[&str] = &[
     "regexp-named-groups",
     "regexp-lookbehind",
     "regexp-dotall",
+    "regexp-modifiers",  // Inline flag modifiers like (?i:pattern)
     // Private class fields/methods now supported
     "decorators",
     "import-assertions",
@@ -139,6 +140,7 @@ const UNSUPPORTED_FEATURES: &[&str] = &[
     "uint8array-base64",
     "promise-try",
     "RegExp.escape",
+    "u180e",  // Mongolian Vowel Separator edge case
 ];
 
 fn main() {

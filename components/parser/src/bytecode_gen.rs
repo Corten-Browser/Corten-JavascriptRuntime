@@ -829,6 +829,23 @@ impl BytecodeGenerator {
                 // Proper labeled break/continue support would need more work
                 self.visit_statement(body)?;
             }
+
+            // Module declarations - not supported in bytecode generation yet
+            Statement::ExportDefaultDeclaration { .. } => {
+                // Export declarations are handled at module level
+            }
+            Statement::ExportNamedDeclaration { declaration, .. } => {
+                // If there's a declaration, generate it
+                if let Some(decl) = declaration {
+                    self.visit_statement(decl)?;
+                }
+            }
+            Statement::ExportAllDeclaration { .. } => {
+                // Re-exports are handled at module level
+            }
+            Statement::ImportDeclaration { .. } => {
+                // Imports are handled at module level
+            }
         }
         Ok(())
     }

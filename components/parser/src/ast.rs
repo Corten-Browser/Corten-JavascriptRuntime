@@ -227,6 +227,90 @@ pub enum Statement {
         /// Source location
         position: Option<SourcePosition>,
     },
+
+    /// Export default declaration
+    ExportDefaultDeclaration {
+        /// The declaration being exported (class, function, or expression)
+        declaration: Box<ExportDefaultDecl>,
+        /// Source location
+        position: Option<SourcePosition>,
+    },
+
+    /// Export named declaration
+    ExportNamedDeclaration {
+        /// The declaration being exported (optional if specifiers are provided)
+        declaration: Option<Box<Statement>>,
+        /// Export specifiers (for re-exports or named exports)
+        specifiers: Vec<ExportSpecifier>,
+        /// Source module (for re-exports)
+        source: Option<String>,
+        /// Source location
+        position: Option<SourcePosition>,
+    },
+
+    /// Export all declaration (export * from 'module')
+    ExportAllDeclaration {
+        /// Source module
+        source: String,
+        /// Exported name (for `export * as name from 'module'`)
+        exported: Option<String>,
+        /// Source location
+        position: Option<SourcePosition>,
+    },
+
+    /// Import declaration
+    ImportDeclaration {
+        /// Import specifiers
+        specifiers: Vec<ImportSpecifier>,
+        /// Source module
+        source: String,
+        /// Source location
+        position: Option<SourcePosition>,
+    },
+}
+
+/// Export default declaration value
+#[derive(Debug, Clone, PartialEq)]
+pub enum ExportDefaultDecl {
+    /// Class expression/declaration
+    Class {
+        name: Option<String>,
+        super_class: Option<Box<Expression>>,
+        body: Vec<ClassElement>,
+    },
+    /// Function expression/declaration
+    Function {
+        name: Option<String>,
+        params: Vec<Pattern>,
+        body: Vec<Statement>,
+        is_async: bool,
+        is_generator: bool,
+    },
+    /// Expression
+    Expression(Expression),
+}
+
+/// Export specifier
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExportSpecifier {
+    /// Local name
+    pub local: String,
+    /// Exported name
+    pub exported: String,
+}
+
+/// Import specifier
+#[derive(Debug, Clone, PartialEq)]
+pub enum ImportSpecifier {
+    /// Default import
+    Default(String),
+    /// Namespace import (import * as name)
+    Namespace(String),
+    /// Named import
+    Named {
+        local: String,
+        imported: String,
+    },
 }
 
 /// Switch case clause

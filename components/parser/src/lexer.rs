@@ -232,13 +232,17 @@ pub enum Token {
     /// These are NOT allowed in strict mode
     LegacyEscapeString(String),
     /// Template literal with no substitutions (no `${}`)
-    TemplateLiteral(String),
+    /// Second bool is true if contains invalid escape sequences (only valid in tagged templates)
+    TemplateLiteral(String, bool),
     /// Template head: from ` to first ${
-    TemplateHead(String),
+    /// Second bool is true if contains invalid escape sequences (only valid in tagged templates)
+    TemplateHead(String, bool),
     /// Template middle: from } to next ${
-    TemplateMiddle(String),
+    /// Second bool is true if contains invalid escape sequences (only valid in tagged templates)
+    TemplateMiddle(String, bool),
     /// Template tail: from } to closing `
-    TemplateTail(String),
+    /// Second bool is true if contains invalid escape sequences (only valid in tagged templates)
+    TemplateTail(String, bool),
     /// Regular expression literal (pattern, flags)
     RegExp(String, String),
     /// Keyword
@@ -804,18 +808,21 @@ impl<'a> Lexer<'a> {
     fn scan_template_literal(&mut self) -> Result<Token, JsError> {
         let start_pos = self.current_position();
         let mut value = String::new();
+        let mut has_invalid_escape = false;
 
         while !self.is_at_end() && self.peek() != '`' {
             if self.peek() == '$' && self.peek_next() == Some('{') {
                 // Template expression - return TemplateHead and stop
                 self.advance(); // $
                 self.advance(); // {
-                return Ok(Token::TemplateHead(value));
+                return Ok(Token::TemplateHead(value, has_invalid_escape));
             } else if self.peek() == '\\' {
                 self.advance();
                 if !self.is_at_end() {
                     let escaped = self.advance();
-                    self.scan_template_escape(escaped, &mut value, &start_pos)?;
+                    if self.scan_template_escape(escaped, &mut value, &start_pos)? {
+                        has_invalid_escape = true;
+                    }
                 }
             } else {
                 let ch = self.advance();
@@ -837,119 +844,109 @@ impl<'a> Lexer<'a> {
         }
 
         self.advance(); // Closing backtick
-        Ok(Token::TemplateLiteral(value))
+        Ok(Token::TemplateLiteral(value, has_invalid_escape))
     }
 
     /// Handle escape sequences in template literals with proper validation
-    fn scan_template_escape(&mut self, escaped: char, value: &mut String, start_pos: &SourcePosition) -> Result<(), JsError> {
+    /// Returns Ok(true) if an invalid escape sequence was encountered (valid only in tagged templates)
+    /// Returns Ok(false) if the escape was valid
+    fn scan_template_escape(&mut self, escaped: char, value: &mut String, _start_pos: &SourcePosition) -> Result<bool, JsError> {
         match escaped {
-            'n' => value.push('\n'),
-            't' => value.push('\t'),
-            'r' => value.push('\r'),
-            'b' => value.push('\u{0008}'),
-            'f' => value.push('\u{000C}'),
-            'v' => value.push('\u{000B}'),
+            'n' => { value.push('\n'); Ok(false) }
+            't' => { value.push('\t'); Ok(false) }
+            'r' => { value.push('\r'); Ok(false) }
+            'b' => { value.push('\u{0008}'); Ok(false) }
+            'f' => { value.push('\u{000C}'); Ok(false) }
+            'v' => { value.push('\u{000B}'); Ok(false) }
             '0' if self.is_at_end() || !self.peek().is_ascii_digit() => {
                 value.push('\0');
+                Ok(false)
             }
-            '0'..='7' => {
-                // Legacy octal escapes are NOT allowed in template literals
-                return Err(JsError {
-                    kind: ErrorKind::SyntaxError,
-                    message: "Octal escape sequences are not allowed in template literals".to_string(),
-                    stack: vec![],
-                    source_position: Some(start_pos.clone()),
-                });
-            }
-            '8' | '9' => {
-                // \8 and \9 are NOT allowed in template literals
-                return Err(JsError {
-                    kind: ErrorKind::SyntaxError,
-                    message: format!("\\{} is not allowed in template literals", escaped),
-                    stack: vec![],
-                    source_position: Some(start_pos.clone()),
-                });
+            '0'..='9' => {
+                // Legacy octal escapes (\0-\7) or \8, \9 - invalid in template literals
+                // But allowed in tagged templates with undefined cooked value
+                // Don't consume additional digits - just mark as invalid
+                value.push('\\');
+                value.push(escaped);
+                Ok(true) // Mark as invalid escape
             }
             'x' => {
                 // Hex escape: \xHH (exactly 2 hex digits required)
-                if self.is_at_end() || !self.peek().is_ascii_hexdigit() {
-                    return Err(JsError {
-                        kind: ErrorKind::SyntaxError,
-                        message: "Invalid hexadecimal escape sequence".to_string(),
-                        stack: vec![],
-                        source_position: Some(start_pos.clone()),
-                    });
+                // Stop at end, non-hex, or template terminator (backtick)
+                if self.is_at_end() || !self.peek().is_ascii_hexdigit() || self.peek() == '`' {
+                    value.push('\\');
+                    value.push('x');
+                    return Ok(true); // Invalid escape
                 }
                 let h1 = self.advance();
-                if self.is_at_end() || !self.peek().is_ascii_hexdigit() {
-                    return Err(JsError {
-                        kind: ErrorKind::SyntaxError,
-                        message: "Invalid hexadecimal escape sequence".to_string(),
-                        stack: vec![],
-                        source_position: Some(start_pos.clone()),
-                    });
+                if self.is_at_end() || !self.peek().is_ascii_hexdigit() || self.peek() == '`' {
+                    value.push('\\');
+                    value.push('x');
+                    value.push(h1);
+                    return Ok(true); // Invalid escape
                 }
                 let h2 = self.advance();
                 let code = u8::from_str_radix(&format!("{}{}", h1, h2), 16).unwrap();
                 value.push(code as char);
+                Ok(false)
             }
             'u' => {
                 // Unicode escape: \uHHHH or \u{H...}
                 if self.is_at_end() {
-                    return Err(JsError {
-                        kind: ErrorKind::SyntaxError,
-                        message: "Invalid Unicode escape sequence".to_string(),
-                        stack: vec![],
-                        source_position: Some(start_pos.clone()),
-                    });
+                    value.push('\\');
+                    value.push('u');
+                    return Ok(true); // Invalid escape
                 }
                 if self.peek() == '{' {
                     // \u{H...} form
                     self.advance(); // consume {
                     let mut hex = String::new();
-                    while !self.is_at_end() && self.peek() != '}' {
-                        if !self.peek().is_ascii_hexdigit() {
-                            return Err(JsError {
-                                kind: ErrorKind::SyntaxError,
-                                message: "Invalid Unicode escape sequence".to_string(),
-                                stack: vec![],
-                                source_position: Some(start_pos.clone()),
-                            });
+                    let mut invalid = false;
+                    // Stop at }, end of input, or template terminator (backtick)
+                    while !self.is_at_end() && self.peek() != '}' && self.peek() != '`' {
+                        let ch = self.peek();
+                        if !ch.is_ascii_hexdigit() {
+                            invalid = true;
                         }
                         hex.push(self.advance());
                     }
-                    if self.is_at_end() || hex.is_empty() {
-                        return Err(JsError {
-                            kind: ErrorKind::SyntaxError,
-                            message: "Invalid Unicode escape sequence".to_string(),
-                            stack: vec![],
-                            source_position: Some(start_pos.clone()),
-                        });
+                    // Check if we stopped at something other than }
+                    let stopped_at_brace = !self.is_at_end() && self.peek() == '}';
+                    if !stopped_at_brace || hex.is_empty() || invalid {
+                        value.push('\\');
+                        value.push('u');
+                        value.push('{');
+                        value.push_str(&hex);
+                        if stopped_at_brace {
+                            self.advance();
+                            value.push('}');
+                        }
+                        return Ok(true); // Invalid escape
                     }
                     self.advance(); // consume }
                     let code = u32::from_str_radix(&hex, 16).unwrap_or(0x110000);
                     if code > 0x10FFFF {
-                        return Err(JsError {
-                            kind: ErrorKind::SyntaxError,
-                            message: "Invalid Unicode escape sequence".to_string(),
-                            stack: vec![],
-                            source_position: Some(start_pos.clone()),
-                        });
+                        value.push('\\');
+                        value.push('u');
+                        value.push('{');
+                        value.push_str(&hex);
+                        value.push('}');
+                        return Ok(true); // Invalid escape - out of bounds
                     }
                     if let Some(ch) = char::from_u32(code) {
                         value.push(ch);
                     }
+                    Ok(false)
                 } else {
                     // \uHHHH form (exactly 4 hex digits)
                     let mut hex = String::new();
                     for _ in 0..4 {
-                        if self.is_at_end() || !self.peek().is_ascii_hexdigit() {
-                            return Err(JsError {
-                                kind: ErrorKind::SyntaxError,
-                                message: "Invalid Unicode escape sequence".to_string(),
-                                stack: vec![],
-                                source_position: Some(start_pos.clone()),
-                            });
+                        // Stop at end, non-hex, or template terminator (backtick)
+                        if self.is_at_end() || !self.peek().is_ascii_hexdigit() || self.peek() == '`' {
+                            value.push('\\');
+                            value.push('u');
+                            value.push_str(&hex);
+                            return Ok(true); // Invalid escape
                         }
                         hex.push(self.advance());
                     }
@@ -957,15 +954,17 @@ impl<'a> Lexer<'a> {
                     if let Some(ch) = char::from_u32(code as u32) {
                         value.push(ch);
                     }
+                    Ok(false)
                 }
             }
-            '\\' => value.push('\\'),
-            '`' => value.push('`'),
-            '$' => value.push('$'),
+            '\\' => { value.push('\\'); Ok(false) }
+            '`' => { value.push('`'); Ok(false) }
+            '$' => { value.push('$'); Ok(false) }
             '\n' => {
                 // Line continuation
                 self.line += 1;
                 self.column = 1;
+                Ok(false)
             }
             '\r' => {
                 // Line continuation (CRLF or CR)
@@ -974,10 +973,10 @@ impl<'a> Lexer<'a> {
                 if !self.is_at_end() && self.peek() == '\n' {
                     self.advance();
                 }
+                Ok(false)
             }
-            _ => value.push(escaped),
+            _ => { value.push(escaped); Ok(false) }
         }
-        Ok(())
     }
 
     /// Scan the continuation of a template literal after an expression.
@@ -989,18 +988,21 @@ impl<'a> Lexer<'a> {
 
         let start_pos = self.current_position();
         let mut value = String::new();
+        let mut has_invalid_escape = false;
 
         while !self.is_at_end() && self.peek() != '`' {
             if self.peek() == '$' && self.peek_next() == Some('{') {
                 // Another template expression - return TemplateMiddle and stop
                 self.advance(); // $
                 self.advance(); // {
-                return Ok(Token::TemplateMiddle(value));
+                return Ok(Token::TemplateMiddle(value, has_invalid_escape));
             } else if self.peek() == '\\' {
                 self.advance();
                 if !self.is_at_end() {
                     let escaped = self.advance();
-                    self.scan_template_escape(escaped, &mut value, &start_pos)?;
+                    if self.scan_template_escape(escaped, &mut value, &start_pos)? {
+                        has_invalid_escape = true;
+                    }
                 }
             } else {
                 let ch = self.advance();
@@ -1022,7 +1024,7 @@ impl<'a> Lexer<'a> {
         }
 
         self.advance(); // Closing backtick
-        Ok(Token::TemplateTail(value))
+        Ok(Token::TemplateTail(value, has_invalid_escape))
     }
 
     /// Scan a regular expression literal.
@@ -1141,10 +1143,513 @@ impl<'a> Lexer<'a> {
             }
         }
 
+        // Validate the regex pattern
+        let has_unicode = flags.contains('u') || flags.contains('v');
+        self.validate_regexp_pattern(&pattern, has_unicode, &start_pos)?;
+
         let token = Token::RegExp(pattern, flags);
         // Don't set current_token - the caller will handle the token directly
         // and the next peek_token will scan fresh from the new position
         Ok(token)
+    }
+
+    /// Validate a regular expression pattern according to ES spec
+    /// This checks for common syntax errors that make the pattern invalid
+    fn validate_regexp_pattern(&self, pattern: &str, unicode_mode: bool, pos: &SourcePosition) -> Result<(), JsError> {
+        let chars: Vec<char> = pattern.chars().collect();
+        let len = chars.len();
+        let mut i = 0;
+
+        // First pass: count capture groups (for backreference validation)
+        let mut capture_count = 0;
+        let mut j = 0;
+        let mut in_class_pre = false;
+        while j < len {
+            if in_class_pre {
+                if chars[j] == '\\' && j + 1 < len {
+                    j += 2;
+                    continue;
+                }
+                if chars[j] == ']' {
+                    in_class_pre = false;
+                }
+                j += 1;
+                continue;
+            }
+            if chars[j] == '\\' && j + 1 < len {
+                j += 2;
+                continue;
+            }
+            if chars[j] == '[' {
+                in_class_pre = true;
+                j += 1;
+                continue;
+            }
+            if chars[j] == '(' && j + 1 < len {
+                // Check if it's a capturing group (not (?:...) or (?=...) etc)
+                if chars[j + 1] != '?' {
+                    capture_count += 1;
+                } else if j + 3 < len && chars[j + 1] == '?' && chars[j + 2] == '<' {
+                    // Named group (?<name>...) is a capturing group
+                    // but (?<= and (?<! are lookbehinds
+                    if chars[j + 3] != '=' && chars[j + 3] != '!' {
+                        capture_count += 1;
+                    }
+                }
+            }
+            j += 1;
+        }
+
+        // Track if we've seen an atom that can be quantified
+        let mut can_quantify = false;
+        // Track depth of groups
+        let mut group_depth = 0;
+        // Track if we're in a character class
+        let mut in_class = false;
+
+        while i < len {
+            let ch = chars[i];
+
+            if in_class {
+                // Inside character class [...]
+                if ch == '\\' && i + 1 < len {
+                    let escaped = chars[i + 1];
+                    // In unicode mode, validate escape sequences
+                    if unicode_mode {
+                        // \c must be followed by a letter (A-Z or a-z)
+                        if escaped == 'c' {
+                            if i + 2 >= len || !chars[i + 2].is_ascii_alphabetic() {
+                                return Err(JsError {
+                                    kind: ErrorKind::SyntaxError,
+                                    message: "Invalid regular expression: invalid class escape".to_string(),
+                                    stack: vec![],
+                                    source_position: Some(pos.clone()),
+                                });
+                            }
+                            i += 3;
+                            continue;
+                        }
+                        // Character class escapes (\d, \D, \s, \S, \w, \W) represent multiple characters
+                        // In unicode mode, they cannot be used as range endpoints
+                        let is_class_escape = matches!(escaped, 'd' | 'D' | 's' | 'S' | 'w' | 'W');
+                        if is_class_escape {
+                            // Check if this is part of a range (preceded by x- or followed by -x)
+                            // Look back: check if previous char was '-' (and not first char after '[')
+                            let preceded_by_dash = i >= 2 && chars[i - 1] == '-' &&
+                                // Make sure it's not just `[-` at start of class
+                                !(i == 2 && chars[i - 2] == '[') &&
+                                !(i == 3 && chars[i - 3] == '[' && chars[i - 2] == '^');
+
+                            // Look ahead: check if followed by '-' and another char
+                            let followed_by_range = i + 2 < len && chars[i + 2] == '-' &&
+                                i + 3 < len && chars[i + 3] != ']';
+
+                            if preceded_by_dash || followed_by_range {
+                                return Err(JsError {
+                                    kind: ErrorKind::SyntaxError,
+                                    message: "Invalid regular expression: invalid class range".to_string(),
+                                    stack: vec![],
+                                    source_position: Some(pos.clone()),
+                                });
+                            }
+                            i += 2;
+                            continue;
+                        }
+                    }
+                    i += 2;
+                    continue;
+                } else if ch == ']' {
+                    in_class = false;
+                    can_quantify = true;
+                    i += 1;
+                    continue;
+                }
+                i += 1;
+                continue;
+            }
+
+            match ch {
+                // Quantifiers - must follow an atom
+                '?' | '*' | '+' => {
+                    if !can_quantify {
+                        return Err(JsError {
+                            kind: ErrorKind::SyntaxError,
+                            message: "Invalid regular expression: nothing to repeat".to_string(),
+                            stack: vec![],
+                            source_position: Some(pos.clone()),
+                        });
+                    }
+                    // After quantifier, can't have another quantifier immediately
+                    // (except for lazy modifier which is handled below)
+                    i += 1;
+                    // Check for lazy modifier ?
+                    if i < len && chars[i] == '?' {
+                        i += 1;
+                    }
+                    can_quantify = false;
+                }
+                // Braced quantifier {n} {n,} {n,m}
+                '{' => {
+                    // Check if this is a valid braced quantifier
+                    let start = i;
+                    i += 1;
+                    let mut has_digits = false;
+                    while i < len && chars[i].is_ascii_digit() {
+                        has_digits = true;
+                        i += 1;
+                    }
+                    if i < len && chars[i] == ',' {
+                        i += 1;
+                        while i < len && chars[i].is_ascii_digit() {
+                            i += 1;
+                        }
+                    }
+                    if i < len && chars[i] == '}' && has_digits {
+                        // Valid braced quantifier syntax - but must follow an atom
+                        if !can_quantify {
+                            return Err(JsError {
+                                kind: ErrorKind::SyntaxError,
+                                message: "Invalid regular expression: nothing to repeat".to_string(),
+                                stack: vec![],
+                                source_position: Some(pos.clone()),
+                            });
+                        }
+                        i += 1;
+                        // Check for lazy modifier ?
+                        if i < len && chars[i] == '?' {
+                            i += 1;
+                        }
+                        can_quantify = false;
+                    } else {
+                        // Not a valid braced quantifier
+                        // In unicode mode, unescaped { is an error
+                        if unicode_mode {
+                            return Err(JsError {
+                                kind: ErrorKind::SyntaxError,
+                                message: "Invalid regular expression: incomplete quantifier".to_string(),
+                                stack: vec![],
+                                source_position: Some(pos.clone()),
+                            });
+                        }
+                        // In non-unicode mode, treat { as literal
+                        i = start + 1;
+                        can_quantify = true;
+                    }
+                }
+                // Group start
+                '(' => {
+                    i += 1;
+                    group_depth += 1;
+                    can_quantify = false;
+                    // Check for lookahead/lookbehind
+                    if i < len && chars[i] == '?' {
+                        i += 1;
+                        if i < len {
+                            let next = chars[i];
+                            if next == '=' || next == '!' {
+                                // Lookahead (?=...) or (?!...)
+                                // In unicode mode, these cannot be quantified
+                                if unicode_mode {
+                                    i += 1;
+                                    // Parse until matching )
+                                    let mut depth = 1;
+                                    while i < len && depth > 0 {
+                                        if chars[i] == '(' {
+                                            depth += 1;
+                                        } else if chars[i] == ')' {
+                                            depth -= 1;
+                                        } else if chars[i] == '\\' && i + 1 < len {
+                                            i += 1;
+                                        }
+                                        i += 1;
+                                    }
+                                    group_depth -= 1;
+                                    // Check for quantifier after lookahead (invalid in unicode)
+                                    if i < len && matches!(chars[i], '?' | '*' | '+') {
+                                        return Err(JsError {
+                                            kind: ErrorKind::SyntaxError,
+                                            message: "Invalid regular expression: nothing to repeat".to_string(),
+                                            stack: vec![],
+                                            source_position: Some(pos.clone()),
+                                        });
+                                    }
+                                    if i < len && chars[i] == '{' {
+                                        let mut j = i + 1;
+                                        while j < len && chars[j].is_ascii_digit() {
+                                            j += 1;
+                                        }
+                                        if j < len && (chars[j] == '}' || chars[j] == ',') {
+                                            return Err(JsError {
+                                                kind: ErrorKind::SyntaxError,
+                                                message: "Invalid regular expression: nothing to repeat".to_string(),
+                                                stack: vec![],
+                                                source_position: Some(pos.clone()),
+                                            });
+                                        }
+                                    }
+                                    can_quantify = false;
+                                    continue;
+                                }
+                                // Non-unicode mode: lookahead can be quantified (Annex B)
+                                i += 1;
+                            } else if next == ':' {
+                                // Non-capturing group (?:...)
+                                i += 1;
+                            } else if next == '<' && i + 1 < len {
+                                // Lookbehind or named group
+                                let after = chars[i + 1];
+                                if after == '=' || after == '!' {
+                                    // Lookbehind - these cannot be quantified
+                                    i += 2;
+                                    // Parse until matching ) and mark as non-quantifiable
+                                    let mut depth = 1;
+                                    while i < len && depth > 0 {
+                                        if chars[i] == '(' {
+                                            depth += 1;
+                                        } else if chars[i] == ')' {
+                                            depth -= 1;
+                                        } else if chars[i] == '\\' && i + 1 < len {
+                                            i += 1;
+                                        }
+                                        i += 1;
+                                    }
+                                    group_depth -= 1;
+                                    // After lookbehind, check if there's a quantifier (which is invalid)
+                                    if i < len && matches!(chars[i], '?' | '*' | '+') {
+                                        return Err(JsError {
+                                            kind: ErrorKind::SyntaxError,
+                                            message: "Invalid regular expression: nothing to repeat".to_string(),
+                                            stack: vec![],
+                                            source_position: Some(pos.clone()),
+                                        });
+                                    }
+                                    if i < len && chars[i] == '{' {
+                                        // Check for braced quantifier
+                                        let mut j = i + 1;
+                                        while j < len && chars[j].is_ascii_digit() {
+                                            j += 1;
+                                        }
+                                        if j < len && (chars[j] == '}' || chars[j] == ',') {
+                                            return Err(JsError {
+                                                kind: ErrorKind::SyntaxError,
+                                                message: "Invalid regular expression: nothing to repeat".to_string(),
+                                                stack: vec![],
+                                                source_position: Some(pos.clone()),
+                                            });
+                                        }
+                                    }
+                                    can_quantify = false;
+                                    continue;
+                                } else {
+                                    // Named capturing group (?<name>...)
+                                    i += 1;
+                                }
+                            }
+                        }
+                    }
+                }
+                // Group end
+                ')' => {
+                    i += 1;
+                    if group_depth > 0 {
+                        group_depth -= 1;
+                    }
+                    can_quantify = true;
+                }
+                // Character class start
+                '[' => {
+                    in_class = true;
+                    i += 1;
+                    // Handle negation
+                    if i < len && chars[i] == '^' {
+                        i += 1;
+                    }
+                }
+                // Escape sequence
+                '\\' => {
+                    if i + 1 >= len {
+                        return Err(JsError {
+                            kind: ErrorKind::SyntaxError,
+                            message: "Invalid regular expression: trailing backslash".to_string(),
+                            stack: vec![],
+                            source_position: Some(pos.clone()),
+                        });
+                    }
+                    let escaped = chars[i + 1];
+
+                    // In unicode mode, validate escape sequences
+                    if unicode_mode {
+                        // \c must be followed by a letter
+                        if escaped == 'c' {
+                            if i + 2 >= len || !chars[i + 2].is_ascii_alphabetic() {
+                                return Err(JsError {
+                                    kind: ErrorKind::SyntaxError,
+                                    message: "Invalid regular expression: invalid escape sequence".to_string(),
+                                    stack: vec![],
+                                    source_position: Some(pos.clone()),
+                                });
+                            }
+                            i += 3;
+                            can_quantify = true;
+                            continue;
+                        }
+
+                        // Handle \u unicode escapes
+                        if escaped == 'u' {
+                            i += 2; // Skip \u
+                            if i < len && chars[i] == '{' {
+                                // Braced unicode escape \u{hex}
+                                i += 1; // Skip {
+                                let mut value: u32 = 0;
+                                let mut has_digits = false;
+                                while i < len && chars[i] != '}' {
+                                    let digit_char = chars[i];
+                                    if let Some(digit) = digit_char.to_digit(16) {
+                                        has_digits = true;
+                                        value = value.saturating_mul(16).saturating_add(digit);
+                                        i += 1;
+                                    } else {
+                                        // Non-hex character in \u{...}
+                                        return Err(JsError {
+                                            kind: ErrorKind::SyntaxError,
+                                            message: "Invalid regular expression: invalid unicode escape".to_string(),
+                                            stack: vec![],
+                                            source_position: Some(pos.clone()),
+                                        });
+                                    }
+                                }
+                                if !has_digits || i >= len || chars[i] != '}' {
+                                    return Err(JsError {
+                                        kind: ErrorKind::SyntaxError,
+                                        message: "Invalid regular expression: invalid unicode escape".to_string(),
+                                        stack: vec![],
+                                        source_position: Some(pos.clone()),
+                                    });
+                                }
+                                // Check bounds: must be <= 0x10FFFF
+                                if value > 0x10FFFF {
+                                    return Err(JsError {
+                                        kind: ErrorKind::SyntaxError,
+                                        message: "Invalid regular expression: invalid unicode escape".to_string(),
+                                        stack: vec![],
+                                        source_position: Some(pos.clone()),
+                                    });
+                                }
+                                i += 1; // Skip }
+                            } else {
+                                // 4-digit unicode escape \uNNNN
+                                for _ in 0..4 {
+                                    if i >= len || !chars[i].is_ascii_hexdigit() {
+                                        return Err(JsError {
+                                            kind: ErrorKind::SyntaxError,
+                                            message: "Invalid regular expression: invalid unicode escape".to_string(),
+                                            stack: vec![],
+                                            source_position: Some(pos.clone()),
+                                        });
+                                    }
+                                    i += 1;
+                                }
+                            }
+                            can_quantify = true;
+                            continue;
+                        }
+
+                        // Handle \x hex escapes
+                        if escaped == 'x' {
+                            i += 2; // Skip \x
+                            for _ in 0..2 {
+                                if i >= len || !chars[i].is_ascii_hexdigit() {
+                                    return Err(JsError {
+                                        kind: ErrorKind::SyntaxError,
+                                        message: "Invalid regular expression: invalid hex escape".to_string(),
+                                        stack: vec![],
+                                        source_position: Some(pos.clone()),
+                                    });
+                                }
+                                i += 1;
+                            }
+                            can_quantify = true;
+                            continue;
+                        }
+
+                        // In unicode mode, \1-\9 are backreferences and require capture groups
+                        // They must refer to a valid capture group number
+                        if matches!(escaped, '1'..='9') {
+                            // Parse the full decimal escape (could be \1, \10, \123, etc.)
+                            let mut backref_num: u32 = (escaped as u32) - ('0' as u32);
+                            let mut k = i + 2;
+                            while k < len && chars[k].is_ascii_digit() {
+                                backref_num = backref_num * 10 + ((chars[k] as u32) - ('0' as u32));
+                                k += 1;
+                            }
+                            // In unicode mode, the backreference must refer to a valid group
+                            if backref_num as usize > capture_count {
+                                return Err(JsError {
+                                    kind: ErrorKind::SyntaxError,
+                                    message: "Invalid regular expression: invalid escape sequence".to_string(),
+                                    stack: vec![],
+                                    source_position: Some(pos.clone()),
+                                });
+                            }
+                            i = k;
+                            can_quantify = true;
+                            continue;
+                        }
+
+                        // In unicode mode, validate identity escapes
+                        // Only syntax characters, /, and valid escape chars are allowed
+                        let is_valid_escape = matches!(escaped,
+                            // Syntax characters
+                            '^' | '$' | '\\' | '.' | '*' | '+' | '?' | '(' | ')' | '[' | ']' | '{' | '}' | '|' |
+                            // Forward slash
+                            '/' |
+                            // Character class escapes
+                            'd' | 'D' | 's' | 'S' | 'w' | 'W' |
+                            // Unicode property escapes
+                            'p' | 'P' |
+                            // Standard escapes
+                            'b' | 'B' | 'n' | 'r' | 't' | 'f' | 'v' | '0' |
+                            // Named group backreference
+                            'k'
+                        );
+
+                        if !is_valid_escape {
+                            return Err(JsError {
+                                kind: ErrorKind::SyntaxError,
+                                message: "Invalid regular expression: invalid escape sequence".to_string(),
+                                stack: vec![],
+                                source_position: Some(pos.clone()),
+                            });
+                        }
+                    }
+
+                    i += 2;
+                    can_quantify = true;
+                }
+                // Alternation - resets quantifier state
+                '|' => {
+                    i += 1;
+                    can_quantify = false;
+                }
+                // Anchors - cannot be quantified
+                '^' | '$' => {
+                    i += 1;
+                    can_quantify = false;
+                }
+                // Dot and other atoms
+                '.' => {
+                    i += 1;
+                    can_quantify = true;
+                }
+                // Literal characters
+                _ => {
+                    i += 1;
+                    can_quantify = true;
+                }
+            }
+        }
+
+        Ok(())
     }
 
     fn scan_number(&mut self, first: char) -> Result<Token, JsError> {

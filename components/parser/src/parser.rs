@@ -385,6 +385,40 @@ impl<'a> Parser<'a> {
             Token::Keyword(Keyword::Try) => self.parse_try_statement(),
             Token::Keyword(Keyword::With) => self.parse_with_statement(),
             Token::Keyword(Keyword::Debugger) => self.parse_debugger_statement(),
+            Token::Keyword(Keyword::Export) => self.parse_export_declaration(),
+            Token::Keyword(Keyword::Import) => {
+                // Peek ahead to determine if this is:
+                // - import() dynamic import expression
+                // - import.meta or import.source() expression
+                // - import declaration (module only)
+                // Save position for lookahead
+                let saved_pos = self.lexer.position;
+                let saved_line = self.lexer.line;
+                let saved_col = self.lexer.column;
+                let saved_line_term = self.lexer.line_terminator_before_token;
+                let saved_token = self.lexer.current_token.clone();
+
+                self.lexer.next_token()?; // consume 'import'
+                let next = self.lexer.peek_token()?.clone();
+
+                // Restore position
+                self.lexer.position = saved_pos;
+                self.lexer.line = saved_line;
+                self.lexer.column = saved_col;
+                self.lexer.line_terminator_before_token = saved_line_term;
+                self.lexer.current_token = saved_token;
+
+                match next {
+                    Token::Punctuator(Punctuator::LParen) | Token::Punctuator(Punctuator::Dot) => {
+                        // Dynamic import expression or import.meta
+                        self.parse_expression_statement()
+                    }
+                    _ => {
+                        // Import declaration - check module mode
+                        self.parse_import_declaration()
+                    }
+                }
+            }
             Token::Punctuator(Punctuator::LBrace) => self.parse_block_statement(),
             Token::Punctuator(Punctuator::Semicolon) => {
                 self.lexer.next_token()?;
@@ -2263,6 +2297,318 @@ impl<'a> Parser<'a> {
         self.expect_keyword(Keyword::Debugger)?;
         self.consume_semicolon()?;
         Ok(Statement::DebuggerStatement { position: None })
+    }
+
+    fn parse_export_declaration(&mut self) -> Result<Statement, JsError> {
+        // Export is only allowed in module mode
+        if !self.is_module {
+            return Err(syntax_error(
+                "'export' is only allowed in module code",
+                self.last_position.clone(),
+            ));
+        }
+
+        self.expect_keyword(Keyword::Export)?;
+
+        // Check what follows export
+        let token = self.lexer.peek_token()?.clone();
+
+        match token {
+            Token::Keyword(Keyword::Default) => {
+                // export default ...
+                self.lexer.next_token()?; // consume 'default'
+                self.parse_export_default()
+            }
+            Token::Punctuator(Punctuator::Star) => {
+                // export * from 'module'
+                self.lexer.next_token()?; // consume '*'
+
+                // Check for export * as name
+                let exported = if self.check_identifier("as")? {
+                    self.lexer.next_token()?;
+                    Some(self.expect_identifier()?)
+                } else {
+                    None
+                };
+
+                self.expect_contextual_keyword("from")?;
+                let source = self.expect_string()?;
+                self.consume_semicolon()?;
+
+                Ok(Statement::ExportAllDeclaration {
+                    source,
+                    exported,
+                    position: None,
+                })
+            }
+            Token::Punctuator(Punctuator::LBrace) => {
+                // export { ... }
+                self.parse_export_named_specifiers()
+            }
+            Token::Keyword(Keyword::Var)
+            | Token::Keyword(Keyword::Let)
+            | Token::Keyword(Keyword::Const)
+            | Token::Keyword(Keyword::Function)
+            | Token::Keyword(Keyword::Class)
+            | Token::Keyword(Keyword::Async) => {
+                // export var/let/const/function/class/async
+                let declaration = self.parse_statement()?;
+                Ok(Statement::ExportNamedDeclaration {
+                    declaration: Some(Box::new(declaration)),
+                    specifiers: vec![],
+                    source: None,
+                    position: None,
+                })
+            }
+            _ => Err(syntax_error("Unexpected token after export", self.last_position.clone())),
+        }
+    }
+
+    fn parse_export_default(&mut self) -> Result<Statement, JsError> {
+        let token = self.lexer.peek_token()?.clone();
+
+        let declaration = match token {
+            Token::Keyword(Keyword::Class) => {
+                // export default class [name] { ... }
+                self.lexer.next_token()?; // consume 'class'
+
+                // Name is optional for default exports
+                let name = if let Token::Identifier(n, _) = self.lexer.peek_token()? {
+                    let name = n.clone();
+                    self.lexer.next_token()?;
+                    Some(name)
+                } else {
+                    None
+                };
+
+                // Parse extends
+                let super_class = if self.check_keyword(Keyword::Extends)? {
+                    self.lexer.next_token()?;
+                    Some(Box::new(self.parse_left_hand_side_expression()?))
+                } else {
+                    None
+                };
+
+                // Parse class body
+                let body = self.parse_class_body()?;
+
+                crate::ast::ExportDefaultDecl::Class {
+                    name,
+                    super_class,
+                    body,
+                }
+            }
+            Token::Keyword(Keyword::Function) => {
+                // export default function [name](...) { ... }
+                self.lexer.next_token()?; // consume 'function'
+
+                let is_generator = self.check_punctuator(Punctuator::Star)?;
+                if is_generator {
+                    self.lexer.next_token()?;
+                }
+
+                // Name is optional for default exports
+                let name = if let Token::Identifier(n, _) = self.lexer.peek_token()? {
+                    let name = n.clone();
+                    self.lexer.next_token()?;
+                    Some(name)
+                } else {
+                    None
+                };
+
+                let params = self.parse_parameters()?;
+
+                let prev_yield = self.in_generator;
+                self.in_generator = is_generator;
+
+                let body = self.parse_function_body()?;
+
+                self.in_generator = prev_yield;
+
+                crate::ast::ExportDefaultDecl::Function {
+                    name,
+                    params,
+                    body,
+                    is_async: false,
+                    is_generator,
+                }
+            }
+            Token::Keyword(Keyword::Async) => {
+                // export default async function [name](...) { ... }
+                self.lexer.next_token()?; // consume 'async'
+                self.expect_keyword(Keyword::Function)?;
+
+                let is_generator = self.check_punctuator(Punctuator::Star)?;
+                if is_generator {
+                    self.lexer.next_token()?;
+                }
+
+                // Name is optional
+                let name = if let Token::Identifier(n, _) = self.lexer.peek_token()? {
+                    let name = n.clone();
+                    self.lexer.next_token()?;
+                    Some(name)
+                } else {
+                    None
+                };
+
+                let params = self.parse_parameters()?;
+
+                let prev_async = self.in_async;
+                let prev_yield = self.in_generator;
+                self.in_async = true;
+                self.in_generator = is_generator;
+
+                let body = self.parse_function_body()?;
+
+                self.in_async = prev_async;
+                self.in_generator = prev_yield;
+
+                crate::ast::ExportDefaultDecl::Function {
+                    name,
+                    params,
+                    body,
+                    is_async: true,
+                    is_generator,
+                }
+            }
+            _ => {
+                // export default expression
+                let expr = self.parse_assignment_expression()?;
+                self.consume_semicolon()?;
+                crate::ast::ExportDefaultDecl::Expression(expr)
+            }
+        };
+
+        Ok(Statement::ExportDefaultDeclaration {
+            declaration: Box::new(declaration),
+            position: None,
+        })
+    }
+
+    fn parse_export_named_specifiers(&mut self) -> Result<Statement, JsError> {
+        self.expect_punctuator(Punctuator::LBrace)?;
+
+        let mut specifiers = Vec::new();
+
+        while !self.check_punctuator(Punctuator::RBrace)? {
+            let local = self.expect_identifier()?;
+            let exported = if self.check_identifier("as")? {
+                self.lexer.next_token()?;
+                self.expect_identifier()?
+            } else {
+                local.clone()
+            };
+
+            specifiers.push(crate::ast::ExportSpecifier { local, exported });
+
+            if !self.check_punctuator(Punctuator::RBrace)? {
+                self.expect_punctuator(Punctuator::Comma)?;
+            }
+        }
+
+        self.expect_punctuator(Punctuator::RBrace)?;
+
+        // Check for re-export: from 'module'
+        let source = if self.check_identifier("from")? {
+            self.lexer.next_token()?;
+            Some(self.expect_string()?)
+        } else {
+            None
+        };
+
+        self.consume_semicolon()?;
+
+        Ok(Statement::ExportNamedDeclaration {
+            declaration: None,
+            specifiers,
+            source,
+            position: None,
+        })
+    }
+
+    fn parse_import_declaration(&mut self) -> Result<Statement, JsError> {
+        // Import declaration is only allowed in module mode
+        if !self.is_module {
+            return Err(syntax_error(
+                "'import' declaration is only allowed in module code",
+                self.last_position.clone(),
+            ));
+        }
+
+        self.expect_keyword(Keyword::Import)?;
+
+        let mut specifiers = Vec::new();
+
+        // import 'module' (side-effect only import)
+        if let Token::String(source) = self.lexer.peek_token()?.clone() {
+            self.lexer.next_token()?;
+            self.consume_semicolon()?;
+            return Ok(Statement::ImportDeclaration {
+                specifiers: vec![],
+                source,
+                position: None,
+            });
+        }
+
+        // Check for default import: import name from 'module'
+        if let Token::Identifier(name, _) = self.lexer.peek_token()?.clone() {
+            self.lexer.next_token()?;
+            specifiers.push(crate::ast::ImportSpecifier::Default(name));
+
+            // Check if there are more imports: import name, { ... } or import name, * as ns
+            if self.check_punctuator(Punctuator::Comma)? {
+                self.lexer.next_token()?;
+            }
+        }
+
+        // Check for namespace import: import * as name
+        if self.check_punctuator(Punctuator::Star)? {
+            self.lexer.next_token()?;
+            self.expect_contextual_keyword("as")?;
+            let name = self.expect_identifier()?;
+            specifiers.push(crate::ast::ImportSpecifier::Namespace(name));
+        }
+        // Check for named imports: import { ... }
+        else if self.check_punctuator(Punctuator::LBrace)? {
+            self.lexer.next_token()?;
+
+            while !self.check_punctuator(Punctuator::RBrace)? {
+                let imported = self.expect_identifier()?;
+                let local = if self.check_identifier("as")? {
+                    self.lexer.next_token()?;
+                    self.expect_identifier()?
+                } else {
+                    imported.clone()
+                };
+
+                specifiers.push(crate::ast::ImportSpecifier::Named { local, imported });
+
+                if !self.check_punctuator(Punctuator::RBrace)? {
+                    self.expect_punctuator(Punctuator::Comma)?;
+                }
+            }
+
+            self.expect_punctuator(Punctuator::RBrace)?;
+        }
+
+        self.expect_contextual_keyword("from")?;
+        let source = self.expect_string()?;
+        self.consume_semicolon()?;
+
+        Ok(Statement::ImportDeclaration {
+            specifiers,
+            source,
+            position: None,
+        })
+    }
+
+    fn expect_string(&mut self) -> Result<String, JsError> {
+        match self.lexer.next_token()? {
+            Token::String(s) => Ok(s),
+            Token::LegacyEscapeString(s) => Ok(s),
+            _ => Err(syntax_error("Expected string literal", self.last_position.clone())),
+        }
     }
 
     fn parse_for_statement(&mut self) -> Result<Statement, JsError> {
@@ -4434,7 +4780,7 @@ impl<'a> Parser<'a> {
                     optional: false,
                     position: None,
                 };
-            } else if matches!(self.lexer.peek_token()?, Token::TemplateLiteral(_)) {
+            } else if matches!(self.lexer.peek_token()?, Token::TemplateLiteral(_, _)) {
                 // Tagged template literal: tag`template`
                 // Template literals are NOT allowed after optional chaining
                 if in_optional_chain {
@@ -4443,7 +4789,8 @@ impl<'a> Parser<'a> {
                         self.last_position.clone(),
                     ));
                 }
-                if let Token::TemplateLiteral(s) = self.lexer.next_token()? {
+                if let Token::TemplateLiteral(s, _has_invalid_escape) = self.lexer.next_token()? {
+                    // Tagged templates allow invalid escape sequences (cooked value is undefined)
                     let quasi = Expression::TemplateLiteral {
                         quasis: vec![TemplateElement {
                             raw: s.clone(),
@@ -4459,7 +4806,7 @@ impl<'a> Parser<'a> {
                         position: None,
                     };
                 }
-            } else if matches!(self.lexer.peek_token()?, Token::TemplateHead(_)) {
+            } else if matches!(self.lexer.peek_token()?, Token::TemplateHead(_, _)) {
                 // Tagged template literal with expressions: tag`hello ${x}!`
                 // Template literals are NOT allowed after optional chaining
                 if in_optional_chain {
@@ -4468,8 +4815,9 @@ impl<'a> Parser<'a> {
                         self.last_position.clone(),
                     ));
                 }
-                if let Token::TemplateHead(s) = self.lexer.next_token()? {
-                    let quasi = self.parse_template_literal_with_expressions(s)?;
+                if let Token::TemplateHead(s, _has_invalid_escape) = self.lexer.next_token()? {
+                    // Tagged templates allow invalid escape sequences
+                    let quasi = self.parse_template_literal_with_expressions_tagged(s)?;
                     expr = Expression::TaggedTemplateExpression {
                         tag: Box::new(expr),
                         quasi: Box::new(quasi),
@@ -4699,8 +5047,15 @@ impl<'a> Parser<'a> {
                     position: None,
                 })
             }
-            Token::TemplateLiteral(s) => {
+            Token::TemplateLiteral(s, has_invalid_escape) => {
                 self.lexer.next_token()?;
+                // Untagged template literals must not have invalid escape sequences
+                if has_invalid_escape {
+                    return Err(syntax_error(
+                        "Invalid escape sequence in template literal",
+                        self.last_position.clone(),
+                    ));
+                }
                 Ok(Expression::TemplateLiteral {
                     quasis: vec![TemplateElement {
                         raw: s.clone(),
@@ -4711,8 +5066,15 @@ impl<'a> Parser<'a> {
                     position: None,
                 })
             }
-            Token::TemplateHead(s) => {
+            Token::TemplateHead(s, has_invalid_escape) => {
                 self.lexer.next_token()?;
+                // Untagged template literals must not have invalid escape sequences
+                if has_invalid_escape {
+                    return Err(syntax_error(
+                        "Invalid escape sequence in template literal",
+                        self.last_position.clone(),
+                    ));
+                }
                 self.parse_template_literal_with_expressions(s)
             }
             Token::Keyword(Keyword::True) => {
@@ -4931,6 +5293,7 @@ impl<'a> Parser<'a> {
     }
 
     /// Parse a template literal with expressions (starting from after the head was consumed)
+    /// For untagged templates - errors on invalid escape sequences
     fn parse_template_literal_with_expressions(
         &mut self,
         head: String,
@@ -4957,7 +5320,14 @@ impl<'a> Parser<'a> {
             let next_token = self.lexer.scan_template_middle()?;
 
             match next_token {
-                Token::TemplateMiddle(s) => {
+                Token::TemplateMiddle(s, has_invalid_escape) => {
+                    // Untagged templates must not have invalid escapes
+                    if has_invalid_escape {
+                        return Err(syntax_error(
+                            "Invalid escape sequence in template literal",
+                            self.last_position.clone(),
+                        ));
+                    }
                     // More expressions to come
                     quasis.push(TemplateElement {
                         raw: s.clone(),
@@ -4965,8 +5335,76 @@ impl<'a> Parser<'a> {
                         tail: false,
                     });
                 }
-                Token::TemplateTail(s) => {
+                Token::TemplateTail(s, has_invalid_escape) => {
+                    // Untagged templates must not have invalid escapes
+                    if has_invalid_escape {
+                        return Err(syntax_error(
+                            "Invalid escape sequence in template literal",
+                            self.last_position.clone(),
+                        ));
+                    }
                     // End of template
+                    quasis.push(TemplateElement {
+                        raw: s.clone(),
+                        cooked: s,
+                        tail: true,
+                    });
+                    break;
+                }
+                _ => {
+                    return Err(syntax_error(
+                        "Expected template continuation",
+                        self.last_position.clone(),
+                    ));
+                }
+            }
+        }
+
+        Ok(Expression::TemplateLiteral {
+            quasis,
+            expressions,
+            position: None,
+        })
+    }
+
+    /// Parse a template literal with expressions for tagged templates
+    /// Tagged templates allow invalid escape sequences (cooked value is undefined)
+    fn parse_template_literal_with_expressions_tagged(
+        &mut self,
+        head: String,
+    ) -> Result<Expression, JsError> {
+        let mut quasis = Vec::new();
+        let mut expressions = Vec::new();
+
+        // Add the head as the first quasi
+        quasis.push(TemplateElement {
+            raw: head.clone(),
+            cooked: head,
+            tail: false,
+        });
+
+        loop {
+            // Parse the expression inside ${ }
+            let expr = self.parse_expression()?;
+            expressions.push(expr);
+
+            // Expect and consume the closing }
+            self.expect_punctuator(Punctuator::RBrace)?;
+
+            // After consuming }, continue scanning the template
+            let next_token = self.lexer.scan_template_middle()?;
+
+            match next_token {
+                Token::TemplateMiddle(s, _has_invalid_escape) => {
+                    // Tagged templates allow invalid escapes
+                    quasis.push(TemplateElement {
+                        raw: s.clone(),
+                        cooked: s,
+                        tail: false,
+                    });
+                }
+                Token::TemplateTail(s, _has_invalid_escape) => {
+                    // Tagged templates allow invalid escapes
                     quasis.push(TemplateElement {
                         raw: s.clone(),
                         cooked: s,
@@ -6349,6 +6787,17 @@ impl<'a> Parser<'a> {
 
     fn check_identifier(&mut self, name: &str) -> Result<bool, JsError> {
         Ok(matches!(self.lexer.peek_token()?, Token::Identifier(ref x, _) if x == name))
+    }
+
+    /// Expect a contextual keyword (identifier with a specific name)
+    fn expect_contextual_keyword(&mut self, name: &str) -> Result<(), JsError> {
+        if let Token::Identifier(ref id, _) = self.lexer.peek_token()?.clone() {
+            if id == name {
+                self.lexer.next_token()?;
+                return Ok(());
+            }
+        }
+        Err(syntax_error(&format!("Expected '{}'", name), self.last_position.clone()))
     }
 
     /// Check for a contextual keyword that must NOT contain Unicode escapes
