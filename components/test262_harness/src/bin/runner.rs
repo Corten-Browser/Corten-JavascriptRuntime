@@ -26,6 +26,8 @@ struct Stats {
 struct TestMetadata {
     is_negative_parse: bool,
     is_module: bool,
+    is_only_strict: bool,
+    is_no_strict: bool,
     features: Vec<String>,
     expected_error: Option<String>,
 }
@@ -34,6 +36,8 @@ impl TestMetadata {
     fn parse(source: &str) -> Self {
         let mut is_negative_parse = false;
         let mut is_module = false;
+        let mut is_only_strict = false;
+        let mut is_no_strict = false;
         let mut features = Vec::new();
         let mut expected_error = None;
 
@@ -58,16 +62,38 @@ impl TestMetadata {
                     is_module = true;
                 }
 
+                // Check for strict mode flags
+                if yaml.contains("onlyStrict") {
+                    is_only_strict = true;
+                }
+                if yaml.contains("noStrict") {
+                    is_no_strict = true;
+                }
+
                 // Extract features
                 let mut in_features = false;
                 for line in yaml.lines() {
-                    if line.trim().starts_with("features:") {
-                        in_features = true;
+                    let trimmed = line.trim();
+                    if trimmed.starts_with("features:") {
+                        // Check for inline array syntax: features: [class, decorators]
+                        let rest = trimmed["features:".len()..].trim();
+                        if rest.starts_with('[') && rest.ends_with(']') {
+                            // Parse inline array
+                            let inner = &rest[1..rest.len()-1];
+                            for item in inner.split(',') {
+                                let feature = item.trim();
+                                if !feature.is_empty() {
+                                    features.push(feature.to_string());
+                                }
+                            }
+                        } else {
+                            in_features = true;
+                        }
                         continue;
                     }
                     if in_features {
-                        if line.trim().starts_with("- ") {
-                            features.push(line.trim()[2..].to_string());
+                        if trimmed.starts_with("- ") {
+                            features.push(trimmed[2..].to_string());
                         } else if !line.starts_with(' ') && !line.starts_with('\t') {
                             in_features = false;
                         }
@@ -79,6 +105,8 @@ impl TestMetadata {
         TestMetadata {
             is_negative_parse,
             is_module,
+            is_only_strict,
+            is_no_strict,
             features,
             expected_error,
         }
@@ -238,6 +266,13 @@ enum TestResult {
 }
 
 fn run_single_test(path: &Path, execute: bool) -> TestResult {
+    // Skip fixture files - they are helper files for other tests, not standalone tests
+    if let Some(file_name) = path.file_name().and_then(|n| n.to_str()) {
+        if file_name.ends_with("_FIXTURE.js") {
+            return TestResult::Skip("Fixture file".to_string());
+        }
+    }
+
     // Read test file
     let source = match fs::read_to_string(path) {
         Ok(s) => s,
@@ -258,6 +293,13 @@ fn run_single_test(path: &Path, execute: bool) -> TestResult {
     if metadata.is_module {
         return TestResult::Skip("Module test".to_string());
     }
+
+    // Prepend "use strict"; for onlyStrict tests
+    let source = if metadata.is_only_strict {
+        format!("\"use strict\";\n{}", source)
+    } else {
+        source
+    };
 
     // Try to parse
     let parse_result = parser::Parser::new(&source).parse();

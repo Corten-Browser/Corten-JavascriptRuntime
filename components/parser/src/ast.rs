@@ -257,6 +257,16 @@ pub enum Expression {
         position: Option<SourcePosition>,
     },
 
+    /// Parenthesized expression - tracks that an expression was wrapped in parentheses
+    /// This is important for distinguishing between `({x} = y)` (valid destructuring assignment)
+    /// and `({x}) = y` (invalid - parenthesized expression cannot be assignment target)
+    ParenthesizedExpression {
+        /// The inner expression
+        expression: Box<Expression>,
+        /// Source location
+        position: Option<SourcePosition>,
+    },
+
     /// Binary operation
     BinaryExpression {
         /// Left operand
@@ -431,6 +441,14 @@ pub enum Expression {
         position: Option<SourcePosition>,
     },
 
+    /// Private identifier (used in private field presence check: #field in obj)
+    PrivateIdentifier {
+        /// Private field name (without the # prefix)
+        name: String,
+        /// Source location
+        position: Option<SourcePosition>,
+    },
+
     /// Await expression
     AwaitExpression {
         /// Argument
@@ -445,6 +463,18 @@ pub enum Expression {
         argument: Option<Box<Expression>>,
         /// Is delegated (yield*)
         delegate: bool,
+        /// Source location
+        position: Option<SourcePosition>,
+    },
+
+    /// Class expression
+    ClassExpression {
+        /// Class name (optional for expressions)
+        name: Option<String>,
+        /// Superclass
+        super_class: Option<Box<Expression>>,
+        /// Class body
+        body: Vec<ClassElement>,
         /// Source location
         position: Option<SourcePosition>,
     },
@@ -471,6 +501,24 @@ pub enum Expression {
     SequenceExpression {
         /// Expressions
         expressions: Vec<Expression>,
+        /// Source location
+        position: Option<SourcePosition>,
+    },
+
+    /// Dynamic import expression: import(specifier)
+    ImportExpression {
+        /// Module specifier
+        source: Box<Expression>,
+        /// Source location
+        position: Option<SourcePosition>,
+    },
+
+    /// Tagged template expression: tag`template`
+    TaggedTemplateExpression {
+        /// Tag function
+        tag: Box<Expression>,
+        /// Template quasi (containing quasis and expressions)
+        quasi: Box<Expression>,
         /// Source location
         position: Option<SourcePosition>,
     },
@@ -514,13 +562,25 @@ pub enum Pattern {
     },
     /// Rest element (...rest)
     RestElement(Box<Pattern>),
+    /// Member expression target (for destructuring assignment, not parameters)
+    /// Example: [obj.prop] = [1] or [arr[0]] = [1]
+    MemberExpression(Box<Expression>),
+}
+
+/// Pattern key type - for object patterns
+#[derive(Debug, Clone, PartialEq)]
+pub enum PatternKey {
+    /// Literal key (identifier, string, or number)
+    Literal(String),
+    /// Computed key (expression in brackets: [expr])
+    Computed(Expression),
 }
 
 /// Object pattern property
 #[derive(Debug, Clone, PartialEq)]
 pub struct ObjectPatternProperty {
-    /// Key
-    pub key: String,
+    /// Key (can be literal or computed)
+    pub key: PatternKey,
     /// Value pattern
     pub value: Pattern,
     /// Is shorthand (e.g., { a } instead of { a: a })
@@ -542,6 +602,8 @@ pub enum Literal {
     Null,
     /// Undefined
     Undefined,
+    /// Regular expression (pattern, flags)
+    RegExp(String, String),
 }
 
 /// Binary operators
@@ -635,18 +697,38 @@ pub enum LogicalOperator {
 /// Assignment operators
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum AssignmentOperator {
-    /// Simple assignment
+    /// Simple assignment (=)
     Assign,
-    /// Addition assignment
+    /// Addition assignment (+=)
     AddAssign,
-    /// Subtraction assignment
+    /// Subtraction assignment (-=)
     SubAssign,
-    /// Multiplication assignment
+    /// Multiplication assignment (*=)
     MulAssign,
-    /// Division assignment
+    /// Division assignment (/=)
     DivAssign,
-    /// Modulo assignment
+    /// Modulo assignment (%=)
     ModAssign,
+    /// Exponentiation assignment (**=)
+    ExpAssign,
+    /// Bitwise AND assignment (&=)
+    BitAndAssign,
+    /// Bitwise OR assignment (|=)
+    BitOrAssign,
+    /// Bitwise XOR assignment (^=)
+    BitXorAssign,
+    /// Left shift assignment (<<=)
+    LeftShiftAssign,
+    /// Right shift assignment (>>=)
+    RightShiftAssign,
+    /// Unsigned right shift assignment (>>>=)
+    UnsignedRightShiftAssign,
+    /// Logical AND assignment (&&=)
+    LogicalAndAssign,
+    /// Logical OR assignment (||=)
+    LogicalOrAssign,
+    /// Nullish coalescing assignment (??=)
+    NullishCoalesceAssign,
 }
 
 /// Assignment target
@@ -729,6 +811,11 @@ pub enum ClassElement {
         is_private: bool,
         /// Is computed (e.g., [expr])
         computed: bool,
+    },
+    /// Static initialization block
+    StaticBlock {
+        /// Block body (list of statements)
+        body: Vec<Statement>,
     },
 }
 

@@ -121,6 +121,7 @@ impl From<TypeInfo> for SpecializedType {
             TypeInfo::String => SpecializedType::String,
             TypeInfo::Object => SpecializedType::GenericObject,
             TypeInfo::Undefined | TypeInfo::Null => SpecializedType::NullOrUndefined,
+            TypeInfo::BigInt => SpecializedType::Unknown, // BigInt requires arbitrary precision
         }
     }
 }
@@ -397,6 +398,7 @@ impl TypeSpecializer {
             TypeInfo::Object => SpecializedType::GenericObject,
             TypeInfo::Undefined => SpecializedType::NullOrUndefined,
             TypeInfo::Null => SpecializedType::NullOrUndefined,
+            TypeInfo::BigInt => SpecializedType::Unknown, // BigInt requires arbitrary precision
         }
     }
 
@@ -443,7 +445,8 @@ impl TypeSpecializer {
             | IROpcode::Sub(None)
             | IROpcode::Mul(None)
             | IROpcode::Div(None)
-            | IROpcode::Mod(None) => {
+            | IROpcode::Mod(None)
+            | IROpcode::Exp(None) => {
                 self.decide_math_specialization(profile)
             }
             IROpcode::LoadProperty(_) | IROpcode::StoreProperty(_) => {
@@ -494,6 +497,7 @@ impl TypeSpecializer {
                 TypeInfo::Boolean => boolean_count += 1,
                 TypeInfo::Object => object_count += 1,
                 TypeInfo::Undefined | TypeInfo::Null => null_undef_count += 1,
+                TypeInfo::BigInt => {} // BigInt prevents specialization - treat as polymorphic
             }
         }
 
@@ -539,6 +543,7 @@ impl TypeSpecializer {
             IROpcode::Mul(_) => IROpcode::Mul(Some(TypeInfo::Number)),
             IROpcode::Div(_) => IROpcode::Div(Some(TypeInfo::Number)),
             IROpcode::Mod(_) => IROpcode::Mod(Some(TypeInfo::Number)),
+            IROpcode::Exp(_) => IROpcode::Exp(Some(TypeInfo::Number)),
             other => other.clone(),
         };
 
@@ -573,6 +578,7 @@ impl TypeSpecializer {
             IROpcode::Mul(_) => IROpcode::Mul(Some(TypeInfo::Number)),
             IROpcode::Div(_) => IROpcode::Div(Some(TypeInfo::Number)),
             IROpcode::Mod(_) => IROpcode::Mod(Some(TypeInfo::Number)),
+            IROpcode::Exp(_) => IROpcode::Exp(Some(TypeInfo::Number)),
             other => other.clone(),
         };
 

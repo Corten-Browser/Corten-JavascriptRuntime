@@ -27,6 +27,7 @@ license = "MIT"
 parking_lot = "0.12"
 crossbeam = "0.8"
 num-bigint = "0.4"
+num-traits = "0.2"
 regex = "1.10"
 ryu = "1.0"
 clap = { version = "4.4", features = ["derive"] }

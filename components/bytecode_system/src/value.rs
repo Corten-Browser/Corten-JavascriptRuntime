@@ -4,6 +4,7 @@
 //! Will be replaced when core_types is integrated.
 
 use crate::opcode::UpvalueDescriptor;
+use num_bigint::BigInt;
 
 /// Data for a closure (function with captured environment)
 #[derive(Debug, Clone, PartialEq)]
@@ -42,6 +43,8 @@ pub enum Value {
     String(String),
     /// Closure (function with captured environment)
     Closure(Box<ClosureData>),
+    /// JavaScript BigInt (arbitrary precision integer)
+    BigInt(BigInt),
 }
 
 impl Value {
@@ -88,6 +91,19 @@ impl Value {
                     bytes.push(if desc.is_local { 1 } else { 0 });
                     bytes.extend_from_slice(&desc.index.to_le_bytes());
                 }
+            }
+            Value::BigInt(n) => {
+                bytes.push(6);
+                // Serialize BigInt as sign byte + magnitude bytes
+                let (sign, magnitude) = n.to_bytes_le();
+                let sign_byte = match sign {
+                    num_bigint::Sign::Minus => 1u8,
+                    num_bigint::Sign::NoSign => 0u8,
+                    num_bigint::Sign::Plus => 2u8,
+                };
+                bytes.push(sign_byte);
+                bytes.extend_from_slice(&(magnitude.len() as u32).to_le_bytes());
+                bytes.extend_from_slice(&magnitude);
             }
         }
         bytes
@@ -156,6 +172,26 @@ impl Value {
                     offset,
                 ))
             }
+            6 => {
+                // BigInt: sign byte + length + magnitude bytes
+                if bytes.len() < 6 {
+                    return Err("Not enough bytes for BigInt".to_string());
+                }
+                let sign_byte = bytes[1];
+                let sign = match sign_byte {
+                    0 => num_bigint::Sign::NoSign,
+                    1 => num_bigint::Sign::Minus,
+                    2 => num_bigint::Sign::Plus,
+                    _ => return Err(format!("Invalid BigInt sign byte: {}", sign_byte)),
+                };
+                let len = u32::from_le_bytes(bytes[2..6].try_into().unwrap()) as usize;
+                if bytes.len() < 6 + len {
+                    return Err("Not enough bytes for BigInt magnitude".to_string());
+                }
+                let magnitude = bytes[6..6 + len].to_vec();
+                let bigint = BigInt::from_bytes_le(sign, &magnitude);
+                Ok((Value::BigInt(bigint), 6 + len))
+            }
             _ => Err(format!("Unknown value tag: {}", tag)),
         }
     }
@@ -212,6 +248,22 @@ mod tests {
     #[test]
     fn test_value_serialize_string() {
         let val = Value::String("hello world".to_string());
+        let bytes = val.to_bytes();
+        let (restored, _) = Value::from_bytes(&bytes).unwrap();
+        assert_eq!(val, restored);
+    }
+
+    #[test]
+    fn test_value_serialize_bigint() {
+        let val = Value::BigInt(BigInt::from(12345678901234567890_i128));
+        let bytes = val.to_bytes();
+        let (restored, _) = Value::from_bytes(&bytes).unwrap();
+        assert_eq!(val, restored);
+    }
+
+    #[test]
+    fn test_value_serialize_negative_bigint() {
+        let val = Value::BigInt(BigInt::from(-98765432109876543210_i128));
         let bytes = val.to_bytes();
         let (restored, _) = Value::from_bytes(&bytes).unwrap();
         assert_eq!(val, restored);

@@ -199,6 +199,11 @@ impl CraneliftBackend {
                         return Err("Stack underflow on Mod".to_string());
                     }
                 }
+                Opcode::Exp => {
+                    // Exponentiation is not directly supported in Cranelift
+                    // Fall back to interpreter for this opcode
+                    return Err("Exponentiation not supported in JIT".to_string());
+                }
                 Opcode::Neg => {
                     if let Some(a) = value_stack.pop() {
                         let result = builder.ins().fneg(a);

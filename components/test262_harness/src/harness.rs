@@ -145,6 +145,30 @@ impl Test262Harness {
         features.insert("computed-property-names".to_string());
         features.insert("Atomics".to_string());
         features.insert("SharedArrayBuffer".to_string());
+        // Class features
+        features.insert("class-fields-public".to_string());
+        features.insert("class-fields-private".to_string());
+        features.insert("class-methods-private".to_string());
+        features.insert("class-static-fields-public".to_string());
+        features.insert("class-static-fields-private".to_string());
+        features.insert("class-static-methods-private".to_string());
+        features.insert("class-static-block".to_string());
+        // Async/iteration features
+        features.insert("async-iteration".to_string());
+        features.insert("Symbol.iterator".to_string());
+        features.insert("Symbol.asyncIterator".to_string());
+        features.insert("Symbol".to_string());
+        features.insert("Symbol.toPrimitive".to_string());
+        // Object features
+        features.insert("object-rest".to_string());
+        // Other features
+        features.insert("new.target".to_string());
+        features.insert("exponentiation".to_string());
+        features.insert("logical-assignment-operators".to_string());
+        features.insert("BigInt".to_string());
+        features.insert("Proxy".to_string());
+        // Numeric separator feature (ES2021)
+        features.insert("numeric-separator-literal".to_string());
 
         Self {
             supported_features: features,
@@ -207,8 +231,16 @@ impl Test262Harness {
             return TestResult::Skip(format!("Missing features: {:?}", missing));
         }
 
+        // Prepare source - wrap in strict mode if needed
+        let source = if test.metadata.is_strict_only() {
+            // For onlyStrict tests, prepend "use strict" directive
+            format!("\"use strict\";\n{}", test.source)
+        } else {
+            test.source.clone()
+        };
+
         // Try to parse the test source
-        let parse_result = parser::Parser::new(&test.source).parse();
+        let parse_result = parser::Parser::new(&source).parse();
 
         if test.metadata.expects_parse_error() {
             // Negative parse test: expect parsing to fail

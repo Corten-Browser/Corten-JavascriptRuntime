@@ -33,6 +33,8 @@ pub enum IROpcode {
     Div(Option<TypeInfo>),
     /// Modulo operation
     Mod(Option<TypeInfo>),
+    /// Exponentiation operation
+    Exp(Option<TypeInfo>),
     /// Negate value
     Neg(Option<TypeInfo>),
     /// Logical NOT
@@ -115,6 +117,8 @@ pub enum IROpcode {
     SetIndex,
     /// Create array with given number of elements from stack
     CreateArray(usize),
+    /// Create RegExp object with pattern and flags (constant pool indices)
+    CreateRegExp(usize, usize),
     /// Call method on object (stack: [object, method_name, args...] -> [result])
     CallMethod(u8),
     /// Call constructor with new (stack: [constructor, args...] -> [instance])
@@ -197,6 +201,7 @@ impl IRFunction {
                 Opcode::Mul => IROpcode::Mul(None),
                 Opcode::Div => IROpcode::Div(None),
                 Opcode::Mod => IROpcode::Mod(None),
+                Opcode::Exp => IROpcode::Exp(None),
                 Opcode::Neg => IROpcode::Neg(None),
                 Opcode::Not => IROpcode::Not,
                 Opcode::Equal => IROpcode::Equal,
@@ -234,6 +239,9 @@ impl IRFunction {
                 Opcode::GetIndex => IROpcode::GetIndex,
                 Opcode::SetIndex => IROpcode::SetIndex,
                 Opcode::CreateArray(size) => IROpcode::CreateArray(*size),
+                Opcode::CreateRegExp(pattern_idx, flags_idx) => {
+                    IROpcode::CreateRegExp(*pattern_idx, *flags_idx)
+                }
                 Opcode::CallMethod(argc) => IROpcode::CallMethod(*argc),
                 Opcode::CallNew(argc) => IROpcode::CallNew(*argc),
                 Opcode::Typeof => IROpcode::Typeof,

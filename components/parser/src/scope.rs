@@ -152,6 +152,11 @@ impl ScopeAnalyzer {
                                 self.visit_expression(expr)?;
                             }
                         }
+                        ClassElement::StaticBlock { body } => {
+                            for stmt in body {
+                                self.visit_statement(stmt)?;
+                            }
+                        }
                     }
                 }
             }
@@ -534,7 +539,40 @@ impl ScopeAnalyzer {
 
             Expression::Literal { .. }
             | Expression::ThisExpression { .. }
-            | Expression::SuperExpression { .. } => {}
+            | Expression::SuperExpression { .. }
+            | Expression::PrivateIdentifier { .. } => {}
+
+            Expression::ClassExpression {
+                body,
+                super_class,
+                ..
+            } => {
+                // Visit superclass if present
+                if let Some(super_expr) = super_class {
+                    self.visit_expression(super_expr)?;
+                }
+                // Visit method bodies in the class
+                for element in body {
+                    if let ClassElement::MethodDefinition { value, .. } = element {
+                        self.visit_expression(value)?;
+                    }
+                }
+            }
+
+            Expression::ParenthesizedExpression { expression, .. } => {
+                // Just visit the inner expression
+                self.visit_expression(expression)?;
+            }
+
+            Expression::ImportExpression { source, .. } => {
+                // Visit the source expression (module specifier)
+                self.visit_expression(source)?;
+            }
+
+            Expression::TaggedTemplateExpression { tag, quasi, .. } => {
+                self.visit_expression(tag)?;
+                self.visit_expression(quasi)?;
+            }
         }
         Ok(())
     }
@@ -564,6 +602,11 @@ impl ScopeAnalyzer {
             Pattern::RestElement(p) => {
                 self.visit_pattern_refs(p)?;
             }
+            Pattern::MemberExpression(expr) => {
+                // For member expressions in destructuring, visit the expression
+                let mut expr_clone = (**expr).clone();
+                self.visit_expression(&mut expr_clone)?;
+            }
         }
         Ok(())
     }
@@ -591,6 +634,8 @@ impl ScopeAnalyzer {
             Pattern::RestElement(p) => {
                 self.declare_pattern(p, kind)?;
             }
+            // Member expressions don't declare new bindings
+            Pattern::MemberExpression(_) => {}
         }
         Ok(())
     }

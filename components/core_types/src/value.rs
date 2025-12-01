@@ -3,6 +3,8 @@
 //! This module provides the core `Value` enum that represents all possible
 //! JavaScript values using a tagged pointer scheme for efficiency.
 
+use num_bigint::BigInt;
+use num_traits::Zero;
 use std::any::Any;
 use std::cell::RefCell;
 use std::fmt;
@@ -55,6 +57,8 @@ pub enum Value {
     NativeObject(Rc<RefCell<dyn Any>>),
     /// Native function reference by name
     NativeFunction(std::string::String),
+    /// JavaScript BigInt (arbitrary precision integer)
+    BigInt(BigInt),
 }
 
 impl fmt::Debug for Value {
@@ -69,6 +73,7 @@ impl fmt::Debug for Value {
             Value::String(s) => f.debug_tuple("String").field(s).finish(),
             Value::NativeObject(_) => write!(f, "NativeObject(...)"),
             Value::NativeFunction(name) => f.debug_tuple("NativeFunction").field(name).finish(),
+            Value::BigInt(n) => f.debug_tuple("BigInt").field(n).finish(),
         }
     }
 }
@@ -85,6 +90,7 @@ impl PartialEq for Value {
             (Value::String(a), Value::String(b)) => a == b,
             (Value::NativeObject(a), Value::NativeObject(b)) => Rc::ptr_eq(a, b),
             (Value::NativeFunction(a), Value::NativeFunction(b)) => a == b,
+            (Value::BigInt(a), Value::BigInt(b)) => a == b,
             _ => false,
         }
     }
@@ -129,6 +135,7 @@ impl Value {
             Value::String(s) => !s.is_empty(), // Empty string is falsy
             Value::NativeObject(_) => true, // Native objects are truthy
             Value::NativeFunction(_) => true, // Functions are truthy
+            Value::BigInt(n) => !n.is_zero(), // 0n is falsy
         }
     }
 
@@ -165,6 +172,7 @@ impl Value {
             Value::String(_) => "string".to_string(),
             Value::NativeObject(_) => "object".to_string(),
             Value::NativeFunction(_) => "function".to_string(),
+            Value::BigInt(_) => "bigint".to_string(),
         }
     }
 }
@@ -250,6 +258,7 @@ impl fmt::Display for Value {
             Value::String(s) => write!(f, "{}", s),
             Value::NativeObject(_) => write!(f, "[object Object]"),
             Value::NativeFunction(name) => write!(f, "function {}() {{ [native code] }}", name),
+            Value::BigInt(n) => write!(f, "{}n", n),
         }
     }
 }

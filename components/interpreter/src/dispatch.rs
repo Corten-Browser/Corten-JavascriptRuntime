@@ -4,8 +4,9 @@
 
 use async_runtime::PromiseState;
 use bytecode_system::{BytecodeChunk, Opcode, UpvalueDescriptor};
-use builtins::{ConsoleObject, JSONObject, JsValue as BuiltinValue, MathObject, NumberObject};
+use builtins::{BigIntValue, ConsoleObject, JSONObject, JsValue as BuiltinValue, MathObject, NumberObject};
 use core_types::{ErrorKind, JsError, Value};
+use num_traits::Zero;
 use std::any::Any;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -314,6 +315,7 @@ impl Dispatcher {
                 // Create a HeapObject reference for the closure
                 Value::HeapObject(closure_data.function_index)
             }
+            bytecode_system::Value::BigInt(n) => Value::BigInt(n.clone()),
         }
     }
 
@@ -426,6 +428,12 @@ impl Dispatcher {
                     let b = self.stack.pop().unwrap_or(Value::Undefined);
                     let a = self.stack.pop().unwrap_or(Value::Undefined);
                     let result = self.modulo(a, b)?;
+                    self.stack.push(result);
+                }
+                Opcode::Exp => {
+                    let b = self.stack.pop().unwrap_or(Value::Undefined);
+                    let a = self.stack.pop().unwrap_or(Value::Undefined);
+                    let result = self.exponentiate(a, b)?;
                     self.stack.push(result);
                 }
                 Opcode::Neg => {
@@ -947,6 +955,42 @@ impl Dispatcher {
                     } else {
                         // Fallback: push empty array representation
                         self.stack.push(Value::HeapObject(0));
+                    }
+                }
+                Opcode::CreateRegExp(pattern_idx, flags_idx) => {
+                    // Create a RegExp object
+                    // For now, store pattern and flags as a string representation
+                    // Real implementation would create proper RegExp object
+                    let pattern = if let Some(bytecode_system::Value::String(p)) =
+                        ctx.bytecode.constants.get(pattern_idx)
+                    {
+                        p.clone()
+                    } else {
+                        "".to_string()
+                    };
+                    let flags = if let Some(bytecode_system::Value::String(f)) =
+                        ctx.bytecode.constants.get(flags_idx)
+                    {
+                        f.clone()
+                    } else {
+                        "".to_string()
+                    };
+
+                    // Create a simple object to represent the RegExp
+                    // A full implementation would use a proper RegExp type
+                    if let Some(ref heap) = self.heap {
+                        let mut gc_object = heap.create_object();
+                        // Set source and flags properties
+                        gc_object.set("source".to_string(), Value::String(pattern.clone()));
+                        gc_object.set("flags".to_string(), Value::String(flags.clone()));
+
+                        let boxed: Box<dyn Any> = Box::new(gc_object);
+                        let value =
+                            Value::NativeObject(Rc::new(RefCell::new(boxed)) as Rc<RefCell<dyn Any>>);
+                        self.stack.push(value);
+                    } else {
+                        // Fallback: push as string representation
+                        self.stack.push(Value::String(format!("/{}/{}", pattern, flags)));
                     }
                 }
                 Opcode::CreateClosure(idx, upvalue_descs) => {
@@ -2750,6 +2794,7 @@ impl Dispatcher {
             Value::String(s) => BuiltinValue::string(s.clone()),
             Value::NativeObject(_) => BuiltinValue::object(),
             Value::NativeFunction(name) => BuiltinValue::string(format!("function {}() {{ [native code] }}", name)),
+            Value::BigInt(n) => BuiltinValue::bigint(BigIntValue::new(n.clone())),
         }
     }
 
@@ -2794,6 +2839,7 @@ impl Dispatcher {
             }
             Value::HeapObject(_) => "{}".to_string(),
             Value::NativeFunction(_) => "undefined".to_string(), // Functions become undefined in JSON
+            Value::BigInt(n) => n.to_string(), // BigInt to string for JSON (per ES spec, should throw)
         }
     }
 
@@ -3270,6 +3316,7 @@ impl Dispatcher {
             Value::HeapObject(id) => format!("[object Object {}]", id),
             Value::NativeObject(_) => "[object Object]".to_string(),
             Value::NativeFunction(name) => format!("function {}() {{ [native code] }}", name),
+            Value::BigInt(n) => n.to_string(),
         }
     }
 
@@ -3347,6 +3394,12 @@ impl Dispatcher {
         }
     }
 
+    fn exponentiate(&self, a: Value, b: Value) -> Result<Value, JsError> {
+        let a_num = self.to_number(&a);
+        let b_num = self.to_number(&b);
+        Ok(Value::Double(a_num.powf(b_num)))
+    }
+
     fn neg(&self, a: Value) -> Result<Value, JsError> {
         match a {
             Value::Smi(x) => Ok(Value::Smi(-x)),
@@ -3372,6 +3425,7 @@ impl Dispatcher {
             Value::HeapObject(_) => f64::NAN,
             Value::NativeObject(_) => f64::NAN,
             Value::NativeFunction(_) => f64::NAN,
+            Value::BigInt(_) => f64::NAN, // BigInt cannot be implicitly converted to number
         }
     }
 
@@ -3386,6 +3440,7 @@ impl Dispatcher {
             Value::HeapObject(_) => true,
             Value::NativeObject(_) => true,
             Value::NativeFunction(_) => true,
+            Value::BigInt(n) => !n.is_zero(), // 0n is falsy
         }
     }
 
@@ -3618,6 +3673,7 @@ impl Dispatcher {
                         }
                     }
                     Value::NativeFunction(_) => "Function",
+                    Value::BigInt(_) => "BigInt",
                 };
                 Ok(Value::String(format!("[object {}]", type_tag)))
             }

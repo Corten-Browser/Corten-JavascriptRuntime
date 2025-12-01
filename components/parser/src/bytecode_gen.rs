@@ -5,6 +5,7 @@ use bytecode_system::{
     BytecodeChunk, Opcode, RegisterId, UpvalueDescriptor, Value as BytecodeValue,
 };
 use core_types::{ErrorKind, JsError};
+use num_bigint::BigInt;
 use std::collections::HashMap;
 
 /// Result of resolving a variable name
@@ -863,15 +864,58 @@ impl BytecodeGenerator {
                 Literal::Boolean(false) => {
                     self.chunk.emit(Opcode::LoadFalse);
                 }
-                Literal::BigInt(_s) => {
-                    // TODO: Implement BigInt support in bytecode
-                    unimplemented!("BigInt literals not yet supported in bytecode")
+                Literal::BigInt(s) => {
+                    // Parse the BigInt string (may be decimal, hex, binary, or octal)
+                    let bigint = if s.starts_with("0x") || s.starts_with("0X") {
+                        // Hexadecimal
+                        BigInt::parse_bytes(s[2..].as_bytes(), 16)
+                            .ok_or_else(|| JsError {
+                                kind: ErrorKind::SyntaxError,
+                                message: format!("Invalid BigInt literal: {}", s),
+                                stack: vec![],
+                                source_position: None,
+                            })?
+                    } else if s.starts_with("0b") || s.starts_with("0B") {
+                        // Binary
+                        BigInt::parse_bytes(s[2..].as_bytes(), 2)
+                            .ok_or_else(|| JsError {
+                                kind: ErrorKind::SyntaxError,
+                                message: format!("Invalid BigInt literal: {}", s),
+                                stack: vec![],
+                                source_position: None,
+                            })?
+                    } else if s.starts_with("0o") || s.starts_with("0O") {
+                        // Octal
+                        BigInt::parse_bytes(s[2..].as_bytes(), 8)
+                            .ok_or_else(|| JsError {
+                                kind: ErrorKind::SyntaxError,
+                                message: format!("Invalid BigInt literal: {}", s),
+                                stack: vec![],
+                                source_position: None,
+                            })?
+                    } else {
+                        // Decimal
+                        s.parse::<BigInt>().map_err(|_| JsError {
+                            kind: ErrorKind::SyntaxError,
+                            message: format!("Invalid BigInt literal: {}", s),
+                            stack: vec![],
+                            source_position: None,
+                        })?
+                    };
+                    let idx = self.chunk.add_constant(BytecodeValue::BigInt(bigint));
+                    self.chunk.emit(Opcode::LoadConstant(idx));
                 }
                 Literal::Null => {
                     self.chunk.emit(Opcode::LoadNull);
                 }
                 Literal::Undefined => {
                     self.chunk.emit(Opcode::LoadUndefined);
+                }
+                Literal::RegExp(pattern, flags) => {
+                    // Store pattern and flags as constants
+                    let pattern_idx = self.chunk.add_constant(BytecodeValue::String(pattern.clone()));
+                    let flags_idx = self.chunk.add_constant(BytecodeValue::String(flags.clone()));
+                    self.chunk.emit(Opcode::CreateRegExp(pattern_idx, flags_idx));
                 }
             },
 
@@ -890,6 +934,7 @@ impl BytecodeGenerator {
                     BinaryOperator::Mul => Opcode::Mul,
                     BinaryOperator::Div => Opcode::Div,
                     BinaryOperator::Mod => Opcode::Mod,
+                    BinaryOperator::Exp => Opcode::Exp,
                     BinaryOperator::Eq => Opcode::Equal,
                     BinaryOperator::NotEq => Opcode::NotEqual,
                     BinaryOperator::StrictEq => Opcode::StrictEqual,
@@ -1432,6 +1477,13 @@ impl BytecodeGenerator {
                 self.chunk.emit(Opcode::LoadGlobal("super".to_string()));
             }
 
+            Expression::PrivateIdentifier { name, .. } => {
+                // Private identifiers used in `#field in obj` checks
+                // For bytecode, we load the private name as a string
+                let idx = self.chunk.add_constant(BytecodeValue::String(format!("#{}", name)));
+                self.chunk.emit(Opcode::LoadConstant(idx));
+            }
+
             Expression::AwaitExpression { argument, .. } => {
                 self.visit_expression(argument)?;
                 // Emit Await opcode to suspend execution until promise resolves
@@ -1469,6 +1521,40 @@ impl BytecodeGenerator {
                 for expr in expressions {
                     self.visit_expression(expr)?;
                 }
+            }
+
+            Expression::ClassExpression {
+                body,
+                super_class,
+                ..
+            } => {
+                // Visit superclass if present
+                if let Some(super_expr) = super_class {
+                    self.visit_expression(super_expr)?;
+                }
+                // Visit method bodies in the class
+                for element in body {
+                    if let crate::ast::ClassElement::MethodDefinition { value, .. } = element {
+                        self.visit_expression(value)?;
+                    }
+                }
+            }
+
+            Expression::ParenthesizedExpression { expression, .. } => {
+                // Just visit the inner expression
+                self.visit_expression(expression)?;
+            }
+
+            Expression::ImportExpression { source, .. } => {
+                // Visit the source expression (module specifier)
+                self.visit_expression(source)?;
+            }
+
+            Expression::TaggedTemplateExpression { tag, quasi, .. } => {
+                // Visit the tag and quasi expressions
+                self.visit_expression(tag)?;
+                self.visit_expression(quasi)?;
+                // TODO: Emit proper tagged template call bytecode
             }
         }
         Ok(())
