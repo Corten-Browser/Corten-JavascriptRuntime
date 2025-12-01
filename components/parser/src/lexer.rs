@@ -1070,13 +1070,29 @@ impl<'a> Lexer<'a> {
 
             if ch == '\\' {
                 // Escape sequence - include both backslash and next char
+                // But the next char cannot be a line terminator (RegularExpressionNonTerminator)
                 pattern.push(ch);
                 self.advance();
-                if !self.is_at_end() {
-                    let escaped = self.peek();
-                    pattern.push(escaped);
-                    self.advance();
+                if self.is_at_end() {
+                    return Err(JsError {
+                        kind: ErrorKind::SyntaxError,
+                        message: "Unterminated regular expression".to_string(),
+                        stack: vec![],
+                        source_position: Some(start_pos.clone()),
+                    });
                 }
+                let escaped = self.peek();
+                // Line terminators are not allowed after backslash in regex
+                if self.is_line_terminator(escaped) {
+                    return Err(JsError {
+                        kind: ErrorKind::SyntaxError,
+                        message: "Invalid regular expression: backslash followed by line terminator".to_string(),
+                        stack: vec![],
+                        source_position: Some(start_pos.clone()),
+                    });
+                }
+                pattern.push(escaped);
+                self.advance();
             } else if ch == '[' {
                 in_class = true;
                 pattern.push(ch);
@@ -1095,14 +1111,31 @@ impl<'a> Lexer<'a> {
             }
         }
 
-        // Parse flags
+        // Parse and validate flags
         let mut flags = String::new();
         while !self.is_at_end() {
             let ch = self.peek();
-            // Valid regex flags: g, i, m, s, u, y, d
-            if ch.is_ascii_alphabetic() || ch == '$' || ch == '_' {
+            // Valid regex flags: d, g, i, m, s, u, v, y
+            if matches!(ch, 'd' | 'g' | 'i' | 'm' | 's' | 'u' | 'v' | 'y') {
+                // Check for duplicate flags
+                if flags.contains(ch) {
+                    return Err(JsError {
+                        kind: ErrorKind::SyntaxError,
+                        message: format!("Invalid regular expression flags: duplicate flag '{}'", ch),
+                        stack: vec![],
+                        source_position: Some(start_pos.clone()),
+                    });
+                }
                 flags.push(ch);
                 self.advance();
+            } else if ch.is_ascii_alphabetic() {
+                // Invalid flag character
+                return Err(JsError {
+                    kind: ErrorKind::SyntaxError,
+                    message: format!("Invalid regular expression flag: '{}'", ch),
+                    stack: vec![],
+                    source_position: Some(start_pos.clone()),
+                });
             } else {
                 break;
             }

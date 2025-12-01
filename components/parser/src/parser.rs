@@ -1988,11 +1988,27 @@ impl<'a> Parser<'a> {
         let mut cases = Vec::new();
         self.loop_depth += 1; // Allow break inside switch
 
+        // Track lexical and var declarations across all cases in the switch block
+        // According to ES spec, switch cases share a single block scope
+        // LexicallyDeclaredNames: let, const, function, class, async function, generator
+        // VarDeclaredNames: var declarations
+        // These sets must not overlap
+        let mut lexical_names = std::collections::HashSet::new();
+        let mut var_names = std::collections::HashSet::new();
+        let mut has_default = false;
+
         while !self.check_punctuator(Punctuator::RBrace)? {
             let test = if self.check_keyword(Keyword::Case)? {
                 self.lexer.next_token()?;
                 Some(self.parse_expression()?)
             } else if self.check_keyword(Keyword::Default)? {
+                if has_default {
+                    return Err(syntax_error(
+                        "More than one default clause in switch statement",
+                        self.last_position.clone(),
+                    ));
+                }
+                has_default = true;
                 self.lexer.next_token()?;
                 None
             } else {
@@ -2008,7 +2024,10 @@ impl<'a> Parser<'a> {
                 && !self.check_keyword(Keyword::Case)?
                 && !self.check_keyword(Keyword::Default)?
             {
-                consequent.push(self.parse_statement()?);
+                let stmt = self.parse_statement()?;
+                // Check for duplicate declarations and var/lexical conflicts
+                Self::check_switch_declarations(&stmt, &mut lexical_names, &mut var_names, &self.last_position)?;
+                consequent.push(stmt);
             }
 
             cases.push(SwitchCase { test, consequent });
@@ -2021,6 +2040,69 @@ impl<'a> Parser<'a> {
             cases,
             position: None,
         })
+    }
+
+    /// Check a statement in switch case for declaration conflicts
+    /// Enforces:
+    /// 1. No duplicate LexicallyDeclaredNames (let, const, function, class)
+    /// 2. VarDeclaredNames and LexicallyDeclaredNames must not overlap
+    fn check_switch_declarations(
+        stmt: &Statement,
+        lexical_names: &mut std::collections::HashSet<String>,
+        var_names: &mut std::collections::HashSet<String>,
+        position: &Option<core_types::SourcePosition>,
+    ) -> Result<(), JsError> {
+        match stmt {
+            Statement::VariableDeclaration { kind, declarations, .. } => {
+                for decl in declarations {
+                    let mut names = Vec::new();
+                    Self::collect_bound_names(&decl.id, &mut names);
+                    for name in names {
+                        if matches!(kind, crate::ast::VariableKind::Let | crate::ast::VariableKind::Const) {
+                            // Lexical declaration: check for duplicates and var conflicts
+                            if lexical_names.contains(&name) || var_names.contains(&name) {
+                                return Err(syntax_error(
+                                    &format!("Identifier '{}' has already been declared", name),
+                                    position.clone(),
+                                ));
+                            }
+                            lexical_names.insert(name);
+                        } else {
+                            // Var declaration: check for lexical conflicts
+                            if lexical_names.contains(&name) {
+                                return Err(syntax_error(
+                                    &format!("Identifier '{}' has already been declared", name),
+                                    position.clone(),
+                                ));
+                            }
+                            var_names.insert(name);
+                        }
+                    }
+                }
+            }
+            // Function declarations (including async and generator) are lexically scoped in blocks
+            Statement::FunctionDeclaration { name, .. } => {
+                if lexical_names.contains(name) || var_names.contains(name) {
+                    return Err(syntax_error(
+                        &format!("Identifier '{}' has already been declared", name),
+                        position.clone(),
+                    ));
+                }
+                lexical_names.insert(name.clone());
+            }
+            // Class declarations
+            Statement::ClassDeclaration { name, .. } => {
+                if lexical_names.contains(name) || var_names.contains(name) {
+                    return Err(syntax_error(
+                        &format!("Identifier '{}' has already been declared", name),
+                        position.clone(),
+                    ));
+                }
+                lexical_names.insert(name.clone());
+            }
+            _ => {}
+        }
+        Ok(())
     }
 
     fn parse_with_statement(&mut self) -> Result<Statement, JsError> {
@@ -2140,12 +2222,20 @@ impl<'a> Parser<'a> {
                         self.last_position.clone(),
                     ));
                 }
+                // For let/const, check for duplicate bound names in the pattern
+                if matches!(kind, VariableKind::Let | VariableKind::Const) {
+                    Self::check_duplicate_bound_names(&id, &self.last_position)?;
+                }
                 self.lexer.next_token()?; // consume 'in'
                 let right = self.parse_expression()?;
                 self.expect_punctuator(Punctuator::RParen)?;
                 self.loop_depth += 1;
                 let body = Box::new(self.parse_substatement()?);
                 self.loop_depth -= 1;
+                // Check that body's var declarations don't conflict with header's lexical names
+                if matches!(kind, VariableKind::Let | VariableKind::Const) {
+                    Self::check_for_in_of_var_conflict(&id, &body, &self.last_position)?;
+                }
                 return Ok(Statement::ForInStatement {
                     left: ForInOfLeft::VariableDeclaration { kind, id },
                     right,
@@ -2155,12 +2245,20 @@ impl<'a> Parser<'a> {
             }
 
             if self.check_identifier("of")? {
+                // For let/const, check for duplicate bound names in the pattern
+                if matches!(kind, VariableKind::Let | VariableKind::Const) {
+                    Self::check_duplicate_bound_names(&id, &self.last_position)?;
+                }
                 self.lexer.next_token()?; // consume 'of'
                 let right = self.parse_assignment_expression()?;
                 self.expect_punctuator(Punctuator::RParen)?;
                 self.loop_depth += 1;
                 let body = Box::new(self.parse_substatement()?);
                 self.loop_depth -= 1;
+                // Check that body's var declarations don't conflict with header's lexical names
+                if matches!(kind, VariableKind::Let | VariableKind::Const) {
+                    Self::check_for_in_of_var_conflict(&id, &body, &self.last_position)?;
+                }
                 return Ok(Statement::ForOfStatement {
                     left: ForInOfLeft::VariableDeclaration { kind, id },
                     right,
@@ -6894,6 +6992,53 @@ impl<'a> Parser<'a> {
             }
             _ => Ok(()),
         }
+    }
+
+    /// Check for duplicate bound names in a pattern (for let/const in for-in/for-of)
+    fn check_duplicate_bound_names(
+        pattern: &Pattern,
+        position: &Option<core_types::SourcePosition>,
+    ) -> Result<(), JsError> {
+        let mut names = Vec::new();
+        Self::collect_bound_names(pattern, &mut names);
+
+        let mut seen = std::collections::HashSet::new();
+        for name in names {
+            if !seen.insert(name.clone()) {
+                return Err(syntax_error(
+                    &format!("Duplicate binding name '{}' in for-in/for-of head", name),
+                    position.clone(),
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// Check that var declarations in for-in/for-of body don't conflict with header's lexical names
+    fn check_for_in_of_var_conflict(
+        pattern: &Pattern,
+        body: &Statement,
+        position: &Option<core_types::SourcePosition>,
+    ) -> Result<(), JsError> {
+        // Collect lexical names from pattern
+        let mut header_names = Vec::new();
+        Self::collect_bound_names(pattern, &mut header_names);
+        let header_set: std::collections::HashSet<_> = header_names.into_iter().collect();
+
+        // Collect var declared names from body
+        let mut var_names = std::collections::HashSet::new();
+        Self::collect_var_declared_names_stmt(body, &mut var_names);
+
+        // Check for conflicts
+        for name in var_names {
+            if header_set.contains(&name) {
+                return Err(syntax_error(
+                    &format!("Identifier '{}' has already been declared", name),
+                    position.clone(),
+                ));
+            }
+        }
+        Ok(())
     }
 
     /// Validate arrow function parameters - always rejects duplicates and yield expressions
