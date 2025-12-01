@@ -1082,13 +1082,21 @@ impl<'a> Parser<'a> {
                     // Save context and set static block context
                     // In static blocks: 'await' is reserved (cannot use await expressions),
                     // 'arguments' is reserved, and super.prop is allowed (like methods)
+                    // Also, break/continue cannot cross static block boundaries
                     let prev_in_static_block = self.in_static_block;
                     let prev_in_method = self.in_method;
                     let prev_in_async = self.in_async;
+                    let prev_in_generator = self.in_generator;
+                    let prev_loop_depth = self.loop_depth;
+                    let prev_active_labels = std::mem::take(&mut self.active_labels);
+                    let prev_iteration_labels = std::mem::take(&mut self.iteration_labels);
                     self.in_static_block = true;
                     self.in_method = true;  // Allow super.prop in static blocks
-                    // Static blocks cannot contain await expressions even when nested in async context
+                    // Static blocks cannot contain await/yield expressions even when nested
                     self.in_async = false;
+                    self.in_generator = false;
+                    // Reset loop depth so break/continue cannot cross static block boundary
+                    self.loop_depth = 0;
 
                     // Parse statements with validation for duplicate lexical declarations
                     let mut body = Vec::new();
@@ -1120,6 +1128,10 @@ impl<'a> Parser<'a> {
                     self.in_static_block = prev_in_static_block;
                     self.in_method = prev_in_method;
                     self.in_async = prev_in_async;
+                    self.in_generator = prev_in_generator;
+                    self.loop_depth = prev_loop_depth;
+                    self.active_labels = prev_active_labels;
+                    self.iteration_labels = prev_iteration_labels;
 
                     self.expect_punctuator(Punctuator::RBrace)?;
                     elements.push(ClassElement::StaticBlock { body });
@@ -2297,7 +2309,7 @@ impl<'a> Parser<'a> {
                 });
             }
 
-            if self.check_identifier("of")? {
+            if self.check_identifier_not_escaped("of")? {
                 // For let/const, check for duplicate bound names in the pattern
                 if matches!(kind, VariableKind::Let | VariableKind::Const) {
                     Self::check_duplicate_bound_names(&id, &self.last_position)?;
@@ -2367,6 +2379,13 @@ impl<'a> Parser<'a> {
         }
 
         // Expression as left side - could be for-in/for-of or regular for
+        // Check if LHS starts with non-escaped 'async' (for the async-of restriction)
+        // async can be either a keyword or an identifier depending on context
+        let lhs_is_async_not_escaped = match self.lexer.peek_token()? {
+            Token::Keyword(Keyword::Async) => true, // Keywords are never escaped
+            Token::Identifier(ref name, escaped) if name == "async" && !escaped => true,
+            _ => false,
+        };
         let left_expr = self.parse_left_hand_side_expression()?;
 
         // Check for in/of
@@ -2377,10 +2396,9 @@ impl<'a> Parser<'a> {
                     self.last_position.clone(),
                 ));
             }
-            // In strict mode, reject invalid assignment targets like call expressions
-            if self.strict_mode {
-                self.validate_for_in_of_left(&left_expr)?;
-            }
+            // Reject invalid assignment targets (applies in all modes per spec)
+            // IsValidSimpleAssignmentTarget must be true
+            self.validate_for_in_of_left(&left_expr)?;
             self.lexer.next_token()?; // consume 'in'
             let right = self.parse_expression()?;
             self.expect_punctuator(Punctuator::RParen)?;
@@ -2413,11 +2431,25 @@ impl<'a> Parser<'a> {
             });
         }
 
-        if self.check_identifier("of")? {
-            // In strict mode, reject invalid assignment targets like call expressions
-            if self.strict_mode {
-                self.validate_for_in_of_left(&left_expr)?;
+        if self.check_identifier_not_escaped("of")? {
+            // Reject invalid assignment targets (applies in all modes per spec)
+            // IsValidSimpleAssignmentTarget must be true
+            self.validate_for_in_of_left(&left_expr)?;
+
+            // Special case: `for (async of ...)` is forbidden in regular for-of
+            // (but allowed in for-await-of and when async is escaped)
+            // The `async` identifier followed by `of` could be confused with async arrow function
+            if !is_await && lhs_is_async_not_escaped {
+                if let Expression::Identifier { name, .. } = &left_expr {
+                    if name == "async" {
+                        return Err(syntax_error(
+                            "The left-hand side of a for-of statement may not be 'async'",
+                            self.last_position.clone(),
+                        ));
+                    }
+                }
             }
+
             self.lexer.next_token()?; // consume 'of'
             let right = self.parse_assignment_expression()?;
             self.expect_punctuator(Punctuator::RParen)?;
@@ -6241,6 +6273,12 @@ impl<'a> Parser<'a> {
         Ok(matches!(self.lexer.peek_token()?, Token::Identifier(ref x, _) if x == name))
     }
 
+    /// Check for a contextual keyword that must NOT contain Unicode escapes
+    /// (e.g., "of" in for-of statements)
+    fn check_identifier_not_escaped(&mut self, name: &str) -> Result<bool, JsError> {
+        Ok(matches!(self.lexer.peek_token()?, Token::Identifier(ref x, escaped) if x == name && !escaped))
+    }
+
     fn check_private_identifier(&mut self) -> Result<bool, JsError> {
         Ok(matches!(self.lexer.peek_token()?, Token::PrivateIdentifier(_)))
     }
@@ -6666,6 +6704,97 @@ impl<'a> Parser<'a> {
         )
     }
 
+    /// Validate an element inside a destructuring pattern for for-in/for-of
+    /// Elements can be assignment expressions (for default values) or plain targets
+    fn validate_for_in_of_left_element(&self, expr: &Expression) -> Result<(), JsError> {
+        match expr {
+            // For assignment expressions, validate the left side
+            Expression::AssignmentExpression { left, .. } => {
+                self.validate_for_in_of_assignment_target(left)
+            }
+            // For other expressions, validate as normal
+            _ => self.validate_for_in_of_left(expr),
+        }
+    }
+
+    /// Validate an AssignmentTarget for for-in/for-of
+    fn validate_for_in_of_assignment_target(
+        &self,
+        target: &crate::ast::AssignmentTarget,
+    ) -> Result<(), JsError> {
+        use crate::ast::AssignmentTarget;
+        match target {
+            AssignmentTarget::Identifier(name) => {
+                if self.strict_mode && (name == "arguments" || name == "eval") {
+                    return Err(syntax_error(
+                        &format!("'{}' cannot be assigned in strict mode", name),
+                        self.last_position.clone(),
+                    ));
+                }
+                Ok(())
+            }
+            AssignmentTarget::Member(expr) => {
+                if let Expression::MemberExpression { optional, .. } = &**expr {
+                    if *optional {
+                        return Err(syntax_error(
+                            "Invalid left-hand side in for-in/for-of: optional chaining not allowed",
+                            self.last_position.clone(),
+                        ));
+                    }
+                }
+                Ok(())
+            }
+            AssignmentTarget::Pattern(pattern) => {
+                // Patterns are always valid assignment targets
+                // We just need to check nested elements
+                self.validate_pattern_for_for_in_of(pattern)
+            }
+        }
+    }
+
+    /// Validate a pattern for for-in/for-of
+    fn validate_pattern_for_for_in_of(&self, pattern: &crate::ast::Pattern) -> Result<(), JsError> {
+        use crate::ast::Pattern;
+        match pattern {
+            Pattern::Identifier(name) => {
+                if self.strict_mode && (name == "arguments" || name == "eval") {
+                    return Err(syntax_error(
+                        &format!("'{}' cannot be assigned in strict mode", name),
+                        self.last_position.clone(),
+                    ));
+                }
+                Ok(())
+            }
+            Pattern::ArrayPattern(elements) => {
+                for elem in elements {
+                    if let Some(p) = elem {
+                        self.validate_pattern_for_for_in_of(p)?;
+                    }
+                }
+                Ok(())
+            }
+            Pattern::ObjectPattern(properties) => {
+                for prop in properties {
+                    self.validate_pattern_for_for_in_of(&prop.value)?;
+                }
+                Ok(())
+            }
+            Pattern::AssignmentPattern { left, .. } => self.validate_pattern_for_for_in_of(left),
+            Pattern::RestElement(inner) => self.validate_pattern_for_for_in_of(inner),
+            Pattern::MemberExpression(expr) => {
+                if let Expression::MemberExpression { optional, .. } = &**expr {
+                    if *optional {
+                        return Err(syntax_error(
+                            "Invalid left-hand side in for-in/for-of: optional chaining not allowed",
+                            self.last_position.clone(),
+                        ));
+                    }
+                }
+                Ok(())
+            }
+        }
+    }
+
     /// Validate that a for-in/for-of left-hand side expression is a valid assignment target
     /// In strict mode, call expressions and other non-simple expressions are not allowed
     fn validate_for_in_of_left(&self, expr: &Expression) -> Result<(), JsError> {
@@ -6693,11 +6822,14 @@ impl<'a> Parser<'a> {
                 }
             }
             // Valid: object/array destructuring patterns - but need to check elements recursively
+            // Elements can include AssignmentExpressions (for default values)
             Expression::ArrayExpression { elements, .. } => {
                 for elem in elements {
                     if let Some(e) = elem {
                         match e {
-                            ArrayElement::Expression(expr) => self.validate_for_in_of_left(expr)?,
+                            ArrayElement::Expression(expr) => {
+                                self.validate_for_in_of_left_element(expr)?
+                            }
                             ArrayElement::Spread(expr) => self.validate_for_in_of_left(expr)?,
                         }
                     }
@@ -6708,7 +6840,7 @@ impl<'a> Parser<'a> {
                 for prop in properties {
                     match prop {
                         ObjectProperty::Property { value, .. } => {
-                            self.validate_for_in_of_left(value)?;
+                            self.validate_for_in_of_left_element(value)?;
                         }
                         ObjectProperty::SpreadElement(expr) => {
                             self.validate_for_in_of_left(expr)?;
@@ -6717,8 +6849,19 @@ impl<'a> Parser<'a> {
                 }
                 Ok(())
             }
+            // Valid: assignment expressions are valid in destructuring (for default values)
+            Expression::AssignmentExpression { left, .. } => {
+                self.validate_for_in_of_assignment_target(left)
+            }
             // Invalid: call expressions
             Expression::CallExpression { .. } => {
+                Err(syntax_error(
+                    "Invalid left-hand side in for-in/for-of",
+                    self.last_position.clone(),
+                ))
+            }
+            // Invalid: this expression (not a valid simple assignment target)
+            Expression::ThisExpression { .. } => {
                 Err(syntax_error(
                     "Invalid left-hand side in for-in/for-of",
                     self.last_position.clone(),
