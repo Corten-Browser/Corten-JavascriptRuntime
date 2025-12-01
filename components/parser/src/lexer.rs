@@ -228,6 +228,9 @@ pub enum Token {
     BigIntLiteral(String),
     /// String literal
     String(String),
+    /// String literal containing legacy escape sequences (\8, \9, or octal escapes like \01)
+    /// These are NOT allowed in strict mode
+    LegacyEscapeString(String),
     /// Template literal with no substitutions (no `${}`)
     TemplateLiteral(String),
     /// Template head: from ` to first ${
@@ -599,6 +602,7 @@ impl<'a> Lexer<'a> {
     fn scan_string(&mut self, quote: char) -> Result<Token, JsError> {
         let start_pos = self.current_position();
         let mut value = String::new();
+        let mut has_legacy_escape = false;
 
         while !self.is_at_end() && self.peek() != quote {
             if self.peek() == '\\' {
@@ -622,8 +626,33 @@ impl<'a> Lexer<'a> {
                     '\\' => value.push('\\'),
                     '\'' => value.push('\''),
                     '"' => value.push('"'),
+                    // \8 and \9 are NonOctalDecimalEscapeSequence - legacy, not allowed in strict mode
+                    '8' | '9' => {
+                        has_legacy_escape = true;
+                        value.push(escaped);
+                    }
+                    // \0 alone (followed by non-digit) is the null character - allowed in strict mode
                     '0' if self.is_at_end() || !self.peek().is_ascii_digit() => {
                         value.push('\0');
+                    }
+                    // \0-\7 followed by octal digit is LegacyOctalEscapeSequence - not allowed in strict mode
+                    '0'..='7' => {
+                        has_legacy_escape = true;
+                        // Parse octal escape sequence
+                        let mut octal_value = (escaped as u32) - ('0' as u32);
+                        // Can have up to 3 octal digits total, but value must fit in u8
+                        let mut digits = 1;
+                        while digits < 3 && !self.is_at_end() && self.peek() >= '0' && self.peek() <= '7' {
+                            let next_digit = (self.peek() as u32) - ('0' as u32);
+                            let new_value = octal_value * 8 + next_digit;
+                            if new_value > 255 {
+                                break;
+                            }
+                            octal_value = new_value;
+                            self.advance();
+                            digits += 1;
+                        }
+                        value.push(char::from_u32(octal_value).unwrap_or('\u{FFFD}'));
                     }
                     'x' => {
                         // Hex escape: \xHH (exactly 2 hex digits required)
@@ -765,7 +794,11 @@ impl<'a> Lexer<'a> {
         }
 
         self.advance(); // Closing quote
-        Ok(Token::String(value))
+        if has_legacy_escape {
+            Ok(Token::LegacyEscapeString(value))
+        } else {
+            Ok(Token::String(value))
+        }
     }
 
     fn scan_template_literal(&mut self) -> Result<Token, JsError> {

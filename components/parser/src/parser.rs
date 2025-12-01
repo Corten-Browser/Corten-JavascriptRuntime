@@ -59,6 +59,9 @@ pub struct Parser<'a> {
     /// Stack of private names declared in enclosing class scopes
     /// Each entry is the set of private names declared in that class
     class_private_names: Vec<std::collections::HashSet<String>>,
+    /// Stack of pending private name validations per class scope
+    /// Each entry contains (name, position) pairs that need validation after class parsing
+    pending_private_validations: Vec<Vec<(String, Option<core_types::SourcePosition>)>>,
     /// Track if we're in a context where new.target is valid
     /// (inside a non-arrow function that creates its own new.target binding)
     has_new_target_binding: bool,
@@ -85,6 +88,7 @@ impl<'a> Parser<'a> {
             in_for_init: false,
             in_static_block: false,
             class_private_names: Vec::new(),
+            pending_private_validations: Vec::new(),
             has_new_target_binding: false,
         }
     }
@@ -114,6 +118,8 @@ impl<'a> Parser<'a> {
         let saved_line_terminator = self.lexer.line_terminator_before_token;
 
         // Look for "use strict" in directive prologue (sequence of string literals at start)
+        // Track if we see any strings with legacy escape sequences before "use strict"
+        let mut saw_legacy_escape = false;
         loop {
             if self.is_at_end()? {
                 break;
@@ -121,20 +127,41 @@ impl<'a> Parser<'a> {
 
             let token = self.lexer.next_token()?;
 
-            if let Token::String(ref s) = token {
-                if s == "use strict" {
-                    self.strict_mode = true;
-                    // Continue scanning in case we want to detect other directives later
+            match &token {
+                Token::String(ref s) => {
+                    if s == "use strict" {
+                        // If there were legacy escape strings before "use strict", that's an error
+                        if saw_legacy_escape {
+                            return Err(syntax_error(
+                                "Octal escape sequences are not allowed in strict mode",
+                                self.last_position.clone(),
+                            ));
+                        }
+                        self.strict_mode = true;
+                        // Continue scanning in case we want to detect other directives later
+                    }
                 }
-                // Check for semicolon or line terminator after string
-                if self.check_punctuator(Punctuator::Semicolon)? {
-                    self.lexer.next_token()?;
-                } else if !self.lexer.line_terminator_before_token {
-                    // No semicolon or newline - not a directive, stop scanning
+                Token::LegacyEscapeString(ref s) => {
+                    // Track that we saw a legacy escape string
+                    saw_legacy_escape = true;
+                    if s == "use strict" {
+                        // "use strict" itself can't have legacy escapes - that's an error
+                        return Err(syntax_error(
+                            "Octal escape sequences are not allowed in strict mode",
+                            self.last_position.clone(),
+                        ));
+                    }
+                }
+                _ => {
+                    // Not a string literal - directive prologue ends
                     break;
                 }
-            } else {
-                // Not a string literal - directive prologue ends
+            }
+            // Check for semicolon or line terminator after string
+            if self.check_punctuator(Punctuator::Semicolon)? {
+                self.lexer.next_token()?;
+            } else if !self.lexer.line_terminator_before_token {
+                // No semicolon or newline - not a directive, stop scanning
                 break;
             }
         }
@@ -982,8 +1009,9 @@ impl<'a> Parser<'a> {
         let mut static_private_setters: std::collections::HashSet<String> = std::collections::HashSet::new();
         let mut static_private_fields_methods: std::collections::HashSet<String> = std::collections::HashSet::new();
 
-        // Push a new scope for private name declarations
+        // Push a new scope for private name declarations and pending validations
         self.class_private_names.push(std::collections::HashSet::new());
+        self.pending_private_validations.push(Vec::new());
 
         while !self.check_punctuator(Punctuator::RBrace)? {
             // Skip extra semicolons (allowed in class bodies)
@@ -1255,9 +1283,10 @@ impl<'a> Parser<'a> {
                 _ => None,
             };
 
-            // Check for static methods named "prototype" (not allowed)
+            // Check for static methods named "prototype" (not allowed for non-private members)
+            // Private methods can be named #prototype (they don't conflict with the prototype property)
             if let Some(name) = method_name {
-                if name == "prototype" && is_static {
+                if name == "prototype" && is_static && !is_private {
                     return Err(syntax_error(
                         "Classes may not have a static property named 'prototype'",
                         self.last_position.clone(),
@@ -1557,6 +1586,18 @@ impl<'a> Parser<'a> {
 
         self.expect_punctuator(Punctuator::RBrace)?;
 
+        // Validate all pending private name references now that all names are registered
+        if let Some(pending) = self.pending_private_validations.pop() {
+            for (name, position) in pending {
+                if !self.is_private_name_declared(&name) {
+                    return Err(syntax_error(
+                        format!("Private field '#{}' must be declared in an enclosing class", name),
+                        position,
+                    ));
+                }
+            }
+        }
+
         // Pop the private names scope
         self.class_private_names.pop();
 
@@ -1693,54 +1734,77 @@ impl<'a> Parser<'a> {
     }
 
     /// Check for directive prologue in function body
+    /// This scans through all string directives and detects "use strict" while
+    /// tracking legacy escape sequences that should become errors if strict mode is entered
     fn check_function_directive_prologue(&mut self) -> Result<(), JsError> {
         // Look for string literal expression statements at the start
+        // Track if we see any strings with legacy escape sequences before "use strict"
+        let mut saw_legacy_escape = false;
+
+        // Save initial position for full restore at end
+        let initial_pos = self.lexer.position;
+        let initial_line = self.lexer.line;
+        let initial_column = self.lexer.column;
+        let initial_line_term = self.lexer.line_terminator_before_token;
+        let initial_token = self.lexer.current_token.clone();
+
         while !self.check_punctuator(Punctuator::RBrace)? {
             let token = self.lexer.peek_token()?.clone();
 
             // Check if it's a string literal that could be a directive
-            if let Token::String(ref s) = token {
-                let is_use_strict = s == "use strict";
-
-                // Peek ahead to see if this is a statement (followed by ; or newline)
-                // Save position for potential rollback
-                let saved_pos = self.lexer.position;
-                let saved_line = self.lexer.line;
-                let saved_column = self.lexer.column;
-                let saved_line_term = self.lexer.line_terminator_before_token;
-                let saved_token = self.lexer.current_token.clone();
-
-                self.lexer.next_token()?; // consume string
-
-                // Check if it's a directive (ends with semicolon or has ASI)
-                let is_directive = self.check_punctuator(Punctuator::Semicolon)?
-                    || self.check_punctuator(Punctuator::RBrace)?
-                    || self.lexer.line_terminator_before_token;
-
-                // Restore position - we'll parse normally
-                self.lexer.position = saved_pos;
-                self.lexer.line = saved_line;
-                self.lexer.column = saved_column;
-                self.lexer.line_terminator_before_token = saved_line_term;
-                self.lexer.current_token = saved_token;
-
-                if is_directive && is_use_strict {
-                    self.strict_mode = true;
-                }
-
-                if !is_directive {
-                    // Not a directive, stop looking
+            let (string_value, is_legacy) = match &token {
+                Token::String(ref s) => (s.clone(), false),
+                Token::LegacyEscapeString(ref s) => (s.clone(), true),
+                _ => {
+                    // No more potential directives
                     break;
                 }
+            };
 
-                // Parse the directive as a normal statement and continue checking
-                // Actually, let the main loop handle it - just break after setting strict mode
-                break;
-            } else {
-                // No more potential directives
+            self.lexer.next_token()?; // consume string
+
+            // Check if it's a directive (ends with semicolon or has ASI)
+            let is_directive = self.check_punctuator(Punctuator::Semicolon)?
+                || self.check_punctuator(Punctuator::RBrace)?
+                || self.lexer.line_terminator_before_token;
+
+            if !is_directive {
+                // Not a directive, stop looking
                 break;
             }
+
+            // Track legacy escapes
+            if is_legacy {
+                saw_legacy_escape = true;
+            }
+
+            let is_use_strict = string_value == "use strict";
+
+            if is_use_strict {
+                // If there were legacy escape strings before "use strict", that's an error
+                if saw_legacy_escape || is_legacy {
+                    return Err(syntax_error(
+                        "Octal escape sequences are not allowed in strict mode",
+                        self.last_position.clone(),
+                    ));
+                }
+                self.strict_mode = true;
+            }
+
+            // Consume semicolon if present to continue to next directive
+            if self.check_punctuator(Punctuator::Semicolon)? {
+                self.lexer.next_token()?;
+            }
+            // Continue to check next potential directive
         }
+
+        // Restore position - actual parsing will re-consume these tokens
+        self.lexer.position = initial_pos;
+        self.lexer.line = initial_line;
+        self.lexer.column = initial_column;
+        self.lexer.line_terminator_before_token = initial_line_term;
+        self.lexer.current_token = initial_token;
+
         Ok(())
     }
 
@@ -4270,6 +4334,19 @@ impl<'a> Parser<'a> {
                     position: None,
                 })
             }
+            Token::LegacyEscapeString(s) => {
+                if self.strict_mode {
+                    return Err(syntax_error(
+                        "Octal escape sequences are not allowed in strict mode",
+                        self.last_position.clone(),
+                    ));
+                }
+                self.lexer.next_token()?;
+                Ok(Expression::Literal {
+                    value: Literal::String(s),
+                    position: None,
+                })
+            }
             Token::TemplateLiteral(s) => {
                 self.lexer.next_token()?;
                 Ok(Expression::TemplateLiteral {
@@ -5949,20 +6026,29 @@ impl<'a> Parser<'a> {
     }
 
     /// Validate that a private name reference is valid (declared in enclosing class)
-    fn validate_private_name_reference(&self, name: &str) -> Result<(), JsError> {
+    /// For names in the current class, we defer validation until the class is fully parsed
+    fn validate_private_name_reference(&mut self, name: &str) -> Result<(), JsError> {
         if self.class_private_names.is_empty() {
             return Err(syntax_error(
                 format!("Private field '#{}' must be declared in an enclosing class", name),
                 self.last_position.clone(),
             ));
         }
-        if !self.is_private_name_declared(name) {
-            return Err(syntax_error(
-                format!("Private field '#{}' must be declared in an enclosing class", name),
-                self.last_position.clone(),
-            ));
+        // Check if already declared in any scope (could be outer class or already registered in current)
+        if self.is_private_name_declared(name) {
+            return Ok(());
         }
-        Ok(())
+        // Not yet declared - defer validation until class parsing is complete
+        // This handles forward references within the same class
+        if let Some(pending) = self.pending_private_validations.last_mut() {
+            pending.push((name.to_string(), self.last_position.clone()));
+            return Ok(());
+        }
+        // No pending scope (shouldn't happen if class_private_names is non-empty)
+        Err(syntax_error(
+            format!("Private field '#{}' must be declared in an enclosing class", name),
+            self.last_position.clone(),
+        ))
     }
 
     fn expect_punctuator(&mut self, p: Punctuator) -> Result<(), JsError> {
@@ -6036,6 +6122,15 @@ impl<'a> Parser<'a> {
             Token::Identifier(name, _) => Ok(name),
             Token::Keyword(k) => Ok(keyword_to_string(k)),
             Token::String(s) => Ok(s),
+            Token::LegacyEscapeString(s) => {
+                if self.strict_mode {
+                    return Err(syntax_error(
+                        "Octal escape sequences are not allowed in strict mode",
+                        self.last_position.clone(),
+                    ));
+                }
+                Ok(s)
+            }
             Token::Number(n) => Ok(n.to_string()),
             Token::LegacyOctalLiteral(n) => Ok(n.to_string()),
             Token::NonOctalDecimalLiteral(n) => Ok(n.to_string()),
@@ -6080,6 +6175,15 @@ impl<'a> Parser<'a> {
         match token {
             Token::Identifier(name, _) => Ok(PropertyKey::Identifier(name)),
             Token::String(s) => Ok(PropertyKey::String(s)),
+            Token::LegacyEscapeString(s) => {
+                if self.strict_mode {
+                    return Err(syntax_error(
+                        "Octal escape sequences are not allowed in strict mode",
+                        self.last_position.clone(),
+                    ));
+                }
+                Ok(PropertyKey::String(s))
+            }
             Token::Number(n) => Ok(PropertyKey::Number(n)),
             Token::LegacyOctalLiteral(n) => Ok(PropertyKey::Number(n)),
             Token::NonOctalDecimalLiteral(n) => Ok(PropertyKey::Number(n)),
@@ -6108,6 +6212,7 @@ impl<'a> Parser<'a> {
             Token::Identifier(_, _)
                 | Token::Keyword(_)
                 | Token::String(_)
+                | Token::LegacyEscapeString(_)
                 | Token::Number(_)
                 | Token::LegacyOctalLiteral(_)
                 | Token::NonOctalDecimalLiteral(_)
