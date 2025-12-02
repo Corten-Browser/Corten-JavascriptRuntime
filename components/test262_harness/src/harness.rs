@@ -240,7 +240,14 @@ impl Test262Harness {
         };
 
         // Try to parse the test source
-        let parse_result = parser::Parser::new(&source).parse();
+        let mut parser = parser::Parser::new(&source);
+
+        // Set module mode if this is a module test
+        if test.metadata.is_module() {
+            parser.set_module_mode(true);
+        }
+
+        let parse_result = parser.parse();
 
         if test.metadata.expects_parse_error() {
             // Negative parse test: expect parsing to fail

@@ -59,9 +59,18 @@ pub struct Parser<'a> {
     /// Stack of private names declared in enclosing class scopes
     /// Each entry is the set of private names declared in that class
     class_private_names: Vec<std::collections::HashSet<String>>,
+    /// Stack of pending private name validations per class scope
+    /// Each entry contains (name, position) pairs that need validation after class parsing
+    pending_private_validations: Vec<Vec<(String, Option<core_types::SourcePosition>)>>,
     /// Track if we're in a context where new.target is valid
     /// (inside a non-arrow function that creates its own new.target binding)
     has_new_target_binding: bool,
+    /// Track if we're parsing a labeled item (LabelledStatement body)
+    /// In this context, LexicalDeclarations are not allowed, so `let identifier`
+    /// with newline should trigger ASI
+    in_labeled_item: bool,
+    /// Track if we're parsing module code (affects await/yield identifier restrictions)
+    is_module: bool,
 }
 
 impl<'a> Parser<'a> {
@@ -85,7 +94,19 @@ impl<'a> Parser<'a> {
             in_for_init: false,
             in_static_block: false,
             class_private_names: Vec::new(),
+            pending_private_validations: Vec::new(),
             has_new_target_binding: false,
+            in_labeled_item: false,
+            is_module: false,
+        }
+    }
+
+    /// Set module mode for parsing (affects await/yield identifier restrictions)
+    pub fn set_module_mode(&mut self, is_module: bool) {
+        self.is_module = is_module;
+        // Module code is always strict mode
+        if is_module {
+            self.strict_mode = true;
         }
     }
 
@@ -100,7 +121,63 @@ impl<'a> Parser<'a> {
             statements.push(self.parse_statement()?);
         }
 
+        // Validate script body:
+        // 1. No duplicate LexicallyDeclaredNames (let, const, class declarations)
+        // 2. VarDeclaredNames and LexicallyDeclaredNames must not overlap
+        self.validate_script_body(&statements)?;
+
         Ok(ASTNode::Program(statements))
+    }
+
+    /// Validate script body for duplicate declarations
+    fn validate_script_body(&self, statements: &[Statement]) -> Result<(), JsError> {
+        let mut lexical_names: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+        // Collect and check lexically declared names for duplicates
+        for stmt in statements {
+            match stmt {
+                Statement::VariableDeclaration { kind, declarations, .. }
+                    if matches!(kind, crate::ast::VariableKind::Let | crate::ast::VariableKind::Const) =>
+                {
+                    for decl in declarations {
+                        let mut names = Vec::new();
+                        Self::collect_bound_names(&decl.id, &mut names);
+                        for name in names {
+                            if !lexical_names.insert(name.clone()) {
+                                return Err(syntax_error(
+                                    &format!("Identifier '{}' has already been declared", name),
+                                    None,
+                                ));
+                            }
+                        }
+                    }
+                }
+                Statement::ClassDeclaration { name, .. } if !name.is_empty() => {
+                    if !lexical_names.insert(name.clone()) {
+                        return Err(syntax_error(
+                            &format!("Identifier '{}' has already been declared", name),
+                            None,
+                        ));
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        // Check that var names don't conflict with lexical names
+        let mut var_names: std::collections::HashSet<String> = std::collections::HashSet::new();
+        Self::collect_var_declared_names(statements, &mut var_names);
+
+        for var_name in &var_names {
+            if lexical_names.contains(var_name) {
+                return Err(syntax_error(
+                    &format!("Identifier '{}' has already been declared", var_name),
+                    None,
+                ));
+            }
+        }
+
+        Ok(())
     }
 
     /// Check for directive prologue (e.g., "use strict")
@@ -114,6 +191,8 @@ impl<'a> Parser<'a> {
         let saved_line_terminator = self.lexer.line_terminator_before_token;
 
         // Look for "use strict" in directive prologue (sequence of string literals at start)
+        // Track if we see any strings with legacy escape sequences before "use strict"
+        let mut saw_legacy_escape = false;
         loop {
             if self.is_at_end()? {
                 break;
@@ -121,20 +200,41 @@ impl<'a> Parser<'a> {
 
             let token = self.lexer.next_token()?;
 
-            if let Token::String(ref s) = token {
-                if s == "use strict" {
-                    self.strict_mode = true;
-                    // Continue scanning in case we want to detect other directives later
+            match &token {
+                Token::String(ref s) => {
+                    if s == "use strict" {
+                        // If there were legacy escape strings before "use strict", that's an error
+                        if saw_legacy_escape {
+                            return Err(syntax_error(
+                                "Octal escape sequences are not allowed in strict mode",
+                                self.last_position.clone(),
+                            ));
+                        }
+                        self.strict_mode = true;
+                        // Continue scanning in case we want to detect other directives later
+                    }
                 }
-                // Check for semicolon or line terminator after string
-                if self.check_punctuator(Punctuator::Semicolon)? {
-                    self.lexer.next_token()?;
-                } else if !self.lexer.line_terminator_before_token {
-                    // No semicolon or newline - not a directive, stop scanning
+                Token::LegacyEscapeString(ref s) => {
+                    // Track that we saw a legacy escape string
+                    saw_legacy_escape = true;
+                    if s == "use strict" {
+                        // "use strict" itself can't have legacy escapes - that's an error
+                        return Err(syntax_error(
+                            "Octal escape sequences are not allowed in strict mode",
+                            self.last_position.clone(),
+                        ));
+                    }
+                }
+                _ => {
+                    // Not a string literal - directive prologue ends
                     break;
                 }
-            } else {
-                // Not a string literal - directive prologue ends
+            }
+            // Check for semicolon or line terminator after string
+            if self.check_punctuator(Punctuator::Semicolon)? {
+                self.lexer.next_token()?;
+            } else if !self.lexer.line_terminator_before_token {
+                // No semicolon or newline - not a directive, stop scanning
                 break;
             }
         }
@@ -235,6 +335,32 @@ impl<'a> Parser<'a> {
             // Check if 'let' is used as keyword (followed by identifier, [, or {)
             let is_let_declaration = self.is_let_declaration()?;
             if !is_let_declaration {
+                // `let [` is in the lookahead restriction for ExpressionStatement
+                // Even if we're treating `let` as an identifier, we need to check
+                // if the next token is `[` and reject it
+                let saved_pos = self.lexer.position;
+                let saved_line = self.lexer.line;
+                let saved_col = self.lexer.column;
+                let saved_line_term = self.lexer.line_terminator_before_token;
+                let saved_tok = self.lexer.current_token.clone();
+
+                self.lexer.next_token()?; // consume 'let'
+                let next = self.lexer.peek_token()?.clone();
+
+                // Restore lexer state
+                self.lexer.position = saved_pos;
+                self.lexer.line = saved_line;
+                self.lexer.column = saved_col;
+                self.lexer.line_terminator_before_token = saved_line_term;
+                self.lexer.current_token = saved_tok;
+
+                if matches!(next, Token::Punctuator(Punctuator::LBracket)) {
+                    return Err(syntax_error(
+                        "Lexical declaration cannot appear in a single-statement context",
+                        self.last_position.clone(),
+                    ));
+                }
+
                 // 'let' is an identifier, parse as expression statement
                 return self.parse_expression_statement();
             }
@@ -259,6 +385,40 @@ impl<'a> Parser<'a> {
             Token::Keyword(Keyword::Try) => self.parse_try_statement(),
             Token::Keyword(Keyword::With) => self.parse_with_statement(),
             Token::Keyword(Keyword::Debugger) => self.parse_debugger_statement(),
+            Token::Keyword(Keyword::Export) => self.parse_export_declaration(),
+            Token::Keyword(Keyword::Import) => {
+                // Peek ahead to determine if this is:
+                // - import() dynamic import expression
+                // - import.meta or import.source() expression
+                // - import declaration (module only)
+                // Save position for lookahead
+                let saved_pos = self.lexer.position;
+                let saved_line = self.lexer.line;
+                let saved_col = self.lexer.column;
+                let saved_line_term = self.lexer.line_terminator_before_token;
+                let saved_token = self.lexer.current_token.clone();
+
+                self.lexer.next_token()?; // consume 'import'
+                let next = self.lexer.peek_token()?.clone();
+
+                // Restore position
+                self.lexer.position = saved_pos;
+                self.lexer.line = saved_line;
+                self.lexer.column = saved_col;
+                self.lexer.line_terminator_before_token = saved_line_term;
+                self.lexer.current_token = saved_token;
+
+                match next {
+                    Token::Punctuator(Punctuator::LParen) | Token::Punctuator(Punctuator::Dot) => {
+                        // Dynamic import expression or import.meta
+                        self.parse_expression_statement()
+                    }
+                    _ => {
+                        // Import declaration - check module mode
+                        self.parse_import_declaration()
+                    }
+                }
+            }
             Token::Punctuator(Punctuator::LBrace) => self.parse_block_statement(),
             Token::Punctuator(Punctuator::Semicolon) => {
                 self.lexer.next_token()?;
@@ -356,24 +516,30 @@ impl<'a> Parser<'a> {
         let has_line_terminator = self.lexer.line_terminator_before_token;
 
         // "let" is a keyword (declaration) if followed by:
-        // - identifier (with or without line terminator - no ASI needed)
-        // - [ (array destructuring) - BUT only without line terminator due to `let [` restriction
+        // - identifier WITHOUT line terminator, OR without line terminator if in labeled item context
+        //   (in labeled item context, ASI applies with newline because declarations are not allowed)
+        // - [ (array destructuring) - BUT only without line terminator due to `let [` lookahead restriction
         // - { (object destructuring) - only without line terminator
         //
-        // The ExpressionStatement has a lookahead restriction: [lookahead ∉ { let [ }]
-        // This means `let` followed by newline then `[` triggers ASI (let becomes expression)
-        // But `let` followed by newline then identifier is still a declaration
+        // Per the spec, when `let` is followed by an identifier, it's ALWAYS a LexicalDeclaration,
+        // even if separated by a newline. Static semantics are checked after production matching.
+        // HOWEVER, in a LabelledItem context, LexicalDeclarations are not allowed, so if there's
+        // a newline, ASI kicks in and `let` becomes an expression statement.
         let is_declaration = match next {
-            // Identifiers after let = declaration (even with newline)
+            // Identifiers after let = declaration (even with newline - no ASI)
+            // UNLESS we're in a labeled item context AND there's a line terminator
+            Token::Identifier(_, _) if self.in_labeled_item && has_line_terminator => false,
             Token::Identifier(_, _) => true,
-            // Keywords that can be identifiers in some contexts - grammatically these ARE valid
-            // binding identifiers, even if later rejected by static semantics
-            // This is important for correct error reporting (should fail on binding, not ASI)
-            Token::Keyword(Keyword::Yield) => true, // may be rejected later if in generator/strict
-            Token::Keyword(Keyword::Await) => true, // may be rejected later if in async/module
-            Token::Keyword(Keyword::Static) => true, // may be rejected later in strict mode
+            // Keywords that can be binding identifiers in some contexts
+            Token::Keyword(Keyword::Yield) if self.in_labeled_item && has_line_terminator => false,
+            Token::Keyword(Keyword::Yield) => true,
+            Token::Keyword(Keyword::Await) if self.in_labeled_item && has_line_terminator => false,
+            Token::Keyword(Keyword::Await) => true,
+            Token::Keyword(Keyword::Static) if self.in_labeled_item && has_line_terminator => false,
+            Token::Keyword(Keyword::Static) => true,
+            Token::Keyword(Keyword::Async) if self.in_labeled_item && has_line_terminator => false,
             Token::Keyword(Keyword::Async) => true,
-            // 'let' as binding name (will be caught by later validation)
+            Token::Keyword(Keyword::Let) if self.in_labeled_item && has_line_terminator => false,
             Token::Keyword(Keyword::Let) => true,
             // [ and { only without line terminator (due to ExpressionStatement lookahead restriction)
             Token::Punctuator(Punctuator::LBracket) if !has_line_terminator => true,
@@ -982,8 +1148,9 @@ impl<'a> Parser<'a> {
         let mut static_private_setters: std::collections::HashSet<String> = std::collections::HashSet::new();
         let mut static_private_fields_methods: std::collections::HashSet<String> = std::collections::HashSet::new();
 
-        // Push a new scope for private name declarations
+        // Push a new scope for private name declarations and pending validations
         self.class_private_names.push(std::collections::HashSet::new());
+        self.pending_private_validations.push(Vec::new());
 
         while !self.check_punctuator(Punctuator::RBrace)? {
             // Skip extra semicolons (allowed in class bodies)
@@ -1017,13 +1184,25 @@ impl<'a> Parser<'a> {
                     // Save context and set static block context
                     // In static blocks: 'await' is reserved (cannot use await expressions),
                     // 'arguments' is reserved, and super.prop is allowed (like methods)
+                    // Also, break/continue cannot cross static block boundaries
+                    // new.target is allowed (returns undefined)
                     let prev_in_static_block = self.in_static_block;
                     let prev_in_method = self.in_method;
                     let prev_in_async = self.in_async;
+                    let prev_in_generator = self.in_generator;
+                    let prev_loop_depth = self.loop_depth;
+                    let prev_active_labels = std::mem::take(&mut self.active_labels);
+                    let prev_iteration_labels = std::mem::take(&mut self.iteration_labels);
+                    let prev_new_target = self.has_new_target_binding;
                     self.in_static_block = true;
                     self.in_method = true;  // Allow super.prop in static blocks
-                    // Static blocks cannot contain await expressions even when nested in async context
+                    // Static blocks cannot contain await/yield expressions even when nested
                     self.in_async = false;
+                    self.in_generator = false;
+                    // Reset loop depth so break/continue cannot cross static block boundary
+                    self.loop_depth = 0;
+                    // new.target is valid in static blocks (evaluates to undefined)
+                    self.has_new_target_binding = true;
 
                     // Parse statements with validation for duplicate lexical declarations
                     let mut body = Vec::new();
@@ -1055,6 +1234,11 @@ impl<'a> Parser<'a> {
                     self.in_static_block = prev_in_static_block;
                     self.in_method = prev_in_method;
                     self.in_async = prev_in_async;
+                    self.in_generator = prev_in_generator;
+                    self.loop_depth = prev_loop_depth;
+                    self.active_labels = prev_active_labels;
+                    self.iteration_labels = prev_iteration_labels;
+                    self.has_new_target_binding = prev_new_target;
 
                     self.expect_punctuator(Punctuator::RBrace)?;
                     elements.push(ClassElement::StaticBlock { body });
@@ -1255,9 +1439,10 @@ impl<'a> Parser<'a> {
                 _ => None,
             };
 
-            // Check for static methods named "prototype" (not allowed)
+            // Check for static methods named "prototype" (not allowed for non-private members)
+            // Private methods can be named #prototype (they don't conflict with the prototype property)
             if let Some(name) = method_name {
-                if name == "prototype" && is_static {
+                if name == "prototype" && is_static && !is_private {
                     return Err(syntax_error(
                         "Classes may not have a static property named 'prototype'",
                         self.last_position.clone(),
@@ -1557,6 +1742,18 @@ impl<'a> Parser<'a> {
 
         self.expect_punctuator(Punctuator::RBrace)?;
 
+        // Validate all pending private name references now that all names are registered
+        if let Some(pending) = self.pending_private_validations.pop() {
+            for (name, position) in pending {
+                if !self.is_private_name_declared(&name) {
+                    return Err(syntax_error(
+                        format!("Private field '#{}' must be declared in an enclosing class", name),
+                        position,
+                    ));
+                }
+            }
+        }
+
         // Pop the private names scope
         self.class_private_names.pop();
 
@@ -1571,10 +1768,10 @@ impl<'a> Parser<'a> {
         self.strict_mode = true;
 
         // Name is optional for class expressions
-        // await/yield can be class names when not in async/generator/static block context
+        // await/yield can be class names when not in async/generator/static block/module context
         let name = match self.lexer.peek_token()? {
             Token::Identifier(_, _) => Some(self.expect_identifier()?),
-            Token::Keyword(Keyword::Await) if !self.in_async && !self.in_static_block => Some(self.expect_identifier()?),
+            Token::Keyword(Keyword::Await) if !self.in_async && !self.in_static_block && !self.is_module => Some(self.expect_identifier()?),
             Token::Keyword(Keyword::Yield) if !self.in_generator => Some(self.expect_identifier()?),
             _ => None,
         };
@@ -1693,54 +1890,77 @@ impl<'a> Parser<'a> {
     }
 
     /// Check for directive prologue in function body
+    /// This scans through all string directives and detects "use strict" while
+    /// tracking legacy escape sequences that should become errors if strict mode is entered
     fn check_function_directive_prologue(&mut self) -> Result<(), JsError> {
         // Look for string literal expression statements at the start
+        // Track if we see any strings with legacy escape sequences before "use strict"
+        let mut saw_legacy_escape = false;
+
+        // Save initial position for full restore at end
+        let initial_pos = self.lexer.position;
+        let initial_line = self.lexer.line;
+        let initial_column = self.lexer.column;
+        let initial_line_term = self.lexer.line_terminator_before_token;
+        let initial_token = self.lexer.current_token.clone();
+
         while !self.check_punctuator(Punctuator::RBrace)? {
             let token = self.lexer.peek_token()?.clone();
 
             // Check if it's a string literal that could be a directive
-            if let Token::String(ref s) = token {
-                let is_use_strict = s == "use strict";
-
-                // Peek ahead to see if this is a statement (followed by ; or newline)
-                // Save position for potential rollback
-                let saved_pos = self.lexer.position;
-                let saved_line = self.lexer.line;
-                let saved_column = self.lexer.column;
-                let saved_line_term = self.lexer.line_terminator_before_token;
-                let saved_token = self.lexer.current_token.clone();
-
-                self.lexer.next_token()?; // consume string
-
-                // Check if it's a directive (ends with semicolon or has ASI)
-                let is_directive = self.check_punctuator(Punctuator::Semicolon)?
-                    || self.check_punctuator(Punctuator::RBrace)?
-                    || self.lexer.line_terminator_before_token;
-
-                // Restore position - we'll parse normally
-                self.lexer.position = saved_pos;
-                self.lexer.line = saved_line;
-                self.lexer.column = saved_column;
-                self.lexer.line_terminator_before_token = saved_line_term;
-                self.lexer.current_token = saved_token;
-
-                if is_directive && is_use_strict {
-                    self.strict_mode = true;
-                }
-
-                if !is_directive {
-                    // Not a directive, stop looking
+            let (string_value, is_legacy) = match &token {
+                Token::String(ref s) => (s.clone(), false),
+                Token::LegacyEscapeString(ref s) => (s.clone(), true),
+                _ => {
+                    // No more potential directives
                     break;
                 }
+            };
 
-                // Parse the directive as a normal statement and continue checking
-                // Actually, let the main loop handle it - just break after setting strict mode
-                break;
-            } else {
-                // No more potential directives
+            self.lexer.next_token()?; // consume string
+
+            // Check if it's a directive (ends with semicolon or has ASI)
+            let is_directive = self.check_punctuator(Punctuator::Semicolon)?
+                || self.check_punctuator(Punctuator::RBrace)?
+                || self.lexer.line_terminator_before_token;
+
+            if !is_directive {
+                // Not a directive, stop looking
                 break;
             }
+
+            // Track legacy escapes
+            if is_legacy {
+                saw_legacy_escape = true;
+            }
+
+            let is_use_strict = string_value == "use strict";
+
+            if is_use_strict {
+                // If there were legacy escape strings before "use strict", that's an error
+                if saw_legacy_escape || is_legacy {
+                    return Err(syntax_error(
+                        "Octal escape sequences are not allowed in strict mode",
+                        self.last_position.clone(),
+                    ));
+                }
+                self.strict_mode = true;
+            }
+
+            // Consume semicolon if present to continue to next directive
+            if self.check_punctuator(Punctuator::Semicolon)? {
+                self.lexer.next_token()?;
+            }
+            // Continue to check next potential directive
         }
+
+        // Restore position - actual parsing will re-consume these tokens
+        self.lexer.position = initial_pos;
+        self.lexer.line = initial_line;
+        self.lexer.column = initial_column;
+        self.lexer.line_terminator_before_token = initial_line_term;
+        self.lexer.current_token = initial_token;
+
         Ok(())
     }
 
@@ -1862,10 +2082,15 @@ impl<'a> Parser<'a> {
         self.expect_punctuator(Punctuator::RParen)?;
 
         let consequent = Box::new(self.parse_substatement()?);
+        // Check that consequent is not a labelled function declaration
+        Self::check_for_body_not_labelled_function(&consequent, &self.last_position)?;
 
         let alternate = if self.check_keyword(Keyword::Else)? {
             self.lexer.next_token()?;
-            Some(Box::new(self.parse_substatement()?))
+            let alt = Box::new(self.parse_substatement()?);
+            // Check that alternate is not a labelled function declaration
+            Self::check_for_body_not_labelled_function(&alt, &self.last_position)?;
+            Some(alt)
         } else {
             None
         };
@@ -1888,6 +2113,9 @@ impl<'a> Parser<'a> {
         let body = Box::new(self.parse_substatement()?);
         self.loop_depth -= 1;
 
+        // Check that body is not a labelled function declaration
+        Self::check_for_body_not_labelled_function(&body, &self.last_position)?;
+
         Ok(Statement::WhileStatement {
             test,
             body,
@@ -1900,6 +2128,8 @@ impl<'a> Parser<'a> {
         self.loop_depth += 1;
         let body = Box::new(self.parse_substatement()?);
         self.loop_depth -= 1;
+        // Check that body is not a labelled function declaration
+        Self::check_for_body_not_labelled_function(&body, &self.last_position)?;
         self.expect_keyword(Keyword::While)?;
         self.expect_punctuator(Punctuator::LParen)?;
         let test = self.parse_expression()?;
@@ -1924,11 +2154,27 @@ impl<'a> Parser<'a> {
         let mut cases = Vec::new();
         self.loop_depth += 1; // Allow break inside switch
 
+        // Track lexical and var declarations across all cases in the switch block
+        // According to ES spec, switch cases share a single block scope
+        // LexicallyDeclaredNames: let, const, function, class, async function, generator
+        // VarDeclaredNames: var declarations
+        // These sets must not overlap
+        let mut lexical_names = std::collections::HashSet::new();
+        let mut var_names = std::collections::HashSet::new();
+        let mut has_default = false;
+
         while !self.check_punctuator(Punctuator::RBrace)? {
             let test = if self.check_keyword(Keyword::Case)? {
                 self.lexer.next_token()?;
                 Some(self.parse_expression()?)
             } else if self.check_keyword(Keyword::Default)? {
+                if has_default {
+                    return Err(syntax_error(
+                        "More than one default clause in switch statement",
+                        self.last_position.clone(),
+                    ));
+                }
+                has_default = true;
                 self.lexer.next_token()?;
                 None
             } else {
@@ -1944,7 +2190,10 @@ impl<'a> Parser<'a> {
                 && !self.check_keyword(Keyword::Case)?
                 && !self.check_keyword(Keyword::Default)?
             {
-                consequent.push(self.parse_statement()?);
+                let stmt = self.parse_statement()?;
+                // Check for duplicate declarations and var/lexical conflicts
+                Self::check_switch_declarations(&stmt, &mut lexical_names, &mut var_names, &self.last_position)?;
+                consequent.push(stmt);
             }
 
             cases.push(SwitchCase { test, consequent });
@@ -1957,6 +2206,69 @@ impl<'a> Parser<'a> {
             cases,
             position: None,
         })
+    }
+
+    /// Check a statement in switch case for declaration conflicts
+    /// Enforces:
+    /// 1. No duplicate LexicallyDeclaredNames (let, const, function, class)
+    /// 2. VarDeclaredNames and LexicallyDeclaredNames must not overlap
+    fn check_switch_declarations(
+        stmt: &Statement,
+        lexical_names: &mut std::collections::HashSet<String>,
+        var_names: &mut std::collections::HashSet<String>,
+        position: &Option<core_types::SourcePosition>,
+    ) -> Result<(), JsError> {
+        match stmt {
+            Statement::VariableDeclaration { kind, declarations, .. } => {
+                for decl in declarations {
+                    let mut names = Vec::new();
+                    Self::collect_bound_names(&decl.id, &mut names);
+                    for name in names {
+                        if matches!(kind, crate::ast::VariableKind::Let | crate::ast::VariableKind::Const) {
+                            // Lexical declaration: check for duplicates and var conflicts
+                            if lexical_names.contains(&name) || var_names.contains(&name) {
+                                return Err(syntax_error(
+                                    &format!("Identifier '{}' has already been declared", name),
+                                    position.clone(),
+                                ));
+                            }
+                            lexical_names.insert(name);
+                        } else {
+                            // Var declaration: check for lexical conflicts
+                            if lexical_names.contains(&name) {
+                                return Err(syntax_error(
+                                    &format!("Identifier '{}' has already been declared", name),
+                                    position.clone(),
+                                ));
+                            }
+                            var_names.insert(name);
+                        }
+                    }
+                }
+            }
+            // Function declarations (including async and generator) are lexically scoped in blocks
+            Statement::FunctionDeclaration { name, .. } => {
+                if lexical_names.contains(name) || var_names.contains(name) {
+                    return Err(syntax_error(
+                        &format!("Identifier '{}' has already been declared", name),
+                        position.clone(),
+                    ));
+                }
+                lexical_names.insert(name.clone());
+            }
+            // Class declarations
+            Statement::ClassDeclaration { name, .. } => {
+                if lexical_names.contains(name) || var_names.contains(name) {
+                    return Err(syntax_error(
+                        &format!("Identifier '{}' has already been declared", name),
+                        position.clone(),
+                    ));
+                }
+                lexical_names.insert(name.clone());
+            }
+            _ => {}
+        }
+        Ok(())
     }
 
     fn parse_with_statement(&mut self) -> Result<Statement, JsError> {
@@ -1972,6 +2284,8 @@ impl<'a> Parser<'a> {
         let object = self.parse_expression()?;
         self.expect_punctuator(Punctuator::RParen)?;
         let body = Box::new(self.parse_substatement()?);
+        // Check that body is not a labelled function declaration
+        Self::check_for_body_not_labelled_function(&body, &self.last_position)?;
         Ok(Statement::WithStatement {
             object,
             body,
@@ -1983,6 +2297,318 @@ impl<'a> Parser<'a> {
         self.expect_keyword(Keyword::Debugger)?;
         self.consume_semicolon()?;
         Ok(Statement::DebuggerStatement { position: None })
+    }
+
+    fn parse_export_declaration(&mut self) -> Result<Statement, JsError> {
+        // Export is only allowed in module mode
+        if !self.is_module {
+            return Err(syntax_error(
+                "'export' is only allowed in module code",
+                self.last_position.clone(),
+            ));
+        }
+
+        self.expect_keyword(Keyword::Export)?;
+
+        // Check what follows export
+        let token = self.lexer.peek_token()?.clone();
+
+        match token {
+            Token::Keyword(Keyword::Default) => {
+                // export default ...
+                self.lexer.next_token()?; // consume 'default'
+                self.parse_export_default()
+            }
+            Token::Punctuator(Punctuator::Star) => {
+                // export * from 'module'
+                self.lexer.next_token()?; // consume '*'
+
+                // Check for export * as name
+                let exported = if self.check_identifier("as")? {
+                    self.lexer.next_token()?;
+                    Some(self.expect_identifier()?)
+                } else {
+                    None
+                };
+
+                self.expect_contextual_keyword("from")?;
+                let source = self.expect_string()?;
+                self.consume_semicolon()?;
+
+                Ok(Statement::ExportAllDeclaration {
+                    source,
+                    exported,
+                    position: None,
+                })
+            }
+            Token::Punctuator(Punctuator::LBrace) => {
+                // export { ... }
+                self.parse_export_named_specifiers()
+            }
+            Token::Keyword(Keyword::Var)
+            | Token::Keyword(Keyword::Let)
+            | Token::Keyword(Keyword::Const)
+            | Token::Keyword(Keyword::Function)
+            | Token::Keyword(Keyword::Class)
+            | Token::Keyword(Keyword::Async) => {
+                // export var/let/const/function/class/async
+                let declaration = self.parse_statement()?;
+                Ok(Statement::ExportNamedDeclaration {
+                    declaration: Some(Box::new(declaration)),
+                    specifiers: vec![],
+                    source: None,
+                    position: None,
+                })
+            }
+            _ => Err(syntax_error("Unexpected token after export", self.last_position.clone())),
+        }
+    }
+
+    fn parse_export_default(&mut self) -> Result<Statement, JsError> {
+        let token = self.lexer.peek_token()?.clone();
+
+        let declaration = match token {
+            Token::Keyword(Keyword::Class) => {
+                // export default class [name] { ... }
+                self.lexer.next_token()?; // consume 'class'
+
+                // Name is optional for default exports
+                let name = if let Token::Identifier(n, _) = self.lexer.peek_token()? {
+                    let name = n.clone();
+                    self.lexer.next_token()?;
+                    Some(name)
+                } else {
+                    None
+                };
+
+                // Parse extends
+                let super_class = if self.check_keyword(Keyword::Extends)? {
+                    self.lexer.next_token()?;
+                    Some(Box::new(self.parse_left_hand_side_expression()?))
+                } else {
+                    None
+                };
+
+                // Parse class body
+                let body = self.parse_class_body()?;
+
+                crate::ast::ExportDefaultDecl::Class {
+                    name,
+                    super_class,
+                    body,
+                }
+            }
+            Token::Keyword(Keyword::Function) => {
+                // export default function [name](...) { ... }
+                self.lexer.next_token()?; // consume 'function'
+
+                let is_generator = self.check_punctuator(Punctuator::Star)?;
+                if is_generator {
+                    self.lexer.next_token()?;
+                }
+
+                // Name is optional for default exports
+                let name = if let Token::Identifier(n, _) = self.lexer.peek_token()? {
+                    let name = n.clone();
+                    self.lexer.next_token()?;
+                    Some(name)
+                } else {
+                    None
+                };
+
+                let params = self.parse_parameters()?;
+
+                let prev_yield = self.in_generator;
+                self.in_generator = is_generator;
+
+                let body = self.parse_function_body()?;
+
+                self.in_generator = prev_yield;
+
+                crate::ast::ExportDefaultDecl::Function {
+                    name,
+                    params,
+                    body,
+                    is_async: false,
+                    is_generator,
+                }
+            }
+            Token::Keyword(Keyword::Async) => {
+                // export default async function [name](...) { ... }
+                self.lexer.next_token()?; // consume 'async'
+                self.expect_keyword(Keyword::Function)?;
+
+                let is_generator = self.check_punctuator(Punctuator::Star)?;
+                if is_generator {
+                    self.lexer.next_token()?;
+                }
+
+                // Name is optional
+                let name = if let Token::Identifier(n, _) = self.lexer.peek_token()? {
+                    let name = n.clone();
+                    self.lexer.next_token()?;
+                    Some(name)
+                } else {
+                    None
+                };
+
+                let params = self.parse_parameters()?;
+
+                let prev_async = self.in_async;
+                let prev_yield = self.in_generator;
+                self.in_async = true;
+                self.in_generator = is_generator;
+
+                let body = self.parse_function_body()?;
+
+                self.in_async = prev_async;
+                self.in_generator = prev_yield;
+
+                crate::ast::ExportDefaultDecl::Function {
+                    name,
+                    params,
+                    body,
+                    is_async: true,
+                    is_generator,
+                }
+            }
+            _ => {
+                // export default expression
+                let expr = self.parse_assignment_expression()?;
+                self.consume_semicolon()?;
+                crate::ast::ExportDefaultDecl::Expression(expr)
+            }
+        };
+
+        Ok(Statement::ExportDefaultDeclaration {
+            declaration: Box::new(declaration),
+            position: None,
+        })
+    }
+
+    fn parse_export_named_specifiers(&mut self) -> Result<Statement, JsError> {
+        self.expect_punctuator(Punctuator::LBrace)?;
+
+        let mut specifiers = Vec::new();
+
+        while !self.check_punctuator(Punctuator::RBrace)? {
+            let local = self.expect_identifier()?;
+            let exported = if self.check_identifier("as")? {
+                self.lexer.next_token()?;
+                self.expect_identifier()?
+            } else {
+                local.clone()
+            };
+
+            specifiers.push(crate::ast::ExportSpecifier { local, exported });
+
+            if !self.check_punctuator(Punctuator::RBrace)? {
+                self.expect_punctuator(Punctuator::Comma)?;
+            }
+        }
+
+        self.expect_punctuator(Punctuator::RBrace)?;
+
+        // Check for re-export: from 'module'
+        let source = if self.check_identifier("from")? {
+            self.lexer.next_token()?;
+            Some(self.expect_string()?)
+        } else {
+            None
+        };
+
+        self.consume_semicolon()?;
+
+        Ok(Statement::ExportNamedDeclaration {
+            declaration: None,
+            specifiers,
+            source,
+            position: None,
+        })
+    }
+
+    fn parse_import_declaration(&mut self) -> Result<Statement, JsError> {
+        // Import declaration is only allowed in module mode
+        if !self.is_module {
+            return Err(syntax_error(
+                "'import' declaration is only allowed in module code",
+                self.last_position.clone(),
+            ));
+        }
+
+        self.expect_keyword(Keyword::Import)?;
+
+        let mut specifiers = Vec::new();
+
+        // import 'module' (side-effect only import)
+        if let Token::String(source) = self.lexer.peek_token()?.clone() {
+            self.lexer.next_token()?;
+            self.consume_semicolon()?;
+            return Ok(Statement::ImportDeclaration {
+                specifiers: vec![],
+                source,
+                position: None,
+            });
+        }
+
+        // Check for default import: import name from 'module'
+        if let Token::Identifier(name, _) = self.lexer.peek_token()?.clone() {
+            self.lexer.next_token()?;
+            specifiers.push(crate::ast::ImportSpecifier::Default(name));
+
+            // Check if there are more imports: import name, { ... } or import name, * as ns
+            if self.check_punctuator(Punctuator::Comma)? {
+                self.lexer.next_token()?;
+            }
+        }
+
+        // Check for namespace import: import * as name
+        if self.check_punctuator(Punctuator::Star)? {
+            self.lexer.next_token()?;
+            self.expect_contextual_keyword("as")?;
+            let name = self.expect_identifier()?;
+            specifiers.push(crate::ast::ImportSpecifier::Namespace(name));
+        }
+        // Check for named imports: import { ... }
+        else if self.check_punctuator(Punctuator::LBrace)? {
+            self.lexer.next_token()?;
+
+            while !self.check_punctuator(Punctuator::RBrace)? {
+                let imported = self.expect_identifier()?;
+                let local = if self.check_identifier("as")? {
+                    self.lexer.next_token()?;
+                    self.expect_identifier()?
+                } else {
+                    imported.clone()
+                };
+
+                specifiers.push(crate::ast::ImportSpecifier::Named { local, imported });
+
+                if !self.check_punctuator(Punctuator::RBrace)? {
+                    self.expect_punctuator(Punctuator::Comma)?;
+                }
+            }
+
+            self.expect_punctuator(Punctuator::RBrace)?;
+        }
+
+        self.expect_contextual_keyword("from")?;
+        let source = self.expect_string()?;
+        self.consume_semicolon()?;
+
+        Ok(Statement::ImportDeclaration {
+            specifiers,
+            source,
+            position: None,
+        })
+    }
+
+    fn expect_string(&mut self) -> Result<String, JsError> {
+        match self.lexer.next_token()? {
+            Token::String(s) => Ok(s),
+            Token::LegacyEscapeString(s) => Ok(s),
+            _ => Err(syntax_error("Expected string literal", self.last_position.clone())),
+        }
     }
 
     fn parse_for_statement(&mut self) -> Result<Statement, JsError> {
@@ -2076,12 +2702,24 @@ impl<'a> Parser<'a> {
                         self.last_position.clone(),
                     ));
                 }
+                // For let/const, check for duplicate bound names in the pattern
+                if matches!(kind, VariableKind::Let | VariableKind::Const) {
+                    Self::check_duplicate_bound_names(&id, &self.last_position)?;
+                    // BoundNames of ForDeclaration cannot contain "let"
+                    Self::check_forin_of_bound_names_not_let(&id, &self.last_position)?;
+                }
                 self.lexer.next_token()?; // consume 'in'
                 let right = self.parse_expression()?;
                 self.expect_punctuator(Punctuator::RParen)?;
                 self.loop_depth += 1;
                 let body = Box::new(self.parse_substatement()?);
                 self.loop_depth -= 1;
+                // Check that body is not a labelled function declaration
+                Self::check_for_body_not_labelled_function(&body, &self.last_position)?;
+                // Check that body's var declarations don't conflict with header's lexical names
+                if matches!(kind, VariableKind::Let | VariableKind::Const) {
+                    Self::check_for_in_of_var_conflict(&id, &body, &self.last_position)?;
+                }
                 return Ok(Statement::ForInStatement {
                     left: ForInOfLeft::VariableDeclaration { kind, id },
                     right,
@@ -2090,13 +2728,25 @@ impl<'a> Parser<'a> {
                 });
             }
 
-            if self.check_identifier("of")? {
+            if self.check_identifier_not_escaped("of")? {
+                // For let/const, check for duplicate bound names in the pattern
+                if matches!(kind, VariableKind::Let | VariableKind::Const) {
+                    Self::check_duplicate_bound_names(&id, &self.last_position)?;
+                    // BoundNames of ForDeclaration cannot contain "let"
+                    Self::check_forin_of_bound_names_not_let(&id, &self.last_position)?;
+                }
                 self.lexer.next_token()?; // consume 'of'
                 let right = self.parse_assignment_expression()?;
                 self.expect_punctuator(Punctuator::RParen)?;
                 self.loop_depth += 1;
                 let body = Box::new(self.parse_substatement()?);
                 self.loop_depth -= 1;
+                // Check that body is not a labelled function declaration
+                Self::check_for_body_not_labelled_function(&body, &self.last_position)?;
+                // Check that body's var declarations don't conflict with header's lexical names
+                if matches!(kind, VariableKind::Let | VariableKind::Const) {
+                    Self::check_for_in_of_var_conflict(&id, &body, &self.last_position)?;
+                }
                 return Ok(Statement::ForOfStatement {
                     left: ForInOfLeft::VariableDeclaration { kind, id },
                     right,
@@ -2148,6 +2798,13 @@ impl<'a> Parser<'a> {
         }
 
         // Expression as left side - could be for-in/for-of or regular for
+        // Check if LHS starts with non-escaped 'async' (for the async-of restriction)
+        // async can be either a keyword or an identifier depending on context
+        let lhs_is_async_not_escaped = match self.lexer.peek_token()? {
+            Token::Keyword(Keyword::Async) => true, // Keywords are never escaped
+            Token::Identifier(ref name, escaped) if name == "async" && !escaped => true,
+            _ => false,
+        };
         let left_expr = self.parse_left_hand_side_expression()?;
 
         // Check for in/of
@@ -2158,16 +2815,18 @@ impl<'a> Parser<'a> {
                     self.last_position.clone(),
                 ));
             }
-            // In strict mode, reject invalid assignment targets like call expressions
-            if self.strict_mode {
-                self.validate_for_in_of_left(&left_expr)?;
-            }
+            // Reject invalid assignment targets (applies in all modes per spec)
+            // IsValidSimpleAssignmentTarget must be true
+            self.validate_for_in_of_left(&left_expr)?;
             self.lexer.next_token()?; // consume 'in'
             let right = self.parse_expression()?;
             self.expect_punctuator(Punctuator::RParen)?;
             self.loop_depth += 1;
             let body = Box::new(self.parse_substatement()?);
             self.loop_depth -= 1;
+
+            // Check that body is not a labelled function declaration
+            Self::check_for_body_not_labelled_function(&body, &self.last_position)?;
 
             // Convert expression to pattern if it looks like a destructuring pattern
             // Otherwise keep as expression (e.g., simple identifier)
@@ -2191,17 +2850,34 @@ impl<'a> Parser<'a> {
             });
         }
 
-        if self.check_identifier("of")? {
-            // In strict mode, reject invalid assignment targets like call expressions
-            if self.strict_mode {
-                self.validate_for_in_of_left(&left_expr)?;
+        if self.check_identifier_not_escaped("of")? {
+            // Reject invalid assignment targets (applies in all modes per spec)
+            // IsValidSimpleAssignmentTarget must be true
+            self.validate_for_in_of_left(&left_expr)?;
+
+            // Special case: `for (async of ...)` is forbidden in regular for-of
+            // (but allowed in for-await-of and when async is escaped)
+            // The `async` identifier followed by `of` could be confused with async arrow function
+            if !is_await && lhs_is_async_not_escaped {
+                if let Expression::Identifier { name, .. } = &left_expr {
+                    if name == "async" {
+                        return Err(syntax_error(
+                            "The left-hand side of a for-of statement may not be 'async'",
+                            self.last_position.clone(),
+                        ));
+                    }
+                }
             }
+
             self.lexer.next_token()?; // consume 'of'
             let right = self.parse_assignment_expression()?;
             self.expect_punctuator(Punctuator::RParen)?;
             self.loop_depth += 1;
             let body = Box::new(self.parse_substatement()?);
             self.loop_depth -= 1;
+
+            // Check that body is not a labelled function declaration
+            Self::check_for_body_not_labelled_function(&body, &self.last_position)?;
 
             // Convert expression to pattern if it looks like a destructuring pattern
             // Otherwise keep as expression (e.g., simple identifier)
@@ -2263,6 +2939,36 @@ impl<'a> Parser<'a> {
         self.loop_depth += 1;
         let body = Box::new(self.parse_substatement()?);
         self.loop_depth -= 1;
+
+        // Check that body is not a labelled function declaration
+        Self::check_for_body_not_labelled_function(&body, &self.last_position)?;
+
+        // Check that body's var declarations don't conflict with header's lexical declarations
+        if let Some(ForInit::VariableDeclaration { kind, declarations }) = &init {
+            if matches!(kind, VariableKind::Let | VariableKind::Const) {
+                // Collect lexical names from declarations
+                let mut header_names = std::collections::HashSet::new();
+                for decl in declarations {
+                    let mut names = Vec::new();
+                    Self::collect_bound_names(&decl.id, &mut names);
+                    for name in names {
+                        header_names.insert(name);
+                    }
+                }
+                // Collect var names from body
+                let mut var_names = std::collections::HashSet::new();
+                Self::collect_var_declared_names_stmt(&body, &mut var_names);
+                // Check for conflicts
+                for name in var_names {
+                    if header_names.contains(&name) {
+                        return Err(syntax_error(
+                            &format!("Identifier '{}' has already been declared", name),
+                            self.last_position.clone(),
+                        ));
+                    }
+                }
+            }
+        }
 
         Ok(Statement::ForStatement {
             init,
@@ -2406,11 +3112,35 @@ impl<'a> Parser<'a> {
                 self.lexer.next_token()?;
                 let p = self.parse_pattern()?;
                 self.expect_punctuator(Punctuator::RParen)?;
+
+                // Check for duplicate bound names in catch parameter
+                Self::check_duplicate_bound_names(&p, &self.last_position)?;
+
+                // Check for await as catch parameter in class static block
+                if self.in_static_block {
+                    let mut param_names = Vec::new();
+                    Self::collect_bound_names(&p, &mut param_names);
+                    for name in &param_names {
+                        if name == "await" {
+                            return Err(syntax_error(
+                                "'await' cannot be used as a binding identifier in class static block",
+                                self.last_position.clone(),
+                            ));
+                        }
+                    }
+                }
+
                 Some(p)
             } else {
                 None
             };
             let body = self.parse_block_body()?;
+
+            // Check if catch parameter names conflict with lexically declared names in body
+            if let Some(ref param_pattern) = param {
+                self.validate_catch_param_body_lexical(param_pattern, &body)?;
+            }
+
             Some(CatchClause { param, body })
         } else {
             None
@@ -2429,6 +3159,29 @@ impl<'a> Parser<'a> {
             finalizer,
             position: None,
         })
+    }
+
+    /// Validate that catch parameter names don't conflict with lexically declared names in body
+    fn validate_catch_param_body_lexical(&self, param: &Pattern, body: &[Statement]) -> Result<(), JsError> {
+        // Collect parameter bound names
+        let mut param_names = Vec::new();
+        Self::collect_bound_names(param, &mut param_names);
+
+        // Collect lexically declared names from body (includes let/const/function/class)
+        let mut lexical_names = Vec::new();
+        Self::collect_lexically_declared_names(body, &mut lexical_names);
+
+        // Check for conflicts
+        for param_name in &param_names {
+            if lexical_names.contains(param_name) {
+                return Err(syntax_error(
+                    &format!("Identifier '{}' has already been declared", param_name),
+                    self.last_position.clone(),
+                ));
+            }
+        }
+
+        Ok(())
     }
 
     fn parse_block_statement(&mut self) -> Result<Statement, JsError> {
@@ -2656,11 +3409,16 @@ impl<'a> Parser<'a> {
     fn parse_expression_statement(&mut self) -> Result<Statement, JsError> {
         // Check for labeled statement: identifier followed by colon
         // In non-strict mode, 'yield' can be used as a label (when not in generator)
+        // In non-module, non-async contexts, 'await' can be used as a label
         let potential_label = match self.lexer.peek_token()?.clone() {
             Token::Identifier(name, _) => Some(name),
             // 'yield' can be a label in non-strict, non-generator contexts
             Token::Keyword(Keyword::Yield) if !self.strict_mode && !self.in_generator => {
                 Some("yield".to_string())
+            }
+            // 'await' can be a label in non-module, non-async contexts
+            Token::Keyword(Keyword::Await) if !self.is_module && !self.in_async && !self.in_static_block => {
+                Some("await".to_string())
             }
             _ => None,
         };
@@ -2744,7 +3502,11 @@ impl<'a> Parser<'a> {
                 // Also check for nested labels that might wrap an iteration
                 // e.g., label1: label2: while(...)
                 // We'll determine this after parsing the body
+                // Set in_labeled_item flag so that `let identifier` with newline triggers ASI
+                let prev_in_labeled_item = self.in_labeled_item;
+                self.in_labeled_item = true;
                 let body = Box::new(self.parse_statement()?);
+                self.in_labeled_item = prev_in_labeled_item;
 
                 // Check if the parsed body is a disallowed declaration type
                 // (catches generator functions which start with 'function *')
@@ -4018,7 +4780,7 @@ impl<'a> Parser<'a> {
                     optional: false,
                     position: None,
                 };
-            } else if matches!(self.lexer.peek_token()?, Token::TemplateLiteral(_)) {
+            } else if matches!(self.lexer.peek_token()?, Token::TemplateLiteral(_, _)) {
                 // Tagged template literal: tag`template`
                 // Template literals are NOT allowed after optional chaining
                 if in_optional_chain {
@@ -4027,7 +4789,8 @@ impl<'a> Parser<'a> {
                         self.last_position.clone(),
                     ));
                 }
-                if let Token::TemplateLiteral(s) = self.lexer.next_token()? {
+                if let Token::TemplateLiteral(s, _has_invalid_escape) = self.lexer.next_token()? {
+                    // Tagged templates allow invalid escape sequences (cooked value is undefined)
                     let quasi = Expression::TemplateLiteral {
                         quasis: vec![TemplateElement {
                             raw: s.clone(),
@@ -4043,7 +4806,7 @@ impl<'a> Parser<'a> {
                         position: None,
                     };
                 }
-            } else if matches!(self.lexer.peek_token()?, Token::TemplateHead(_)) {
+            } else if matches!(self.lexer.peek_token()?, Token::TemplateHead(_, _)) {
                 // Tagged template literal with expressions: tag`hello ${x}!`
                 // Template literals are NOT allowed after optional chaining
                 if in_optional_chain {
@@ -4052,8 +4815,9 @@ impl<'a> Parser<'a> {
                         self.last_position.clone(),
                     ));
                 }
-                if let Token::TemplateHead(s) = self.lexer.next_token()? {
-                    let quasi = self.parse_template_literal_with_expressions(s)?;
+                if let Token::TemplateHead(s, _has_invalid_escape) = self.lexer.next_token()? {
+                    // Tagged templates allow invalid escape sequences
+                    let quasi = self.parse_template_literal_with_expressions_tagged(s)?;
                     expr = Expression::TaggedTemplateExpression {
                         tag: Box::new(expr),
                         quasi: Box::new(quasi),
@@ -4237,6 +5001,32 @@ impl<'a> Parser<'a> {
                     position: None,
                 })
             }
+            Token::LegacyOctalLiteral(n) => {
+                if self.strict_mode {
+                    return Err(syntax_error(
+                        "Octal literals are not allowed in strict mode",
+                        self.last_position.clone(),
+                    ));
+                }
+                self.lexer.next_token()?;
+                Ok(Expression::Literal {
+                    value: Literal::Number(n),
+                    position: None,
+                })
+            }
+            Token::NonOctalDecimalLiteral(n) => {
+                if self.strict_mode {
+                    return Err(syntax_error(
+                        "Decimals with leading zeros are not allowed in strict mode",
+                        self.last_position.clone(),
+                    ));
+                }
+                self.lexer.next_token()?;
+                Ok(Expression::Literal {
+                    value: Literal::Number(n),
+                    position: None,
+                })
+            }
             Token::String(s) => {
                 self.lexer.next_token()?;
                 Ok(Expression::Literal {
@@ -4244,8 +5034,28 @@ impl<'a> Parser<'a> {
                     position: None,
                 })
             }
-            Token::TemplateLiteral(s) => {
+            Token::LegacyEscapeString(s) => {
+                if self.strict_mode {
+                    return Err(syntax_error(
+                        "Octal escape sequences are not allowed in strict mode",
+                        self.last_position.clone(),
+                    ));
+                }
                 self.lexer.next_token()?;
+                Ok(Expression::Literal {
+                    value: Literal::String(s),
+                    position: None,
+                })
+            }
+            Token::TemplateLiteral(s, has_invalid_escape) => {
+                self.lexer.next_token()?;
+                // Untagged template literals must not have invalid escape sequences
+                if has_invalid_escape {
+                    return Err(syntax_error(
+                        "Invalid escape sequence in template literal",
+                        self.last_position.clone(),
+                    ));
+                }
                 Ok(Expression::TemplateLiteral {
                     quasis: vec![TemplateElement {
                         raw: s.clone(),
@@ -4256,8 +5066,15 @@ impl<'a> Parser<'a> {
                     position: None,
                 })
             }
-            Token::TemplateHead(s) => {
+            Token::TemplateHead(s, has_invalid_escape) => {
                 self.lexer.next_token()?;
+                // Untagged template literals must not have invalid escape sequences
+                if has_invalid_escape {
+                    return Err(syntax_error(
+                        "Invalid escape sequence in template literal",
+                        self.last_position.clone(),
+                    ));
+                }
                 self.parse_template_literal_with_expressions(s)
             }
             Token::Keyword(Keyword::True) => {
@@ -4476,6 +5293,7 @@ impl<'a> Parser<'a> {
     }
 
     /// Parse a template literal with expressions (starting from after the head was consumed)
+    /// For untagged templates - errors on invalid escape sequences
     fn parse_template_literal_with_expressions(
         &mut self,
         head: String,
@@ -4502,7 +5320,14 @@ impl<'a> Parser<'a> {
             let next_token = self.lexer.scan_template_middle()?;
 
             match next_token {
-                Token::TemplateMiddle(s) => {
+                Token::TemplateMiddle(s, has_invalid_escape) => {
+                    // Untagged templates must not have invalid escapes
+                    if has_invalid_escape {
+                        return Err(syntax_error(
+                            "Invalid escape sequence in template literal",
+                            self.last_position.clone(),
+                        ));
+                    }
                     // More expressions to come
                     quasis.push(TemplateElement {
                         raw: s.clone(),
@@ -4510,8 +5335,76 @@ impl<'a> Parser<'a> {
                         tail: false,
                     });
                 }
-                Token::TemplateTail(s) => {
+                Token::TemplateTail(s, has_invalid_escape) => {
+                    // Untagged templates must not have invalid escapes
+                    if has_invalid_escape {
+                        return Err(syntax_error(
+                            "Invalid escape sequence in template literal",
+                            self.last_position.clone(),
+                        ));
+                    }
                     // End of template
+                    quasis.push(TemplateElement {
+                        raw: s.clone(),
+                        cooked: s,
+                        tail: true,
+                    });
+                    break;
+                }
+                _ => {
+                    return Err(syntax_error(
+                        "Expected template continuation",
+                        self.last_position.clone(),
+                    ));
+                }
+            }
+        }
+
+        Ok(Expression::TemplateLiteral {
+            quasis,
+            expressions,
+            position: None,
+        })
+    }
+
+    /// Parse a template literal with expressions for tagged templates
+    /// Tagged templates allow invalid escape sequences (cooked value is undefined)
+    fn parse_template_literal_with_expressions_tagged(
+        &mut self,
+        head: String,
+    ) -> Result<Expression, JsError> {
+        let mut quasis = Vec::new();
+        let mut expressions = Vec::new();
+
+        // Add the head as the first quasi
+        quasis.push(TemplateElement {
+            raw: head.clone(),
+            cooked: head,
+            tail: false,
+        });
+
+        loop {
+            // Parse the expression inside ${ }
+            let expr = self.parse_expression()?;
+            expressions.push(expr);
+
+            // Expect and consume the closing }
+            self.expect_punctuator(Punctuator::RBrace)?;
+
+            // After consuming }, continue scanning the template
+            let next_token = self.lexer.scan_template_middle()?;
+
+            match next_token {
+                Token::TemplateMiddle(s, _has_invalid_escape) => {
+                    // Tagged templates allow invalid escapes
+                    quasis.push(TemplateElement {
+                        raw: s.clone(),
+                        cooked: s,
+                        tail: false,
+                    });
+                }
+                Token::TemplateTail(s, _has_invalid_escape) => {
+                    // Tagged templates allow invalid escapes
                     quasis.push(TemplateElement {
                         raw: s.clone(),
                         cooked: s,
@@ -5896,6 +6789,23 @@ impl<'a> Parser<'a> {
         Ok(matches!(self.lexer.peek_token()?, Token::Identifier(ref x, _) if x == name))
     }
 
+    /// Expect a contextual keyword (identifier with a specific name)
+    fn expect_contextual_keyword(&mut self, name: &str) -> Result<(), JsError> {
+        if let Token::Identifier(ref id, _) = self.lexer.peek_token()?.clone() {
+            if id == name {
+                self.lexer.next_token()?;
+                return Ok(());
+            }
+        }
+        Err(syntax_error(&format!("Expected '{}'", name), self.last_position.clone()))
+    }
+
+    /// Check for a contextual keyword that must NOT contain Unicode escapes
+    /// (e.g., "of" in for-of statements)
+    fn check_identifier_not_escaped(&mut self, name: &str) -> Result<bool, JsError> {
+        Ok(matches!(self.lexer.peek_token()?, Token::Identifier(ref x, escaped) if x == name && !escaped))
+    }
+
     fn check_private_identifier(&mut self) -> Result<bool, JsError> {
         Ok(matches!(self.lexer.peek_token()?, Token::PrivateIdentifier(_)))
     }
@@ -5923,20 +6833,29 @@ impl<'a> Parser<'a> {
     }
 
     /// Validate that a private name reference is valid (declared in enclosing class)
-    fn validate_private_name_reference(&self, name: &str) -> Result<(), JsError> {
+    /// For names in the current class, we defer validation until the class is fully parsed
+    fn validate_private_name_reference(&mut self, name: &str) -> Result<(), JsError> {
         if self.class_private_names.is_empty() {
             return Err(syntax_error(
                 format!("Private field '#{}' must be declared in an enclosing class", name),
                 self.last_position.clone(),
             ));
         }
-        if !self.is_private_name_declared(name) {
-            return Err(syntax_error(
-                format!("Private field '#{}' must be declared in an enclosing class", name),
-                self.last_position.clone(),
-            ));
+        // Check if already declared in any scope (could be outer class or already registered in current)
+        if self.is_private_name_declared(name) {
+            return Ok(());
         }
-        Ok(())
+        // Not yet declared - defer validation until class parsing is complete
+        // This handles forward references within the same class
+        if let Some(pending) = self.pending_private_validations.last_mut() {
+            pending.push((name.to_string(), self.last_position.clone()));
+            return Ok(());
+        }
+        // No pending scope (shouldn't happen if class_private_names is non-empty)
+        Err(syntax_error(
+            format!("Private field '#{}' must be declared in an enclosing class", name),
+            self.last_position.clone(),
+        ))
     }
 
     fn expect_punctuator(&mut self, p: Punctuator) -> Result<(), JsError> {
@@ -5977,9 +6896,9 @@ impl<'a> Parser<'a> {
                 self.validate_binding_identifier(&name)?;
                 Ok(name)
             }
-            // 'await' is a keyword only in async contexts or static blocks, otherwise it's a valid identifier
-            // But 'await' cannot be an identifier in module code (handled elsewhere)
-            Token::Keyword(Keyword::Await) if !self.in_async && !self.in_static_block => {
+            // 'await' is a keyword only in async contexts, static blocks, or module code
+            // otherwise it's a valid identifier
+            Token::Keyword(Keyword::Await) if !self.in_async && !self.in_static_block && !self.is_module => {
                 Ok("await".to_string())
             }
             // 'yield' is a keyword only in generator contexts, otherwise it's a valid identifier
@@ -6010,7 +6929,18 @@ impl<'a> Parser<'a> {
             Token::Identifier(name, _) => Ok(name),
             Token::Keyword(k) => Ok(keyword_to_string(k)),
             Token::String(s) => Ok(s),
+            Token::LegacyEscapeString(s) => {
+                if self.strict_mode {
+                    return Err(syntax_error(
+                        "Octal escape sequences are not allowed in strict mode",
+                        self.last_position.clone(),
+                    ));
+                }
+                Ok(s)
+            }
             Token::Number(n) => Ok(n.to_string()),
+            Token::LegacyOctalLiteral(n) => Ok(n.to_string()),
+            Token::NonOctalDecimalLiteral(n) => Ok(n.to_string()),
             Token::BigIntLiteral(s) => Ok(s), // BigInt property names converted to string
             _ => Err(unexpected_token(
                 "property name",
@@ -6052,7 +6982,18 @@ impl<'a> Parser<'a> {
         match token {
             Token::Identifier(name, _) => Ok(PropertyKey::Identifier(name)),
             Token::String(s) => Ok(PropertyKey::String(s)),
+            Token::LegacyEscapeString(s) => {
+                if self.strict_mode {
+                    return Err(syntax_error(
+                        "Octal escape sequences are not allowed in strict mode",
+                        self.last_position.clone(),
+                    ));
+                }
+                Ok(PropertyKey::String(s))
+            }
             Token::Number(n) => Ok(PropertyKey::Number(n)),
+            Token::LegacyOctalLiteral(n) => Ok(PropertyKey::Number(n)),
+            Token::NonOctalDecimalLiteral(n) => Ok(PropertyKey::Number(n)),
             Token::BigIntLiteral(s) => {
                 // BigInt property names are converted to their string representation
                 Ok(PropertyKey::String(s))
@@ -6078,7 +7019,10 @@ impl<'a> Parser<'a> {
             Token::Identifier(_, _)
                 | Token::Keyword(_)
                 | Token::String(_)
+                | Token::LegacyEscapeString(_)
                 | Token::Number(_)
+                | Token::LegacyOctalLiteral(_)
+                | Token::NonOctalDecimalLiteral(_)
                 | Token::BigIntLiteral(_)
                 | Token::Punctuator(Punctuator::LBracket)
                 | Token::PrivateIdentifier(_)
@@ -6287,6 +7231,97 @@ impl<'a> Parser<'a> {
         )
     }
 
+    /// Validate an element inside a destructuring pattern for for-in/for-of
+    /// Elements can be assignment expressions (for default values) or plain targets
+    fn validate_for_in_of_left_element(&self, expr: &Expression) -> Result<(), JsError> {
+        match expr {
+            // For assignment expressions, validate the left side
+            Expression::AssignmentExpression { left, .. } => {
+                self.validate_for_in_of_assignment_target(left)
+            }
+            // For other expressions, validate as normal
+            _ => self.validate_for_in_of_left(expr),
+        }
+    }
+
+    /// Validate an AssignmentTarget for for-in/for-of
+    fn validate_for_in_of_assignment_target(
+        &self,
+        target: &crate::ast::AssignmentTarget,
+    ) -> Result<(), JsError> {
+        use crate::ast::AssignmentTarget;
+        match target {
+            AssignmentTarget::Identifier(name) => {
+                if self.strict_mode && (name == "arguments" || name == "eval") {
+                    return Err(syntax_error(
+                        &format!("'{}' cannot be assigned in strict mode", name),
+                        self.last_position.clone(),
+                    ));
+                }
+                Ok(())
+            }
+            AssignmentTarget::Member(expr) => {
+                if let Expression::MemberExpression { optional, .. } = &**expr {
+                    if *optional {
+                        return Err(syntax_error(
+                            "Invalid left-hand side in for-in/for-of: optional chaining not allowed",
+                            self.last_position.clone(),
+                        ));
+                    }
+                }
+                Ok(())
+            }
+            AssignmentTarget::Pattern(pattern) => {
+                // Patterns are always valid assignment targets
+                // We just need to check nested elements
+                self.validate_pattern_for_for_in_of(pattern)
+            }
+        }
+    }
+
+    /// Validate a pattern for for-in/for-of
+    fn validate_pattern_for_for_in_of(&self, pattern: &crate::ast::Pattern) -> Result<(), JsError> {
+        use crate::ast::Pattern;
+        match pattern {
+            Pattern::Identifier(name) => {
+                if self.strict_mode && (name == "arguments" || name == "eval") {
+                    return Err(syntax_error(
+                        &format!("'{}' cannot be assigned in strict mode", name),
+                        self.last_position.clone(),
+                    ));
+                }
+                Ok(())
+            }
+            Pattern::ArrayPattern(elements) => {
+                for elem in elements {
+                    if let Some(p) = elem {
+                        self.validate_pattern_for_for_in_of(p)?;
+                    }
+                }
+                Ok(())
+            }
+            Pattern::ObjectPattern(properties) => {
+                for prop in properties {
+                    self.validate_pattern_for_for_in_of(&prop.value)?;
+                }
+                Ok(())
+            }
+            Pattern::AssignmentPattern { left, .. } => self.validate_pattern_for_for_in_of(left),
+            Pattern::RestElement(inner) => self.validate_pattern_for_for_in_of(inner),
+            Pattern::MemberExpression(expr) => {
+                if let Expression::MemberExpression { optional, .. } = &**expr {
+                    if *optional {
+                        return Err(syntax_error(
+                            "Invalid left-hand side in for-in/for-of: optional chaining not allowed",
+                            self.last_position.clone(),
+                        ));
+                    }
+                }
+                Ok(())
+            }
+        }
+    }
+
     /// Validate that a for-in/for-of left-hand side expression is a valid assignment target
     /// In strict mode, call expressions and other non-simple expressions are not allowed
     fn validate_for_in_of_left(&self, expr: &Expression) -> Result<(), JsError> {
@@ -6314,11 +7349,14 @@ impl<'a> Parser<'a> {
                 }
             }
             // Valid: object/array destructuring patterns - but need to check elements recursively
+            // Elements can include AssignmentExpressions (for default values)
             Expression::ArrayExpression { elements, .. } => {
                 for elem in elements {
                     if let Some(e) = elem {
                         match e {
-                            ArrayElement::Expression(expr) => self.validate_for_in_of_left(expr)?,
+                            ArrayElement::Expression(expr) => {
+                                self.validate_for_in_of_left_element(expr)?
+                            }
                             ArrayElement::Spread(expr) => self.validate_for_in_of_left(expr)?,
                         }
                     }
@@ -6329,7 +7367,7 @@ impl<'a> Parser<'a> {
                 for prop in properties {
                     match prop {
                         ObjectProperty::Property { value, .. } => {
-                            self.validate_for_in_of_left(value)?;
+                            self.validate_for_in_of_left_element(value)?;
                         }
                         ObjectProperty::SpreadElement(expr) => {
                             self.validate_for_in_of_left(expr)?;
@@ -6338,8 +7376,19 @@ impl<'a> Parser<'a> {
                 }
                 Ok(())
             }
+            // Valid: assignment expressions are valid in destructuring (for default values)
+            Expression::AssignmentExpression { left, .. } => {
+                self.validate_for_in_of_assignment_target(left)
+            }
             // Invalid: call expressions
             Expression::CallExpression { .. } => {
+                Err(syntax_error(
+                    "Invalid left-hand side in for-in/for-of",
+                    self.last_position.clone(),
+                ))
+            }
+            // Invalid: this expression (not a valid simple assignment target)
+            Expression::ThisExpression { .. } => {
                 Err(syntax_error(
                     "Invalid left-hand side in for-in/for-of",
                     self.last_position.clone(),
@@ -6409,6 +7458,14 @@ impl<'a> Parser<'a> {
         if self.in_async && name == "await" {
             return Err(syntax_error(
                 "'await' is not allowed as an identifier in async functions",
+                self.last_position.clone(),
+            ));
+        }
+
+        // 'await' is a reserved word in module code
+        if self.is_module && name == "await" {
+            return Err(syntax_error(
+                "'await' is not allowed as an identifier in module code",
                 self.last_position.clone(),
             ));
         }
@@ -6661,6 +7718,18 @@ impl<'a> Parser<'a> {
                         }
                     }
                 }
+                // Function declarations are also lexically declared in block scope
+                Statement::FunctionDeclaration { name, .. } => {
+                    if !name.is_empty() {
+                        names.push(name.clone());
+                    }
+                }
+                // Class declarations are also lexically declared
+                Statement::ClassDeclaration { name, .. } => {
+                    if !name.is_empty() {
+                        names.push(name.clone());
+                    }
+                }
                 _ => {}
             }
         }
@@ -6668,27 +7737,74 @@ impl<'a> Parser<'a> {
 
     /// Validate that parameter names don't conflict with lexically declared names in body
     fn validate_params_body_lexical(&self, params: &[Pattern], body: &[Statement]) -> Result<(), JsError> {
+        // In non-strict mode with simple parameters, function declarations can shadow parameters
+        // Only let/const/class need to be checked in this case
+        // In strict mode or with non-simple parameters, all lexical declarations conflict
+
+        let is_simple = Self::is_simple_parameter_list(params);
+
         // Collect parameter bound names
         let mut param_names = Vec::new();
         for param in params {
             Self::collect_bound_names(param, &mut param_names);
         }
 
-        // Collect lexically declared names from body
-        let mut lexical_names = Vec::new();
-        Self::collect_lexically_declared_names(body, &mut lexical_names);
+        // In non-strict mode with simple parameters, function declarations are allowed
+        // to have the same name as parameters (they shadow them)
+        if !self.strict_mode && is_simple {
+            // Only collect let/const/class declarations (not function declarations)
+            let mut lexical_names = Vec::new();
+            Self::collect_let_const_class_names(body, &mut lexical_names);
 
-        // Check for conflicts
-        for param_name in &param_names {
-            if lexical_names.contains(param_name) {
-                return Err(syntax_error(
-                    &format!("Identifier '{}' has already been declared", param_name),
-                    self.last_position.clone(),
-                ));
+            for param_name in &param_names {
+                if lexical_names.contains(param_name) {
+                    return Err(syntax_error(
+                        &format!("Identifier '{}' has already been declared", param_name),
+                        self.last_position.clone(),
+                    ));
+                }
+            }
+        } else {
+            // In strict mode or with non-simple parameters, all lexical declarations conflict
+            let mut lexical_names = Vec::new();
+            Self::collect_lexically_declared_names(body, &mut lexical_names);
+
+            for param_name in &param_names {
+                if lexical_names.contains(param_name) {
+                    return Err(syntax_error(
+                        &format!("Identifier '{}' has already been declared", param_name),
+                        self.last_position.clone(),
+                    ));
+                }
             }
         }
 
         Ok(())
+    }
+
+    /// Collect only let/const/class declared names (excludes function declarations)
+    fn collect_let_const_class_names(body: &[Statement], names: &mut Vec<String>) {
+        for stmt in body {
+            match stmt {
+                Statement::VariableDeclaration { kind, declarations, .. } => {
+                    // Only let and const are lexical declarations
+                    if matches!(kind, crate::ast::VariableKind::Let | crate::ast::VariableKind::Const) {
+                        for decl in declarations {
+                            Self::collect_bound_names(&decl.id, names);
+                        }
+                    }
+                }
+                // Class declarations are also lexically declared
+                Statement::ClassDeclaration { name, .. } => {
+                    if !name.is_empty() {
+                        names.push(name.clone());
+                    }
+                }
+                // Function declarations are NOT included here - they can shadow parameters
+                // in non-strict mode with simple parameters
+                _ => {}
+            }
+        }
     }
 
     /// Validate parameters for duplicates based on context
@@ -6757,6 +7873,100 @@ impl<'a> Parser<'a> {
             }
             _ => Ok(()),
         }
+    }
+
+    /// Check for duplicate bound names in a pattern (for let/const in for-in/for-of)
+    fn check_duplicate_bound_names(
+        pattern: &Pattern,
+        position: &Option<core_types::SourcePosition>,
+    ) -> Result<(), JsError> {
+        let mut names = Vec::new();
+        Self::collect_bound_names(pattern, &mut names);
+
+        let mut seen = std::collections::HashSet::new();
+        for name in names {
+            if !seen.insert(name.clone()) {
+                return Err(syntax_error(
+                    &format!("Duplicate binding name '{}' in for-in/for-of head", name),
+                    position.clone(),
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// Check that BoundNames of ForDeclaration do not contain "let"
+    /// Per spec: It is a Syntax Error if the BoundNames of ForDeclaration contains "let".
+    fn check_forin_of_bound_names_not_let(
+        pattern: &Pattern,
+        position: &Option<core_types::SourcePosition>,
+    ) -> Result<(), JsError> {
+        let mut names = Vec::new();
+        Self::collect_bound_names(pattern, &mut names);
+
+        for name in names {
+            if name == "let" {
+                return Err(syntax_error(
+                    "The identifier 'let' is not allowed in for-in/for-of declarations",
+                    position.clone(),
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// Check if a statement is a labelled function declaration (recursively)
+    /// This is forbidden as the body of for/for-in/for-of/while/do-while/with/if
+    fn is_labelled_function(stmt: &Statement) -> bool {
+        match stmt {
+            Statement::LabeledStatement { body, .. } => {
+                // Check if the body is a function or recursively a labelled function
+                matches!(**body, Statement::FunctionDeclaration { .. })
+                    || Self::is_labelled_function(body)
+            }
+            _ => false,
+        }
+    }
+
+    /// Validate that a for/for-in/for-of body is not a labelled function declaration
+    fn check_for_body_not_labelled_function(
+        body: &Statement,
+        position: &Option<core_types::SourcePosition>,
+    ) -> Result<(), JsError> {
+        if Self::is_labelled_function(body) {
+            return Err(syntax_error(
+                "Labelled function declarations cannot be the body of a for loop",
+                position.clone(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Check that var declarations in for-in/for-of body don't conflict with header's lexical names
+    fn check_for_in_of_var_conflict(
+        pattern: &Pattern,
+        body: &Statement,
+        position: &Option<core_types::SourcePosition>,
+    ) -> Result<(), JsError> {
+        // Collect lexical names from pattern
+        let mut header_names = Vec::new();
+        Self::collect_bound_names(pattern, &mut header_names);
+        let header_set: std::collections::HashSet<_> = header_names.into_iter().collect();
+
+        // Collect var declared names from body
+        let mut var_names = std::collections::HashSet::new();
+        Self::collect_var_declared_names_stmt(body, &mut var_names);
+
+        // Check for conflicts
+        for name in var_names {
+            if header_set.contains(&name) {
+                return Err(syntax_error(
+                    &format!("Identifier '{}' has already been declared", name),
+                    position.clone(),
+                ));
+            }
+        }
+        Ok(())
     }
 
     /// Validate arrow function parameters - always rejects duplicates and yield expressions
@@ -7278,15 +8488,26 @@ impl<'a> Parser<'a> {
                 ));
             }
             // In sloppy mode, peek ahead to see if this looks like a lexical declaration
-            // `let` followed by identifier, `[`, or `{` (without line terminator) is a declaration
-            // `let` followed by a line terminator is an identifier expression
+            // `let` followed by identifier (without line terminator), `[`, or `{` triggers special handling
             self.lexer.next_token()?; // consume 'let'
             // First peek the next token so that line_terminator_before_token is updated
             let next_token = self.lexer.peek_token()?.clone();
+
+            // `let [` is in the lookahead restriction for ExpressionStatement
+            // This is forbidden REGARDLESS of line terminators
+            // Per spec: ExpressionStatement [lookahead ∉ { {, function, class, let [ }]
+            if matches!(next_token, Token::Punctuator(Punctuator::LBracket)) {
+                return Err(syntax_error(
+                    "Lexical declaration cannot appear in a single-statement context",
+                    self.last_position.clone(),
+                ));
+            }
+
+            // For identifier or brace, it's a declaration only if no line terminator before
             let is_declaration = !self.lexer.line_terminator_before_token
                 && matches!(
                     next_token,
-                    Token::Identifier(_, _) | Token::Punctuator(Punctuator::LBracket) | Token::Punctuator(Punctuator::LBrace)
+                    Token::Identifier(_, _) | Token::Punctuator(Punctuator::LBrace)
                 );
 
             if is_declaration {

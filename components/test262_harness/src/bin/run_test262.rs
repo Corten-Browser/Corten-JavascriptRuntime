@@ -4,6 +4,8 @@
 //! against the Corten JavaScript Runtime using the test262_harness infrastructure.
 
 use std::env;
+use std::fs::File;
+use std::io::Write;
 use std::path::Path;
 use std::time::Instant;
 use test262_harness::{Test262Harness, TestReport};
@@ -15,6 +17,7 @@ fn main() {
     let mut test_dir = "test262/test/language/expressions";
     let mut execute_mode = false;
     let mut limit: Option<usize> = None;
+    let mut failures_file: Option<String> = None;
 
     let mut i = 1;
     while i < args.len() {
@@ -27,6 +30,13 @@ fn main() {
                 i += 1;
                 if i < args.len() {
                     limit = args[i].parse().ok();
+                    i += 1;
+                }
+            }
+            "--failures-file" | "-f" => {
+                i += 1;
+                if i < args.len() {
+                    failures_file = Some(args[i].clone());
                     i += 1;
                 }
             }
@@ -84,7 +94,7 @@ fn main() {
     let duration = start.elapsed();
 
     // Print results
-    print_report(&report, duration);
+    print_report(&report, duration, failures_file.as_deref());
 
     // Exit with appropriate code
     if report.failed > 0 {
@@ -100,9 +110,10 @@ fn print_usage() {
     println!("    run_test262 [OPTIONS] [DIRECTORY]");
     println!();
     println!("OPTIONS:");
-    println!("    -e, --execute       Run in execution mode (parse + execute)");
-    println!("    -l, --limit NUM     Limit number of tests to run");
-    println!("    -h, --help          Print this help message");
+    println!("    -e, --execute           Run in execution mode (parse + execute)");
+    println!("    -l, --limit NUM         Limit number of tests to run");
+    println!("    -f, --failures-file F   Write all failures to file F");
+    println!("    -h, --help              Print this help message");
     println!();
     println!("EXAMPLES:");
     println!("    # Run parse-only tests for expressions");
@@ -185,7 +196,7 @@ fn run_with_limit(harness: &mut Test262Harness, dir: &str, limit: usize) -> Test
 }
 
 /// Print test report
-fn print_report(report: &TestReport, duration: std::time::Duration) {
+fn print_report(report: &TestReport, duration: std::time::Duration, failures_file: Option<&str>) {
     println!("\n====================================");
     println!("RESULTS");
     println!("====================================");
@@ -196,6 +207,23 @@ fn print_report(report: &TestReport, duration: std::time::Duration) {
     println!("Timeout:  {}", report.timeout);
     println!("Duration: {:.2}s", duration.as_secs_f64());
     println!();
+
+    // Write all failures to file if specified
+    if let Some(file_path) = failures_file {
+        if !report.failures.is_empty() {
+            match File::create(file_path) {
+                Ok(mut file) => {
+                    for (path, reason) in &report.failures {
+                        writeln!(file, "{}\t{}", path, reason).ok();
+                    }
+                    println!("Wrote {} failures to {}", report.failures.len(), file_path);
+                }
+                Err(e) => {
+                    eprintln!("Warning: Could not write failures to {}: {}", file_path, e);
+                }
+            }
+        }
+    }
 
     // Show sample of failures if any
     if !report.failures.is_empty() {

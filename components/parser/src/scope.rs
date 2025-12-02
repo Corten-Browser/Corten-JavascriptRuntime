@@ -363,6 +363,78 @@ impl ScopeAnalyzer {
             Statement::LabeledStatement { body, .. } => {
                 self.visit_statement(body)?;
             }
+
+            // Module declarations
+            Statement::ExportDefaultDeclaration { declaration, .. } => {
+                // Visit the declaration being exported
+                match declaration.as_mut() {
+                    crate::ast::ExportDefaultDecl::Class { name, super_class, body } => {
+                        if let Some(n) = name {
+                            self.declare_variable(n, VariableKind::Let)?;
+                        }
+                        if let Some(sc) = super_class {
+                            self.visit_expression(sc)?;
+                        }
+                        for element in body {
+                            match element {
+                                ClassElement::MethodDefinition { value, .. } => {
+                                    self.visit_expression(value)?;
+                                }
+                                ClassElement::PropertyDefinition { value, .. } => {
+                                    if let Some(expr) = value {
+                                        self.visit_expression(expr)?;
+                                    }
+                                }
+                                ClassElement::StaticBlock { body } => {
+                                    for stmt in body {
+                                        self.visit_statement(stmt)?;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    crate::ast::ExportDefaultDecl::Function { name, params, body, .. } => {
+                        if let Some(n) = name {
+                            self.declare_variable(n, VariableKind::Var)?;
+                        }
+                        let func_scope = self.enter_scope(true);
+                        for param in params {
+                            self.declare_pattern(param, VariableKind::Let)?;
+                        }
+                        for stmt in body {
+                            self.visit_statement(stmt)?;
+                        }
+                        self.exit_scope(func_scope);
+                    }
+                    crate::ast::ExportDefaultDecl::Expression(expr) => {
+                        self.visit_expression(expr)?;
+                    }
+                }
+            }
+            Statement::ExportNamedDeclaration { declaration, .. } => {
+                if let Some(decl) = declaration {
+                    self.visit_statement(decl)?;
+                }
+            }
+            Statement::ExportAllDeclaration { .. } => {
+                // Re-exports don't create local bindings
+            }
+            Statement::ImportDeclaration { specifiers, .. } => {
+                // Import bindings are immutable
+                for spec in specifiers {
+                    match spec {
+                        crate::ast::ImportSpecifier::Default(name) => {
+                            self.declare_variable(name, VariableKind::Const)?;
+                        }
+                        crate::ast::ImportSpecifier::Namespace(name) => {
+                            self.declare_variable(name, VariableKind::Const)?;
+                        }
+                        crate::ast::ImportSpecifier::Named { local, .. } => {
+                            self.declare_variable(local, VariableKind::Const)?;
+                        }
+                    }
+                }
+            }
         }
         Ok(())
     }
