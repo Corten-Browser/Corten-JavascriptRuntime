@@ -9,6 +9,7 @@ memory_manager = { path = "../memory_manager" }
 core_types = { path = "../core_types" }
 builtins = { path = "../builtins" }
 async_runtime = { path = "../async_runtime" }
+num-bigint = { workspace = true }
 num-traits = { workspace = true }
 parking_lot = "0.12"
 arrayvec = "0.7"

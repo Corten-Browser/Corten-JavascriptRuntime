@@ -6,6 +6,7 @@ use async_runtime::PromiseState;
 use bytecode_system::{BytecodeChunk, Opcode, UpvalueDescriptor};
 use builtins::{BigIntValue, ConsoleObject, JSONObject, JsValue as BuiltinValue, MathObject, NumberObject};
 use core_types::{ErrorKind, JsError, Value};
+use num_bigint::BigInt;
 use num_traits::Zero;
 use std::any::Any;
 use std::cell::RefCell;
@@ -1203,7 +1204,33 @@ impl Dispatcher {
 
                     match constructor {
                         Value::NativeFunction(name) => {
-                            let result = self.call_native_function(&name, args)?;
+                            // Check for primitive wrapper constructors - they need special handling with new
+                            let result = match name.as_str() {
+                                "Boolean" => {
+                                    // new Boolean(x) creates a Boolean object wrapper
+                                    let b = args.first().map(|v| self.to_boolean(v)).unwrap_or(false);
+                                    self.create_wrapper_object("Boolean", Value::Boolean(b))
+                                }
+                                "Number" => {
+                                    // new Number(x) creates a Number object wrapper
+                                    let n = args.first().map(|v| self.to_number(v)).unwrap_or(0.0);
+                                    let val = if n.fract() == 0.0 && n.abs() < (i32::MAX as f64) {
+                                        Value::Smi(n as i32)
+                                    } else {
+                                        Value::Double(n)
+                                    };
+                                    self.create_wrapper_object("Number", val)
+                                }
+                                "String" => {
+                                    // new String(x) creates a String object wrapper
+                                    let s = args.first().map(|v| self.to_string_value(v)).unwrap_or_default();
+                                    self.create_wrapper_object("String", Value::String(s))
+                                }
+                                _ => {
+                                    // For other native functions, use regular call
+                                    self.call_native_function(&name, args)?
+                                }
+                            };
                             self.stack.push(result);
                         }
                         Value::HeapObject(idx) => {
@@ -2043,6 +2070,34 @@ impl Dispatcher {
             Ok(Value::NativeObject(
                 Rc::new(RefCell::new(error)) as Rc<RefCell<dyn Any>>
             ))
+        }
+    }
+
+    /// Create a wrapper object for primitive types (used by new Boolean/Number/String)
+    ///
+    /// # Arguments
+    ///
+    /// * `wrapper_type` - The type name ("Boolean", "Number", or "String")
+    /// * `primitive_value` - The primitive value to wrap
+    ///
+    /// # Returns
+    ///
+    /// A NativeObject that wraps the primitive value and has proper prototype behavior
+    fn create_wrapper_object(&self, wrapper_type: &str, primitive_value: Value) -> Value {
+        if let Some(ref heap) = self.heap {
+            let mut wrapper_obj = heap.create_object();
+            // Store the type for instanceof checks
+            wrapper_obj.set("__proto_type__".to_string(), Value::String(wrapper_type.to_string()));
+            // Store the primitive value (used by valueOf)
+            wrapper_obj.set("[[PrimitiveValue]]".to_string(), primitive_value);
+
+            let boxed: Box<dyn Any> = Box::new(wrapper_obj);
+            Value::NativeObject(
+                Rc::new(RefCell::new(boxed)) as Rc<RefCell<dyn Any>>
+            )
+        } else {
+            // Fallback: return the primitive if heap not available
+            primitive_value
         }
     }
 
@@ -3494,6 +3549,7 @@ impl Dispatcher {
         match a {
             Value::Smi(x) => Ok(Value::Smi(-x)),
             Value::Double(x) => Ok(Value::Double(-x)),
+            Value::BigInt(n) => Ok(Value::BigInt(-n)),
             _ => Ok(Value::Double(f64::NAN)),
         }
     }
@@ -3523,41 +3579,141 @@ impl Dispatcher {
     }
 
     fn bitwise_and(&self, a: Value, b: Value) -> Result<Value, JsError> {
+        // BigInt bitwise AND
+        if let (Value::BigInt(x), Value::BigInt(y)) = (&a, &b) {
+            return Ok(Value::BigInt(x & y));
+        }
+        // Cannot mix BigInt with other types
+        if matches!(&a, Value::BigInt(_)) || matches!(&b, Value::BigInt(_)) {
+            return Err(JsError {
+                kind: ErrorKind::TypeError,
+                message: "Cannot mix BigInt and other types in bitwise AND".to_string(),
+                stack: vec![],
+                source_position: None,
+            });
+        }
         let a_int = self.to_int32(&a);
         let b_int = self.to_int32(&b);
         Ok(Value::Smi(a_int & b_int))
     }
 
     fn bitwise_or(&self, a: Value, b: Value) -> Result<Value, JsError> {
+        // BigInt bitwise OR
+        if let (Value::BigInt(x), Value::BigInt(y)) = (&a, &b) {
+            return Ok(Value::BigInt(x | y));
+        }
+        // Cannot mix BigInt with other types
+        if matches!(&a, Value::BigInt(_)) || matches!(&b, Value::BigInt(_)) {
+            return Err(JsError {
+                kind: ErrorKind::TypeError,
+                message: "Cannot mix BigInt and other types in bitwise OR".to_string(),
+                stack: vec![],
+                source_position: None,
+            });
+        }
         let a_int = self.to_int32(&a);
         let b_int = self.to_int32(&b);
         Ok(Value::Smi(a_int | b_int))
     }
 
     fn bitwise_xor(&self, a: Value, b: Value) -> Result<Value, JsError> {
+        // BigInt bitwise XOR
+        if let (Value::BigInt(x), Value::BigInt(y)) = (&a, &b) {
+            return Ok(Value::BigInt(x ^ y));
+        }
+        // Cannot mix BigInt with other types
+        if matches!(&a, Value::BigInt(_)) || matches!(&b, Value::BigInt(_)) {
+            return Err(JsError {
+                kind: ErrorKind::TypeError,
+                message: "Cannot mix BigInt and other types in bitwise XOR".to_string(),
+                stack: vec![],
+                source_position: None,
+            });
+        }
         let a_int = self.to_int32(&a);
         let b_int = self.to_int32(&b);
         Ok(Value::Smi(a_int ^ b_int))
     }
 
     fn bitwise_not(&self, a: Value) -> Result<Value, JsError> {
+        // BigInt bitwise NOT
+        if let Value::BigInt(n) = &a {
+            return Ok(Value::BigInt(!n));
+        }
         let a_int = self.to_int32(&a);
         Ok(Value::Smi(!a_int))
     }
 
     fn left_shift(&self, a: Value, b: Value) -> Result<Value, JsError> {
+        // BigInt left shift
+        if let (Value::BigInt(x), Value::BigInt(y)) = (&a, &b) {
+            // For BigInt, shift amount must be non-negative
+            if *y < BigInt::from(0) {
+                return Err(JsError {
+                    kind: ErrorKind::RangeError,
+                    message: "BigInt shift amount must be non-negative".to_string(),
+                    stack: vec![],
+                    source_position: None,
+                });
+            }
+            // Convert shift amount to u64 (reasonable limit)
+            let shift_amount: u64 = y.try_into().unwrap_or(u64::MAX);
+            return Ok(Value::BigInt(x << shift_amount));
+        }
+        // Cannot mix BigInt with other types
+        if matches!(&a, Value::BigInt(_)) || matches!(&b, Value::BigInt(_)) {
+            return Err(JsError {
+                kind: ErrorKind::TypeError,
+                message: "Cannot mix BigInt and other types in left shift".to_string(),
+                stack: vec![],
+                source_position: None,
+            });
+        }
         let a_int = self.to_int32(&a);
         let b_int = self.to_uint32(&b) & 0x1f; // Only use lower 5 bits (0-31)
         Ok(Value::Smi(a_int << b_int))
     }
 
     fn right_shift(&self, a: Value, b: Value) -> Result<Value, JsError> {
+        // BigInt right shift
+        if let (Value::BigInt(x), Value::BigInt(y)) = (&a, &b) {
+            // For BigInt, shift amount must be non-negative
+            if *y < BigInt::from(0) {
+                return Err(JsError {
+                    kind: ErrorKind::RangeError,
+                    message: "BigInt shift amount must be non-negative".to_string(),
+                    stack: vec![],
+                    source_position: None,
+                });
+            }
+            // Convert shift amount to u64 (reasonable limit)
+            let shift_amount: u64 = y.try_into().unwrap_or(u64::MAX);
+            return Ok(Value::BigInt(x >> shift_amount));
+        }
+        // Cannot mix BigInt with other types
+        if matches!(&a, Value::BigInt(_)) || matches!(&b, Value::BigInt(_)) {
+            return Err(JsError {
+                kind: ErrorKind::TypeError,
+                message: "Cannot mix BigInt and other types in right shift".to_string(),
+                stack: vec![],
+                source_position: None,
+            });
+        }
         let a_int = self.to_int32(&a);
         let b_int = self.to_uint32(&b) & 0x1f; // Only use lower 5 bits (0-31)
         Ok(Value::Smi(a_int >> b_int))
     }
 
     fn unsigned_right_shift(&self, a: Value, b: Value) -> Result<Value, JsError> {
+        // BigInt does NOT support unsigned right shift (>>>)
+        if matches!(&a, Value::BigInt(_)) || matches!(&b, Value::BigInt(_)) {
+            return Err(JsError {
+                kind: ErrorKind::TypeError,
+                message: "BigInt does not support unsigned right shift".to_string(),
+                stack: vec![],
+                source_position: None,
+            });
+        }
         let a_uint = self.to_uint32(&a);
         let b_int = self.to_uint32(&b) & 0x1f; // Only use lower 5 bits (0-31)
         // Result is always non-negative, but may exceed i32 max
@@ -3655,6 +3811,8 @@ impl Dispatcher {
                 let bool_val = if *b { 1.0 } else { 0.0 };
                 bool_val == *n
             }
+            // BigInt comparison - value equality
+            (Value::BigInt(x), Value::BigInt(y)) => x == y,
             _ => false,
         };
         Value::Boolean(result)
@@ -3686,6 +3844,8 @@ impl Dispatcher {
             (Value::HeapObject(x), Value::HeapObject(y)) => x == y,
             (Value::NativeObject(x), Value::NativeObject(y)) => Rc::ptr_eq(x, y),
             (Value::NativeFunction(x), Value::NativeFunction(y)) => x == y,
+            // BigInt comparison - value equality
+            (Value::BigInt(x), Value::BigInt(y)) => x == y,
             // Different types - false
             _ => false,
         };
@@ -3709,24 +3869,40 @@ impl Dispatcher {
     }
 
     fn less_than(&self, a: Value, b: Value) -> Value {
+        // BigInt-to-BigInt comparison
+        if let (Value::BigInt(x), Value::BigInt(y)) = (&a, &b) {
+            return Value::Boolean(x < y);
+        }
         let a_num = self.to_number(&a);
         let b_num = self.to_number(&b);
         Value::Boolean(a_num < b_num)
     }
 
     fn less_than_equal(&self, a: Value, b: Value) -> Value {
+        // BigInt-to-BigInt comparison
+        if let (Value::BigInt(x), Value::BigInt(y)) = (&a, &b) {
+            return Value::Boolean(x <= y);
+        }
         let a_num = self.to_number(&a);
         let b_num = self.to_number(&b);
         Value::Boolean(a_num <= b_num)
     }
 
     fn greater_than(&self, a: Value, b: Value) -> Value {
+        // BigInt-to-BigInt comparison
+        if let (Value::BigInt(x), Value::BigInt(y)) = (&a, &b) {
+            return Value::Boolean(x > y);
+        }
         let a_num = self.to_number(&a);
         let b_num = self.to_number(&b);
         Value::Boolean(a_num > b_num)
     }
 
     fn greater_than_equal(&self, a: Value, b: Value) -> Value {
+        // BigInt-to-BigInt comparison
+        if let (Value::BigInt(x), Value::BigInt(y)) = (&a, &b) {
+            return Value::Boolean(x >= y);
+        }
         let a_num = self.to_number(&a);
         let b_num = self.to_number(&b);
         Value::Boolean(a_num >= b_num)
