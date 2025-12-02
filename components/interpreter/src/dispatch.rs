@@ -3740,7 +3740,18 @@ impl Dispatcher {
             Value::Null => 0.0,
             Value::String(s) => s.parse::<f64>().unwrap_or(f64::NAN),
             Value::HeapObject(_) => f64::NAN,
-            Value::NativeObject(_) => f64::NAN,
+            Value::NativeObject(obj) => {
+                // Check if it's a wrapper object with a [[PrimitiveValue]]
+                let borrowed = obj.borrow();
+                if let Some(gc_obj) = borrowed.downcast_ref::<Box<dyn Any>>() {
+                    if let Some(gc_object) = gc_obj.downcast_ref::<GCObject>() {
+                        let prim = gc_object.get("[[PrimitiveValue]]");
+                        // Recursively convert the primitive value
+                        return self.to_number(&prim);
+                    }
+                }
+                f64::NAN
+            }
             Value::NativeFunction(_) => f64::NAN,
             Value::BigInt(_) => f64::NAN, // BigInt cannot be implicitly converted to number
         }
