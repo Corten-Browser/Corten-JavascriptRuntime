@@ -3751,8 +3751,29 @@ impl Dispatcher {
                 match name.as_str() {
                     "Error" | "TypeError" | "ReferenceError" | "RangeError" |
                     "SyntaxError" | "URIError" | "EvalError" => {
-                        // Check if obj is an error object
-                        // For now, return false - would need to check object's constructor property
+                        // Check if obj is an error object by checking its 'name' property
+                        if let Value::NativeObject(native_obj) = &obj {
+                            let borrowed = native_obj.borrow();
+                            if let Some(gc_obj) = borrowed.downcast_ref::<Box<dyn Any>>() {
+                                if let Some(gc_object) = gc_obj.downcast_ref::<GCObject>() {
+                                    // Get the error name from the object
+                                    let obj_name = gc_object.get("name");
+                                    if let Value::String(obj_name_str) = obj_name {
+                                        // Check if obj's name matches constructor or is a subtype
+                                        // All error types are instances of Error
+                                        if name.as_str() == "Error" {
+                                            // Any error type is an instance of Error
+                                            let error_names = ["Error", "TypeError", "ReferenceError",
+                                                               "RangeError", "SyntaxError", "URIError", "EvalError"];
+                                            return Value::Boolean(error_names.contains(&obj_name_str.as_str()));
+                                        } else {
+                                            // Exact match required for specific error types
+                                            return Value::Boolean(obj_name_str.as_str() == name.as_str());
+                                        }
+                                    }
+                                }
+                            }
+                        }
                         Value::Boolean(false)
                     }
                     "Array" => {
