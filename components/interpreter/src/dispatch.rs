@@ -300,6 +300,41 @@ impl Dispatcher {
         })
     }
 
+    /// Convert JsError to JavaScript error object and throw it
+    fn throw_js_error(
+        &mut self,
+        error: JsError,
+        ctx: &mut ExecutionContext,
+    ) -> Result<(), JsError> {
+        let error_name = match error.kind {
+            ErrorKind::TypeError => "TypeError",
+            ErrorKind::ReferenceError => "ReferenceError",
+            ErrorKind::SyntaxError => "SyntaxError",
+            ErrorKind::RangeError => "RangeError",
+            ErrorKind::InternalError => "Error",
+            ErrorKind::EvalError => "EvalError",
+            ErrorKind::URIError => "URIError",
+        };
+
+        // Get the constructor from globals
+        let constructor = self.globals.get(error_name).cloned().unwrap_or(Value::Undefined);
+
+        let error_obj = if let Some(ref heap) = self.heap {
+            let mut obj = heap.create_object();
+            obj.set("name".to_string(), Value::String(error_name.to_string()));
+            obj.set("message".to_string(), Value::String(error.message.clone()));
+            obj.set("constructor".to_string(), constructor);
+            let boxed: Box<dyn Any> = Box::new(obj);
+            Value::NativeObject(
+                std::rc::Rc::new(std::cell::RefCell::new(boxed)) as std::rc::Rc<std::cell::RefCell<dyn Any>>
+            )
+        } else {
+            Value::String(format!("{}: {}", error_name, error.message))
+        };
+
+        self.throw_exception(error_obj, ctx)
+    }
+
     /// Convert bytecode_system::Value to core_types::Value
     fn convert_bc_value(bc_value: &bytecode_system::Value) -> Value {
         match bc_value {
@@ -437,79 +472,105 @@ impl Dispatcher {
                 Opcode::Add => {
                     let b = self.stack.pop().unwrap_or(Value::Undefined);
                     let a = self.stack.pop().unwrap_or(Value::Undefined);
-                    let result = self.add(a, b)?;
-                    self.stack.push(result);
+                    match self.add(a, b) {
+                        Ok(result) => self.stack.push(result),
+                        Err(e) => self.throw_js_error(e, ctx)?,
+                    }
                 }
                 Opcode::Sub => {
                     let b = self.stack.pop().unwrap_or(Value::Undefined);
                     let a = self.stack.pop().unwrap_or(Value::Undefined);
-                    let result = self.sub(a, b)?;
-                    self.stack.push(result);
+                    match self.sub(a, b) {
+                        Ok(result) => self.stack.push(result),
+                        Err(e) => self.throw_js_error(e, ctx)?,
+                    }
                 }
                 Opcode::Mul => {
                     let b = self.stack.pop().unwrap_or(Value::Undefined);
                     let a = self.stack.pop().unwrap_or(Value::Undefined);
-                    let result = self.mul(a, b)?;
-                    self.stack.push(result);
+                    match self.mul(a, b) {
+                        Ok(result) => self.stack.push(result),
+                        Err(e) => self.throw_js_error(e, ctx)?,
+                    }
                 }
                 Opcode::Div => {
                     let b = self.stack.pop().unwrap_or(Value::Undefined);
                     let a = self.stack.pop().unwrap_or(Value::Undefined);
-                    let result = self.div(a, b)?;
-                    self.stack.push(result);
+                    match self.div(a, b) {
+                        Ok(result) => self.stack.push(result),
+                        Err(e) => self.throw_js_error(e, ctx)?,
+                    }
                 }
                 Opcode::Mod => {
                     let b = self.stack.pop().unwrap_or(Value::Undefined);
                     let a = self.stack.pop().unwrap_or(Value::Undefined);
-                    let result = self.modulo(a, b)?;
-                    self.stack.push(result);
+                    match self.modulo(a, b) {
+                        Ok(result) => self.stack.push(result),
+                        Err(e) => self.throw_js_error(e, ctx)?,
+                    }
                 }
                 Opcode::Exp => {
                     let b = self.stack.pop().unwrap_or(Value::Undefined);
                     let a = self.stack.pop().unwrap_or(Value::Undefined);
-                    let result = self.exponentiate(a, b)?;
-                    self.stack.push(result);
+                    match self.exponentiate(a, b) {
+                        Ok(result) => self.stack.push(result),
+                        Err(e) => self.throw_js_error(e, ctx)?,
+                    }
                 }
                 Opcode::BitwiseAnd => {
                     let b = self.stack.pop().unwrap_or(Value::Undefined);
                     let a = self.stack.pop().unwrap_or(Value::Undefined);
-                    let result = self.bitwise_and(a, b)?;
-                    self.stack.push(result);
+                    match self.bitwise_and(a, b) {
+                        Ok(result) => self.stack.push(result),
+                        Err(e) => self.throw_js_error(e, ctx)?,
+                    }
                 }
                 Opcode::BitwiseOr => {
                     let b = self.stack.pop().unwrap_or(Value::Undefined);
                     let a = self.stack.pop().unwrap_or(Value::Undefined);
-                    let result = self.bitwise_or(a, b)?;
-                    self.stack.push(result);
+                    match self.bitwise_or(a, b) {
+                        Ok(result) => self.stack.push(result),
+                        Err(e) => self.throw_js_error(e, ctx)?,
+                    }
                 }
                 Opcode::BitwiseXor => {
                     let b = self.stack.pop().unwrap_or(Value::Undefined);
                     let a = self.stack.pop().unwrap_or(Value::Undefined);
-                    let result = self.bitwise_xor(a, b)?;
-                    self.stack.push(result);
+                    match self.bitwise_xor(a, b) {
+                        Ok(result) => self.stack.push(result),
+                        Err(e) => self.throw_js_error(e, ctx)?,
+                    }
                 }
                 Opcode::BitwiseNot => {
                     let a = self.stack.pop().unwrap_or(Value::Undefined);
-                    let result = self.bitwise_not(a)?;
-                    self.stack.push(result);
+                    match self.bitwise_not(a) {
+                        Ok(result) => self.stack.push(result),
+                        Err(e) => self.throw_js_error(e, ctx)?,
+                    }
                 }
                 Opcode::LeftShift => {
                     let b = self.stack.pop().unwrap_or(Value::Undefined);
                     let a = self.stack.pop().unwrap_or(Value::Undefined);
-                    let result = self.left_shift(a, b)?;
-                    self.stack.push(result);
+                    match self.left_shift(a, b) {
+                        Ok(result) => self.stack.push(result),
+                        Err(e) => self.throw_js_error(e, ctx)?,
+                    }
                 }
                 Opcode::RightShift => {
                     let b = self.stack.pop().unwrap_or(Value::Undefined);
                     let a = self.stack.pop().unwrap_or(Value::Undefined);
-                    let result = self.right_shift(a, b)?;
-                    self.stack.push(result);
+                    match self.right_shift(a, b) {
+                        Ok(result) => self.stack.push(result),
+                        Err(e) => self.throw_js_error(e, ctx)?,
+                    }
                 }
                 Opcode::UnsignedRightShift => {
                     let b = self.stack.pop().unwrap_or(Value::Undefined);
                     let a = self.stack.pop().unwrap_or(Value::Undefined);
-                    let result = self.unsigned_right_shift(a, b)?;
-                    self.stack.push(result);
+                    match self.unsigned_right_shift(a, b) {
+                        Ok(result) => self.stack.push(result),
+                        Err(e) => self.throw_js_error(e, ctx)?,
+                    }
                 }
                 Opcode::Neg => {
                     let a = self.stack.pop().unwrap_or(Value::Undefined);
@@ -1122,21 +1183,25 @@ impl Dispatcher {
 
                     match callee {
                         Value::NativeFunction(name) => {
-                            let result = self.call_native_function(&name, args)?;
-                            self.stack.push(result);
+                            match self.call_native_function(&name, args) {
+                                Ok(result) => self.stack.push(result),
+                                Err(e) => self.throw_js_error(e, ctx)?,
+                            }
                         }
                         Value::HeapObject(idx) => {
                             // User-defined function - call directly with args
-                            let result = self.call_function_with_args(idx, args, functions)?;
-                            self.stack.push(result);
+                            match self.call_function_with_args(idx, args, functions) {
+                                Ok(result) => self.stack.push(result),
+                                Err(e) => self.throw_js_error(e, ctx)?,
+                            }
                         }
                         _ => {
-                            return Err(JsError {
+                            self.throw_js_error(JsError {
                                 kind: ErrorKind::TypeError,
                                 message: format!("{:?} is not a function", callee),
                                 stack: vec![],
                                 source_position: None,
-                            });
+                            }, ctx)?;
                         }
                     }
                 }
@@ -1156,35 +1221,36 @@ impl Dispatcher {
                     match method {
                         Value::NativeFunction(name) => {
                             // Check if this is a prototype method that needs the receiver
-                            if name.starts_with("Array.prototype.") {
-                                let result = self.call_array_prototype_method(&name, receiver, args, functions)?;
-                                self.stack.push(result);
+                            let call_result = if name.starts_with("Array.prototype.") {
+                                self.call_array_prototype_method(&name, receiver, args, functions)
                             } else if name.starts_with("Object.prototype.") {
-                                let result = self.call_object_prototype_method(&name, receiver, args)?;
-                                self.stack.push(result);
+                                self.call_object_prototype_method(&name, receiver, args)
                             } else if name.starts_with("String.prototype.") {
-                                let result = self.call_string_prototype_method(&name, receiver, args)?;
-                                self.stack.push(result);
+                                self.call_string_prototype_method(&name, receiver, args)
                             } else if name.starts_with("Number.prototype.") {
-                                let result = self.call_number_prototype_method(&name, receiver)?;
-                                self.stack.push(result);
+                                self.call_number_prototype_method(&name, receiver)
                             } else {
-                                let result = self.call_native_function(&name, args)?;
-                                self.stack.push(result);
+                                self.call_native_function(&name, args)
+                            };
+                            match call_result {
+                                Ok(result) => self.stack.push(result),
+                                Err(e) => self.throw_js_error(e, ctx)?,
                             }
                         }
                         Value::HeapObject(idx) => {
                             // User-defined method - call with this binding
-                            let result = self.call_method_with_this(idx, receiver, args, functions)?;
-                            self.stack.push(result);
+                            match self.call_method_with_this(idx, receiver, args, functions) {
+                                Ok(result) => self.stack.push(result),
+                                Err(e) => self.throw_js_error(e, ctx)?,
+                            }
                         }
                         _ => {
-                            return Err(JsError {
+                            self.throw_js_error(JsError {
                                 kind: ErrorKind::TypeError,
                                 message: format!("{:?} is not a function", method),
                                 stack: vec![],
                                 source_position: None,
-                            });
+                            }, ctx)?;
                         }
                     }
                 }
@@ -3183,9 +3249,15 @@ impl Dispatcher {
             self.current_upvalues = upvalues;
         }
 
+        // Save try_stack - inner functions shouldn't see outer try handlers
+        let saved_try_stack = std::mem::take(&mut self.try_stack);
+
         // Recursively execute the function
         // This enables nested calls and recursion
         let result = self.execute(&mut fn_ctx, functions);
+
+        // Restore try_stack
+        self.try_stack = saved_try_stack;
 
         // Restore previous upvalues
         self.current_upvalues = saved_upvalues;
@@ -3280,7 +3352,13 @@ impl Dispatcher {
             self.current_upvalues = upvalues;
         }
 
+        // Save try_stack - inner functions shouldn't see outer try handlers
+        let saved_try_stack = std::mem::take(&mut self.try_stack);
+
         let result = self.execute(&mut fn_ctx, functions);
+
+        // Restore try_stack
+        self.try_stack = saved_try_stack;
 
         // Restore previous `this` binding
         if let Some(prev_this) = saved_this {
