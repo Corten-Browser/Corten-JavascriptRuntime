@@ -38,10 +38,12 @@ pub enum Opcode {
     LoadFalse,
 
     // Variables
-    /// Load global variable by name
+    /// Load global variable by name (throws ReferenceError if not defined)
     LoadGlobal(String),
     /// Store to global variable by name
     StoreGlobal(String),
+    /// Try to load global variable, return undefined if not defined (for typeof)
+    TryLoadGlobal(String),
     /// Load local variable from register
     LoadLocal(RegisterId),
     /// Store to local variable in register
@@ -68,6 +70,20 @@ pub enum Opcode {
     Mod,
     /// Exponentiation (second-top ** top)
     Exp,
+    /// Bitwise AND (&)
+    BitwiseAnd,
+    /// Bitwise OR (|)
+    BitwiseOr,
+    /// Bitwise XOR (^)
+    BitwiseXor,
+    /// Bitwise NOT (~)
+    BitwiseNot,
+    /// Left shift (<<)
+    LeftShift,
+    /// Signed right shift (>>)
+    RightShift,
+    /// Unsigned right shift (>>>)
+    UnsignedRightShift,
     /// Negate top value
     Neg,
     /// Logical NOT (invert truthiness)

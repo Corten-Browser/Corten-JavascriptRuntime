@@ -69,10 +69,12 @@ pub enum IROpcode {
     LoadProperty(String),
     /// Store property
     StoreProperty(String),
-    /// Load global variable
+    /// Load global variable (throws ReferenceError if not defined)
     LoadGlobal(String),
     /// Store global variable
     StoreGlobal(String),
+    /// Try to load global variable, return undefined if not defined (for typeof)
+    TryLoadGlobal(String),
     /// Load upvalue (captured variable)
     LoadUpvalue(u32),
     /// Store upvalue (captured variable)
@@ -137,6 +139,22 @@ pub enum IROpcode {
     DeleteGlobal(String),
     /// Deoptimize - fall back to interpreter
     Deoptimize,
+
+    // Bitwise operations
+    /// Bitwise AND (&)
+    BitwiseAnd,
+    /// Bitwise OR (|)
+    BitwiseOr,
+    /// Bitwise XOR (^)
+    BitwiseXor,
+    /// Bitwise NOT (~)
+    BitwiseNot,
+    /// Left shift (<<)
+    LeftShift,
+    /// Signed right shift (>>)
+    RightShift,
+    /// Unsigned right shift (>>>)
+    UnsignedRightShift,
 }
 
 /// Single IR instruction
@@ -194,6 +212,7 @@ impl IRFunction {
                 Opcode::LoadFalse => IROpcode::LoadFalse,
                 Opcode::LoadGlobal(name) => IROpcode::LoadGlobal(name.clone()),
                 Opcode::StoreGlobal(name) => IROpcode::StoreGlobal(name.clone()),
+                Opcode::TryLoadGlobal(name) => IROpcode::TryLoadGlobal(name.clone()),
                 Opcode::LoadLocal(reg) => IROpcode::LoadReg(reg.0),
                 Opcode::StoreLocal(reg) => IROpcode::StoreReg(reg.0),
                 Opcode::Add => IROpcode::Add(None),
@@ -250,6 +269,14 @@ impl IRFunction {
                 Opcode::In => IROpcode::In,
                 Opcode::DeleteProperty(ref s) => IROpcode::DeleteProperty(s.clone()),
                 Opcode::DeleteGlobal(ref s) => IROpcode::DeleteGlobal(s.clone()),
+                // Bitwise operations
+                Opcode::BitwiseAnd => IROpcode::BitwiseAnd,
+                Opcode::BitwiseOr => IROpcode::BitwiseOr,
+                Opcode::BitwiseXor => IROpcode::BitwiseXor,
+                Opcode::BitwiseNot => IROpcode::BitwiseNot,
+                Opcode::LeftShift => IROpcode::LeftShift,
+                Opcode::RightShift => IROpcode::RightShift,
+                Opcode::UnsignedRightShift => IROpcode::UnsignedRightShift,
             };
 
             ir_func.instructions.push(IRInstruction::new(ir_op, offset));

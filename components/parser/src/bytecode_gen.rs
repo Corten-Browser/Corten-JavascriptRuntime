@@ -962,14 +962,12 @@ impl BytecodeGenerator {
                     BinaryOperator::GtEq => Opcode::GreaterThanEqual,
                     BinaryOperator::Instanceof => Opcode::Instanceof,
                     BinaryOperator::In => Opcode::In,
-                    _ => {
-                        return Err(JsError {
-                            kind: ErrorKind::InternalError,
-                            message: format!("Unsupported binary operator: {:?}", operator),
-                            stack: vec![],
-                            source_position: None,
-                        })
-                    }
+                    BinaryOperator::BitwiseAnd => Opcode::BitwiseAnd,
+                    BinaryOperator::BitwiseOr => Opcode::BitwiseOr,
+                    BinaryOperator::BitwiseXor => Opcode::BitwiseXor,
+                    BinaryOperator::LeftShift => Opcode::LeftShift,
+                    BinaryOperator::RightShift => Opcode::RightShift,
+                    BinaryOperator::UnsignedRightShift => Opcode::UnsignedRightShift,
                 };
                 self.chunk.emit(op);
             }
@@ -977,6 +975,27 @@ impl BytecodeGenerator {
             Expression::UnaryExpression {
                 operator, argument, ..
             } => {
+                // Special handling for typeof with identifier argument
+                // typeof undefinedVar should return "undefined" without throwing ReferenceError
+                if matches!(operator, UnaryOperator::Typeof) {
+                    if let Expression::Identifier { name, .. } = argument.as_ref() {
+                        match self.resolve_variable(name) {
+                            VarResolution::Local(reg) => {
+                                self.chunk.emit(Opcode::LoadLocal(reg));
+                            }
+                            VarResolution::Upvalue(idx) => {
+                                self.chunk.emit(Opcode::LoadUpvalue(idx));
+                            }
+                            VarResolution::Global => {
+                                // Use TryLoadGlobal for typeof - returns undefined instead of throwing
+                                self.chunk.emit(Opcode::TryLoadGlobal(name.clone()));
+                            }
+                        }
+                        self.chunk.emit(Opcode::Typeof);
+                        return Ok(());
+                    }
+                }
+
                 self.visit_expression(argument)?;
 
                 match operator {
@@ -1006,7 +1025,8 @@ impl BytecodeGenerator {
                         // For now, it's a no-op since we emit the value already
                     }
                     UnaryOperator::BitwiseNot => {
-                        // Bitwise NOT - TODO: implement when we have bitwise ops
+                        // Bitwise NOT (~) - inverts all bits
+                        self.chunk.emit(Opcode::BitwiseNot);
                     }
                 }
             }

@@ -50,6 +50,8 @@ pub struct Dispatcher {
     closure_registry: HashMap<usize, (usize, Vec<UpvalueHandle>)>,
     /// Next available closure ID
     next_closure_id: usize,
+    /// Properties stored on function objects (function_id -> property_name -> value)
+    function_properties: HashMap<usize, HashMap<String, Value>>,
 }
 
 impl std::fmt::Debug for Dispatcher {
@@ -199,6 +201,7 @@ impl Dispatcher {
             heap: None,
             closure_registry: HashMap::new(),
             next_closure_id: 0,
+            function_properties: HashMap::new(),
         }
     }
 
@@ -362,6 +365,36 @@ impl Dispatcher {
                     self.stack.push(Value::Boolean(false));
                 }
                 Opcode::LoadGlobal(name) => {
+                    // LoadGlobal throws ReferenceError if variable is not defined
+                    // Special case: "this" at global scope returns undefined (or global object)
+                    match self.globals.get(&name) {
+                        Some(value) => self.stack.push(value.clone()),
+                        None => {
+                            // "this" at global scope returns undefined
+                            if name == "this" {
+                                self.stack.push(Value::Undefined);
+                            } else {
+                                // Create a ReferenceError object and throw it
+                                let error_msg = format!("{} is not defined", name);
+                                let error_obj = if let Some(ref heap) = self.heap {
+                                    let mut obj = heap.create_object();
+                                    obj.set("name".to_string(), Value::String("ReferenceError".to_string()));
+                                    obj.set("message".to_string(), Value::String(error_msg.clone()));
+                                    let boxed: Box<dyn Any> = Box::new(obj);
+                                    Value::NativeObject(
+                                        std::rc::Rc::new(std::cell::RefCell::new(boxed)) as std::rc::Rc<std::cell::RefCell<dyn Any>>
+                                    )
+                                } else {
+                                    // Fallback: use string as error
+                                    Value::String(error_msg)
+                                };
+                                self.throw_exception(error_obj, ctx)?;
+                            }
+                        }
+                    }
+                }
+                Opcode::TryLoadGlobal(name) => {
+                    // TryLoadGlobal returns undefined if variable is not defined (for typeof)
                     let value = self.globals.get(&name).cloned().unwrap_or(Value::Undefined);
                     self.stack.push(value);
                 }
@@ -434,6 +467,47 @@ impl Dispatcher {
                     let b = self.stack.pop().unwrap_or(Value::Undefined);
                     let a = self.stack.pop().unwrap_or(Value::Undefined);
                     let result = self.exponentiate(a, b)?;
+                    self.stack.push(result);
+                }
+                Opcode::BitwiseAnd => {
+                    let b = self.stack.pop().unwrap_or(Value::Undefined);
+                    let a = self.stack.pop().unwrap_or(Value::Undefined);
+                    let result = self.bitwise_and(a, b)?;
+                    self.stack.push(result);
+                }
+                Opcode::BitwiseOr => {
+                    let b = self.stack.pop().unwrap_or(Value::Undefined);
+                    let a = self.stack.pop().unwrap_or(Value::Undefined);
+                    let result = self.bitwise_or(a, b)?;
+                    self.stack.push(result);
+                }
+                Opcode::BitwiseXor => {
+                    let b = self.stack.pop().unwrap_or(Value::Undefined);
+                    let a = self.stack.pop().unwrap_or(Value::Undefined);
+                    let result = self.bitwise_xor(a, b)?;
+                    self.stack.push(result);
+                }
+                Opcode::BitwiseNot => {
+                    let a = self.stack.pop().unwrap_or(Value::Undefined);
+                    let result = self.bitwise_not(a)?;
+                    self.stack.push(result);
+                }
+                Opcode::LeftShift => {
+                    let b = self.stack.pop().unwrap_or(Value::Undefined);
+                    let a = self.stack.pop().unwrap_or(Value::Undefined);
+                    let result = self.left_shift(a, b)?;
+                    self.stack.push(result);
+                }
+                Opcode::RightShift => {
+                    let b = self.stack.pop().unwrap_or(Value::Undefined);
+                    let a = self.stack.pop().unwrap_or(Value::Undefined);
+                    let result = self.right_shift(a, b)?;
+                    self.stack.push(result);
+                }
+                Opcode::UnsignedRightShift => {
+                    let b = self.stack.pop().unwrap_or(Value::Undefined);
+                    let a = self.stack.pop().unwrap_or(Value::Undefined);
+                    let result = self.unsigned_right_shift(a, b)?;
                     self.stack.push(result);
                 }
                 Opcode::Neg => {
@@ -807,6 +881,15 @@ impl Dispatcher {
                             };
                             self.stack.push(value);
                         }
+                        Value::HeapObject(func_id) => {
+                            // Function object - check function_properties
+                            let value = if let Some(props) = self.function_properties.get(&func_id) {
+                                props.get(&name).cloned().unwrap_or(Value::Undefined)
+                            } else {
+                                Value::Undefined
+                            };
+                            self.stack.push(value);
+                        }
                         _ => self.stack.push(Value::Undefined),
                     }
                 }
@@ -834,6 +917,13 @@ impl Dispatcher {
                                 self.globals.insert(proto_key, value.clone());
                             }
                             // Ignore other property stores on Error constructors
+                        }
+                        Value::HeapObject(func_id) => {
+                            // Store property on function object
+                            self.function_properties
+                                .entry(func_id)
+                                .or_insert_with(HashMap::new)
+                                .insert(name.clone(), value.clone());
                         }
                         _ => {
                             // Ignore stores to non-objects
@@ -3405,6 +3495,77 @@ impl Dispatcher {
             Value::Smi(x) => Ok(Value::Smi(-x)),
             Value::Double(x) => Ok(Value::Double(-x)),
             _ => Ok(Value::Double(f64::NAN)),
+        }
+    }
+
+    // Bitwise operations
+    // JavaScript bitwise operations convert operands to 32-bit signed integers
+
+    fn to_int32(&self, value: &Value) -> i32 {
+        let num = self.to_number(value);
+        if num.is_nan() || num.is_infinite() || num == 0.0 {
+            return 0;
+        }
+        // ToInt32: truncate to 32-bit signed integer
+        let int_val = num.trunc() as i64;
+        // Wrap to 32-bit range
+        (int_val as i32)
+    }
+
+    fn to_uint32(&self, value: &Value) -> u32 {
+        let num = self.to_number(value);
+        if num.is_nan() || num.is_infinite() || num == 0.0 {
+            return 0;
+        }
+        // ToUint32: truncate to 32-bit unsigned integer
+        let int_val = num.trunc() as i64;
+        (int_val as u32)
+    }
+
+    fn bitwise_and(&self, a: Value, b: Value) -> Result<Value, JsError> {
+        let a_int = self.to_int32(&a);
+        let b_int = self.to_int32(&b);
+        Ok(Value::Smi(a_int & b_int))
+    }
+
+    fn bitwise_or(&self, a: Value, b: Value) -> Result<Value, JsError> {
+        let a_int = self.to_int32(&a);
+        let b_int = self.to_int32(&b);
+        Ok(Value::Smi(a_int | b_int))
+    }
+
+    fn bitwise_xor(&self, a: Value, b: Value) -> Result<Value, JsError> {
+        let a_int = self.to_int32(&a);
+        let b_int = self.to_int32(&b);
+        Ok(Value::Smi(a_int ^ b_int))
+    }
+
+    fn bitwise_not(&self, a: Value) -> Result<Value, JsError> {
+        let a_int = self.to_int32(&a);
+        Ok(Value::Smi(!a_int))
+    }
+
+    fn left_shift(&self, a: Value, b: Value) -> Result<Value, JsError> {
+        let a_int = self.to_int32(&a);
+        let b_int = self.to_uint32(&b) & 0x1f; // Only use lower 5 bits (0-31)
+        Ok(Value::Smi(a_int << b_int))
+    }
+
+    fn right_shift(&self, a: Value, b: Value) -> Result<Value, JsError> {
+        let a_int = self.to_int32(&a);
+        let b_int = self.to_uint32(&b) & 0x1f; // Only use lower 5 bits (0-31)
+        Ok(Value::Smi(a_int >> b_int))
+    }
+
+    fn unsigned_right_shift(&self, a: Value, b: Value) -> Result<Value, JsError> {
+        let a_uint = self.to_uint32(&a);
+        let b_int = self.to_uint32(&b) & 0x1f; // Only use lower 5 bits (0-31)
+        // Result is always non-negative, but may exceed i32 max
+        let result = a_uint >> b_int;
+        if result > (i32::MAX as u32) {
+            Ok(Value::Double(result as f64))
+        } else {
+            Ok(Value::Smi(result as i32))
         }
     }
 

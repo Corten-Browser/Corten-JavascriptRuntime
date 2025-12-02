@@ -312,6 +312,21 @@ impl BytecodeChunk {
                 operands.extend_from_slice(bytes);
                 (55, operands)
             }
+            // Bitwise operations
+            Opcode::BitwiseAnd => (210, vec![]),
+            Opcode::BitwiseOr => (211, vec![]),
+            Opcode::BitwiseXor => (212, vec![]),
+            Opcode::BitwiseNot => (213, vec![]),
+            Opcode::LeftShift => (214, vec![]),
+            Opcode::RightShift => (215, vec![]),
+            Opcode::UnsignedRightShift => (216, vec![]),
+            // TryLoadGlobal (for typeof operator - returns undefined instead of throwing)
+            Opcode::TryLoadGlobal(s) => {
+                let s_bytes = s.as_bytes();
+                let mut data = (s_bytes.len() as u32).to_le_bytes().to_vec();
+                data.extend_from_slice(s_bytes);
+                (217, data)
+            }
         }
     }
 
@@ -580,6 +595,24 @@ impl BytecodeChunk {
                 Opcode::CreateRegExp(pattern_idx, flags_idx)
             }
             200 => Opcode::Exp,
+            // Bitwise operations
+            210 => Opcode::BitwiseAnd,
+            211 => Opcode::BitwiseOr,
+            212 => Opcode::BitwiseXor,
+            213 => Opcode::BitwiseNot,
+            214 => Opcode::LeftShift,
+            215 => Opcode::RightShift,
+            216 => Opcode::UnsignedRightShift,
+            // TryLoadGlobal (for typeof operator - returns undefined instead of throwing)
+            217 => {
+                let len =
+                    u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap()) as usize;
+                offset += 4;
+                let s = String::from_utf8(bytes[offset..offset + len].to_vec())
+                    .map_err(|e| format!("Invalid UTF-8: {}", e))?;
+                offset += len;
+                Opcode::TryLoadGlobal(s)
+            }
             _ => return Err(format!("Unknown opcode tag: {}", tag)),
         };
 
