@@ -3424,7 +3424,7 @@ impl Dispatcher {
 
     fn add(&self, a: Value, b: Value) -> Result<Value, JsError> {
         match (&a, &b) {
-            // String concatenation has priority
+            // String concatenation has priority (including with BigInt)
             (Value::String(s1), Value::String(s2)) => {
                 Ok(Value::String(format!("{}{}", s1, s2)))
             }
@@ -3435,6 +3435,19 @@ impl Dispatcher {
             (_, Value::String(s)) => {
                 let a_str = self.to_string_value(&a);
                 Ok(Value::String(format!("{}{}", a_str, s)))
+            }
+            // BigInt addition
+            (Value::BigInt(x), Value::BigInt(y)) => {
+                Ok(Value::BigInt(x + y))
+            }
+            // BigInt cannot be mixed with other types (except strings, handled above)
+            (Value::BigInt(_), _) | (_, Value::BigInt(_)) => {
+                Err(JsError {
+                    kind: ErrorKind::TypeError,
+                    message: "Cannot mix BigInt and other types".to_string(),
+                    stack: vec![],
+                    source_position: None,
+                })
             }
             // Numeric addition
             (Value::Smi(x), Value::Smi(y)) => Ok(Value::Smi(x.wrapping_add(*y))),
@@ -3486,13 +3499,26 @@ impl Dispatcher {
     }
 
     fn sub(&self, a: Value, b: Value) -> Result<Value, JsError> {
-        match (a, b) {
-            (Value::Smi(x), Value::Smi(y)) => Ok(Value::Smi(x.wrapping_sub(y))),
-            (Value::Double(x), Value::Double(y)) => Ok(Value::Double(x - y)),
-            (Value::Smi(x), Value::Double(y)) => Ok(Value::Double(x as f64 - y)),
-            (Value::Double(x), Value::Smi(y)) => Ok(Value::Double(x - y as f64)),
+        match (&a, &b) {
+            // BigInt subtraction
+            (Value::BigInt(x), Value::BigInt(y)) => {
+                Ok(Value::BigInt(x - y))
+            }
+            // BigInt cannot be mixed with other types
+            (Value::BigInt(_), _) | (_, Value::BigInt(_)) => {
+                Err(JsError {
+                    kind: ErrorKind::TypeError,
+                    message: "Cannot mix BigInt and other types".to_string(),
+                    stack: vec![],
+                    source_position: None,
+                })
+            }
+            (Value::Smi(x), Value::Smi(y)) => Ok(Value::Smi(x.wrapping_sub(*y))),
+            (Value::Double(x), Value::Double(y)) => Ok(Value::Double(*x - *y)),
+            (Value::Smi(x), Value::Double(y)) => Ok(Value::Double(*x as f64 - *y)),
+            (Value::Double(x), Value::Smi(y)) => Ok(Value::Double(*x - *y as f64)),
             // Type coercion for other types (null, undefined, boolean, etc.)
-            (a, b) => {
+            _ => {
                 let a_num = self.to_number(&a);
                 let b_num = self.to_number(&b);
                 Ok(Value::Double(a_num - b_num))
@@ -3501,13 +3527,26 @@ impl Dispatcher {
     }
 
     fn mul(&self, a: Value, b: Value) -> Result<Value, JsError> {
-        match (a, b) {
-            (Value::Smi(x), Value::Smi(y)) => Ok(Value::Smi(x.wrapping_mul(y))),
-            (Value::Double(x), Value::Double(y)) => Ok(Value::Double(x * y)),
-            (Value::Smi(x), Value::Double(y)) => Ok(Value::Double(x as f64 * y)),
-            (Value::Double(x), Value::Smi(y)) => Ok(Value::Double(x * y as f64)),
+        match (&a, &b) {
+            // BigInt multiplication
+            (Value::BigInt(x), Value::BigInt(y)) => {
+                Ok(Value::BigInt(x * y))
+            }
+            // BigInt cannot be mixed with other types
+            (Value::BigInt(_), _) | (_, Value::BigInt(_)) => {
+                Err(JsError {
+                    kind: ErrorKind::TypeError,
+                    message: "Cannot mix BigInt and other types".to_string(),
+                    stack: vec![],
+                    source_position: None,
+                })
+            }
+            (Value::Smi(x), Value::Smi(y)) => Ok(Value::Smi(x.wrapping_mul(*y))),
+            (Value::Double(x), Value::Double(y)) => Ok(Value::Double(*x * *y)),
+            (Value::Smi(x), Value::Double(y)) => Ok(Value::Double(*x as f64 * *y)),
+            (Value::Double(x), Value::Smi(y)) => Ok(Value::Double(*x * *y as f64)),
             // Type coercion for other types (null, undefined, boolean, etc.)
-            (a, b) => {
+            _ => {
                 let a_num = self.to_number(&a);
                 let b_num = self.to_number(&b);
                 Ok(Value::Double(a_num * b_num))
@@ -3516,14 +3555,64 @@ impl Dispatcher {
     }
 
     fn div(&self, a: Value, b: Value) -> Result<Value, JsError> {
-        // Division always returns Double in JavaScript
-        let a_num = self.to_number(&a);
-        let b_num = self.to_number(&b);
-        Ok(Value::Double(a_num / b_num))
+        match (&a, &b) {
+            // BigInt division (truncates toward zero)
+            (Value::BigInt(x), Value::BigInt(y)) => {
+                if y.sign() == num_bigint::Sign::NoSign {
+                    // Division by zero for BigInt throws RangeError
+                    Err(JsError {
+                        kind: ErrorKind::RangeError,
+                        message: "Division by zero".to_string(),
+                        stack: vec![],
+                        source_position: None,
+                    })
+                } else {
+                    Ok(Value::BigInt(x / y))
+                }
+            }
+            // BigInt cannot be mixed with other types
+            (Value::BigInt(_), _) | (_, Value::BigInt(_)) => {
+                Err(JsError {
+                    kind: ErrorKind::TypeError,
+                    message: "Cannot mix BigInt and other types".to_string(),
+                    stack: vec![],
+                    source_position: None,
+                })
+            }
+            _ => {
+                // Regular number division always returns Double in JavaScript
+                let a_num = self.to_number(&a);
+                let b_num = self.to_number(&b);
+                Ok(Value::Double(a_num / b_num))
+            }
+        }
     }
 
     fn modulo(&self, a: Value, b: Value) -> Result<Value, JsError> {
         match (&a, &b) {
+            // BigInt modulo
+            (Value::BigInt(x), Value::BigInt(y)) => {
+                if y.sign() == num_bigint::Sign::NoSign {
+                    // Modulo by zero for BigInt throws RangeError
+                    Err(JsError {
+                        kind: ErrorKind::RangeError,
+                        message: "Division by zero".to_string(),
+                        stack: vec![],
+                        source_position: None,
+                    })
+                } else {
+                    Ok(Value::BigInt(x % y))
+                }
+            }
+            // BigInt cannot be mixed with other types
+            (Value::BigInt(_), _) | (_, Value::BigInt(_)) => {
+                Err(JsError {
+                    kind: ErrorKind::TypeError,
+                    message: "Cannot mix BigInt and other types".to_string(),
+                    stack: vec![],
+                    source_position: None,
+                })
+            }
             (Value::Smi(x), Value::Smi(y)) => {
                 if *y != 0 {
                     Ok(Value::Smi(x % y))
@@ -3540,9 +3629,37 @@ impl Dispatcher {
     }
 
     fn exponentiate(&self, a: Value, b: Value) -> Result<Value, JsError> {
-        let a_num = self.to_number(&a);
-        let b_num = self.to_number(&b);
-        Ok(Value::Double(a_num.powf(b_num)))
+        match (&a, &b) {
+            // BigInt exponentiation
+            (Value::BigInt(base), Value::BigInt(exp)) => {
+                // Exponent must be non-negative
+                if exp.sign() == num_bigint::Sign::Minus {
+                    return Err(JsError {
+                        kind: ErrorKind::RangeError,
+                        message: "Exponent must be positive".to_string(),
+                        stack: vec![],
+                        source_position: None,
+                    });
+                }
+                // Convert exponent to u32 for pow (limit to prevent huge calculations)
+                let exp_u32: u32 = exp.try_into().unwrap_or(u32::MAX);
+                Ok(Value::BigInt(num_traits::pow::Pow::pow(base.clone(), exp_u32)))
+            }
+            // BigInt cannot be mixed with other types
+            (Value::BigInt(_), _) | (_, Value::BigInt(_)) => {
+                Err(JsError {
+                    kind: ErrorKind::TypeError,
+                    message: "Cannot mix BigInt and other types".to_string(),
+                    stack: vec![],
+                    source_position: None,
+                })
+            }
+            _ => {
+                let a_num = self.to_number(&a);
+                let b_num = self.to_number(&b);
+                Ok(Value::Double(a_num.powf(b_num)))
+            }
+        }
     }
 
     fn neg(&self, a: Value) -> Result<Value, JsError> {
